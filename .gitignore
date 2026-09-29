@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# per-task workspaces created by the runner
+.worktrees/
+# local agent state
+.claude/settings.local.json
