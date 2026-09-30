@@ -156,6 +156,14 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
   - Codex (LP-4) và Claude (LP-5) chạy song song. PR #15 và #16 merge không conflict, `main` đạt 72/72 test.
   - Với goal đã được làm xong, Claude trả về 0 task kèm giải thích. Platform nhận đây là kết quả hợp lệ ("không còn gì để làm"), không tính là lỗi. Codex với cùng goal chỉ đề xuất 1 task cập nhật tài liệu còn thiếu.
 
+### Shared knowledge base — trạng thái ✅ ([ADR-0014](adr/0014-shared-knowledge-base.md))
+
+- [x] Handoff và plan có `knowledge: [{kind, title, body}]` (architecture, business rule, API contract, data model, convention, decision, known issue)
+- [x] Note của agent ở trạng thái `proposed`; được `accepted` khi task merge hoặc khi plan được approve; entry cùng fact bị supersede; người có thể thêm, sửa, accept, archive
+- [x] Mọi task (work, review, plan) nhận knowledge đã accepted qua `.orchestrator/context/KNOWLEDGE.md` (ngân sách 40.000 ký tự)
+- [x] UI: tab Knowledge; event `Knowledge*` trên timeline
+- [x] **Chạy thật** trên `mar-sandbox`: Claude (LP-6, PR #17) báo 2 fact về project (một business rule, một convention testing). Khi PR merge, 2 fact này tự chuyển accepted. Task Codex tiếp theo (LP-7) nhận chúng trong `KNOWLEDGE.md`, đọc file ngay khi bắt đầu, và không báo trùng lại.
+
 ## Phase 3
 
 Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.

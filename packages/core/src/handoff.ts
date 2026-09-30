@@ -1,3 +1,5 @@
+import { KNOWLEDGE_NOTE_SCHEMA, type KnowledgeNote, toKnowledgeNotes } from "./knowledge.js";
+
 /**
  * Handoff artifact (spec §45, §62): what every agent must report when it
  * finishes a task. Requested from the agent as structured output
@@ -14,6 +16,8 @@ export interface Handoff {
   knownIssues: string[];
   /** What is left for a follow-up task. */
   remainingWork: string[];
+  /** Durable project facts for the shared knowledge base (spec §35). */
+  knowledge: KnowledgeNote[];
 }
 
 export const HANDOFF_SCHEMA = {
@@ -24,8 +28,9 @@ export const HANDOFF_SCHEMA = {
     decisions: { type: "array", items: { type: "string" }, description: "Decisions taken and their rationale." },
     knownIssues: { type: "array", items: { type: "string" }, description: "Known issues, risks or shortcuts." },
     remainingWork: { type: "array", items: { type: "string" }, description: "Work left for a follow-up task." },
+    knowledge: KNOWLEDGE_NOTE_SCHEMA,
   },
-  required: ["summary", "changes", "decisions", "knownIssues", "remainingWork"],
+  required: ["summary", "changes", "decisions", "knownIssues", "remainingWork", "knowledge"],
   additionalProperties: false,
 } as const;
 
@@ -41,7 +46,7 @@ export function toHandoff(result: unknown): Handoff {
     try {
       value = JSON.parse(result);
     } catch {
-      return { summary: result, changes: [], decisions: [], knownIssues: [], remainingWork: [] };
+      return { summary: result, changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [] };
     }
   }
   const o = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -51,5 +56,6 @@ export function toHandoff(result: unknown): Handoff {
     decisions: stringArray(o.decisions),
     knownIssues: stringArray(o.knownIssues),
     remainingWork: stringArray(o.remainingWork),
+    knowledge: toKnowledgeNotes(o.knowledge),
   };
 }

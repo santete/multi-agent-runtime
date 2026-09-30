@@ -67,7 +67,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
       </aside>
       <main className="main">
         {route.page === "overview" && <Overview />}
-        {route.page === "project" && <ProjectPage id={route.id} tab={route.tab} />}
+        {route.page === "project" && <ProjectPage id={route.id} tab={route.tab} actor={actor} />}
         {route.page === "task" && <TaskPage id={route.id} actor={actor} />}
         {route.page === "plan" && <PlanPage id={route.id} actor={actor} />}
         {route.page === "approvals" && <ApprovalsPage actor={actor} />}

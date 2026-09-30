@@ -1,3 +1,5 @@
+import { KNOWLEDGE_NOTE_SCHEMA, type KnowledgeNote, toKnowledgeNotes } from "./knowledge.js";
+
 /**
  * Assisted planning (spec §24): a planner agent breaks a goal into a task DAG
  * and a human approves, edits or sends it back before any task is created.
@@ -17,6 +19,8 @@ export interface PlannedTask {
 export interface PlanProposal {
   summary: string;
   tasks: PlannedTask[];
+  /** What the planner learned about the project (shared once the plan is approved). */
+  knowledge: KnowledgeNote[];
 }
 
 export const MAX_PLAN_TASKS = 20;
@@ -45,8 +49,9 @@ export const PLAN_SCHEMA = {
         additionalProperties: false,
       },
     },
+    knowledge: KNOWLEDGE_NOTE_SCHEMA,
   },
-  required: ["summary", "tasks"],
+  required: ["summary", "tasks", "knowledge"],
   additionalProperties: false,
 } as const;
 
@@ -122,5 +127,8 @@ export function checkPlan(result: unknown, options: { allowEmpty?: boolean } = {
     done.add(next.ref);
     ordered.push(next);
   }
-  return { ok: true, plan: { summary: str((value as any).summary), tasks: ordered } };
+  return {
+    ok: true,
+    plan: { summary: str((value as any).summary), tasks: ordered, knowledge: toKnowledgeNotes((value as any).knowledge) },
+  };
 }

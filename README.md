@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, and assisted planning (an agent proposes the task DAG, a human approves it) are done; see the development plan.
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it) and a shared knowledge base are done; see the development plan.
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -86,6 +86,9 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
 | POST | `/projects/:id/plans` | `{goal, agent}`: a planner agent proposes a task DAG ([ADR-0013](docs/adr/0013-assisted-planning.md)) |
 | GET | `/projects/:id/plans`, `/plans/:id` | plans with their proposal and status |
+| GET | `/projects/:id/knowledge?status=` | shared project knowledge: facts agents reported (accepted when their work merges) and people wrote ([ADR-0014](docs/adr/0014-shared-knowledge-base.md)) |
+| POST | `/projects/:id/knowledge` | `{kind, title, body}`: write a fact down (accepted right away) |
+| PUT | `/knowledge/:id` | edit an entry, or `{status: "accepted" \| "archived"}` |
 | POST | `/plans/:id/approve`, `/plans/:id/revise`, `/plans/:id/reject` | approve (optionally `{tasks}` as edited) to create the tasks, send back with `{feedback}`, or reject |
 | GET | `/projects/:id/graph` | task DAG (`nodes`, `edges`) |
 | POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
