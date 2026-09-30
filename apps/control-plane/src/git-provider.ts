@@ -161,7 +161,7 @@ export class GitHubProvider implements GitProvider {
               ? await this.call("GET", `${base}/check-runs/${r.id}/annotations?per_page=10`)
               : undefined;
           const messages = (Array.isArray(annotations?.body) ? annotations.body : [])
-            .filter((a: any) => a.annotation_level === "failure" || a.annotation_level === "warning")
+            .filter((a: any) => a.annotation_level === "failure")
             .map((a: any) => (a.path && a.path !== ".github" ? `${a.path}:${a.start_line}: ${a.message}` : a.message));
           const summary = [r.output?.summary || r.output?.title, ...messages].filter(Boolean).join("\n");
           return { name: r.name, state, url: r.html_url ?? null, summary: summary || null };
