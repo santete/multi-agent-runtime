@@ -162,6 +162,7 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Note của agent ở trạng thái `proposed`; được `accepted` khi task merge hoặc khi plan được approve; entry cùng fact bị supersede; người có thể thêm, sửa, accept, archive
 - [x] Mọi task (work, review, plan) nhận knowledge đã accepted qua `.orchestrator/context/KNOWLEDGE.md` (ngân sách 40.000 ký tự)
 - [x] UI: tab Knowledge; event `Knowledge*` trên timeline
+- [x] **Chạy thật** trên `mar-sandbox`: Claude (LP-6, PR #17) báo 2 fact về project (một business rule, một convention testing). Khi PR merge, 2 fact này tự chuyển accepted. Task Codex tiếp theo (LP-7) nhận chúng trong `KNOWLEDGE.md`, đọc file ngay khi bắt đầu, và không báo trùng lại.
 
 ## Phase 3
 

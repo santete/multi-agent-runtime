@@ -43,3 +43,6 @@ Event ghi lại: `KnowledgeProposed`, `KnowledgeAccepted`, `KnowledgeUpdated`.
 - Nếu agent chỉ đề xuất mà task không bao giờ được merge, note vẫn ở `proposed` cho người xem xét. Chúng không tự bị xóa.
 - Việc chống trùng dựa trên title nên khá thô: hai cách diễn đạt khác nhau của cùng một fact vẫn có thể cùng tồn tại. Người có thể archive bản thừa. Tìm kiếm theo ngữ nghĩa (embedding) để lại cho Phase 3.
 - Ngân sách 40.000 ký tự giới hạn kích thước context. Khi knowledge vượt ngân sách, các entry cũ nhất trong mỗi kind sẽ không được gửi cho agent.
+- Đã kiểm chứng thật trên `mar-sandbox`:
+  - Claude (LP-6) báo 2 fact đúng về project. Khi PR #17 merge, chúng được accept.
+  - Codex (LP-7) nhận 2 fact đó qua `KNOWLEDGE.md`, đọc file ngay lượt đầu tiên, và không báo lại những gì đã có.
