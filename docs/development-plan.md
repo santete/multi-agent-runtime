@@ -138,6 +138,13 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] `request_changes` → rework của tác giả kèm findings; `approve` → người duyệt hoặc tự approve; comment review lên PR
 - [x] **Chạy thật**: Codex ↔ Claude review lẫn nhau (PR #12, #13 merged), Codex bắt đúng 3 lỗi của một agent cố tình làm sai
 
+### Scheduler theo capability · reassign — trạng thái ✅ ([ADR-0012](adr/0012-capability-routing.md))
+
+- [x] Agent khai báo `skills` và `cost` trong config runner; task `agent: "auto"` + `requires` được route lúc claim theo skill, độ tin cậy đo được, cost và tải (`routingPolicy` của project: balanced / reliability / cost), ghi `AgentSelected` kèm lý do
+- [x] Reassign khi agent hết quota/rate limit/chưa đăng nhập hoặc fail 2 lần liên tiếp: task auto loại agent đó và route lại, task cố định chuyển sang `fallbackAgents`; event `TaskReassigned`
+- [x] Resume chỉ trong cùng agent (`executions.agent`); review task có fallback reviewer và không bao giờ giao cho tác giả
+- [x] `GET /agents/stats` (runs, success, fail, thời gian trung bình, rework rate) + bảng Track record trên UI; hộp thoại tạo task hỗ trợ auto/required skills/fallback
+
 ## Phase 3
 
 Planner tự động · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.

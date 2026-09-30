@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   type AgentDescriptor,
+  type AgentStats,
   type AgentEvent,
   type ApprovalDecision,
   type ApprovalDto,
@@ -36,6 +37,8 @@ import {
   type ValidationStep,
   ACTIVE_EXECUTION_STATUSES,
   approvalKey,
+  chooseAgent,
+  isAgentUnavailable,
   evaluateToolCall,
   isTerminal,
   formatReview,
@@ -88,6 +91,8 @@ export interface StoreOptions {
 type Row = Record<string, any>;
 
 const ACTIVE = [...ACTIVE_EXECUTION_STATUSES];
+/** Agent value of a task the scheduler still has to route. */
+const AUTO = "auto";
 
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 const isoOrNull = (v: unknown): string | null => (v == null ? null : iso(v));
@@ -103,6 +108,7 @@ const toProject = (r: Row): ProjectDto => ({
   maxParallel: r.max_parallel ?? null,
   reviewAgents: r.review_agents ?? [],
   autoApproveOnAgentReview: Boolean(r.auto_approve_on_agent_review),
+  routingPolicy: r.routing_policy ?? "balanced",
   createdAt: iso(r.created_at),
 });
 
@@ -142,6 +148,10 @@ const toTask = (r: Row): TaskDto => ({
   agent: r.agent,
   state: r.state,
   maxAttempts: r.max_attempts,
+  routing: r.routing ?? "fixed",
+  requires: r.requires ?? [],
+  fallbackAgents: r.fallback_agents ?? [],
+  excludedAgents: r.excluded_agents ?? [],
   kind: r.kind ?? "work",
   reviewOf: r.review_of ?? null,
   dependsOn: r.depends_on ?? [],
@@ -157,6 +167,7 @@ const toExecution = (r: Row): ExecutionDto => ({
   taskId: r.task_id,
   runnerId: r.runner_id,
   attempt: r.attempt,
+  agent: r.agent ?? null,
   status: r.status,
   sessionId: r.session_id,
   workspace: r.workspace,
@@ -264,8 +275,8 @@ export class Store {
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
-           review_agents, auto_approve_on_agent_review)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *`,
+           review_agents, auto_approve_on_agent_review, routing_policy)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
         [
           randomUUID(),
           req.key,
@@ -276,6 +287,7 @@ export class Store {
           req.maxParallel ?? null,
           JSON.stringify(req.reviewAgents ?? []),
           req.autoApproveOnAgentReview ?? false,
+          req.routingPolicy ?? "balanced",
         ],
       );
       const project = toProject(row!);
@@ -337,16 +349,29 @@ export class Store {
       const key = `${p.key}-${p.task_seq}`;
       const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
       const [row] = await q.query(
-        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on)
-         values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[]) returning *`,
-        [randomUUID(), projectId, key, req.title, req.objective, req.agent, req.maxAttempts ?? 3, deps.map((d) => d.id)],
+        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
+           routing, requires, fallback_agents)
+         values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11) returning *`,
+        [
+          randomUUID(),
+          projectId,
+          key,
+          req.title,
+          req.objective,
+          req.agent,
+          req.maxAttempts ?? 3,
+          deps.map((d) => d.id),
+          req.agent === AUTO ? "auto" : "fixed",
+          JSON.stringify(req.requires ?? []),
+          JSON.stringify(req.fallbackAgents ?? []),
+        ],
       );
       const task = toTask(row!);
       await appendEvent(q, {
         type: "TaskCreated",
         projectId,
         taskId: task.id,
-        payload: { key, title: task.title, agent: task.agent, dependsOn: deps.map((d) => d.key), actor: actor ?? null },
+        payload: { key, title: task.title, agent: task.agent, requires: task.requires, dependsOn: deps.map((d) => d.key), actor: actor ?? null },
       });
       if (deps.every((d) => d.state === "COMPLETED")) return changeTaskState(q, task, "dependencies_satisfied");
       return task; // stays CREATED (waiting for dependencies) until they are merged
@@ -475,19 +500,50 @@ export class Store {
       const agentIds = runner.agents.map((a) => a.id);
       if (!agentIds.length) return null;
 
-      // Oldest READY task for our agents, in a project that is below its parallelism limit.
-      const [taskRow] = await q.query(
+      // Oldest READY tasks for our agents (or left to the scheduler), in projects
+      // below their parallelism limit; the first one we can route wins.
+      const candidates = await q.query(
         `select t.* from tasks t join projects p on p.id = t.project_id
-         where t.state = 'READY' and t.agent = any($1::text[])
+         where t.state = 'READY' and (t.agent = any($1::text[]) or t.agent = '${AUTO}')
            and (p.max_parallel is null or (
              select count(*) from tasks w
              where w.project_id = t.project_id and w.state in ('ASSIGNED', 'RUNNING', 'VALIDATING')
            ) < p.max_parallel)
-         order by t.created_at limit 1 for update of t skip locked`,
+         order by t.created_at limit 20 for update of t skip locked`,
         [agentIds],
       );
-      if (!taskRow) return null;
-      const task = await changeTaskState(q, toTask(taskRow), "assigned", { runnerId });
+      let picked: { task: TaskDto; routed?: { agent: string; reason: string } } | undefined;
+      for (const row of candidates) {
+        const candidate = toTask(row);
+        if (candidate.agent !== AUTO) {
+          picked = { task: candidate };
+          break;
+        }
+        const policy = (await this.getProject(candidate.projectId, q)).routingPolicy;
+        const choice = chooseAgent(
+          runner.agents.map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
+          { requires: candidate.requires, excluded: candidate.excludedAgents },
+          await this.agentStats(candidate.projectId, q),
+          policy,
+        );
+        if (choice) {
+          picked = { task: candidate, routed: choice };
+          break;
+        }
+      }
+      if (!picked) return null;
+      let task = picked.task;
+      if (picked.routed) {
+        const [updated] = await q.query("update tasks set agent = $2 where id = $1 returning *", [task.id, picked.routed.agent]);
+        task = toTask(updated!);
+        await appendEvent(q, {
+          type: "AgentSelected",
+          projectId: task.projectId,
+          taskId: task.id,
+          payload: { agent: picked.routed.agent, reason: picked.routed.reason, requires: task.requires },
+        });
+      }
+      task = await changeTaskState(q, task, "assigned", { runnerId, agent: task.agent });
 
       const [previous] = await q.query<{ id: string; attempt: number }>(
         "select id, attempt from executions where task_id = $1 order by attempt desc limit 1",
@@ -500,15 +556,15 @@ export class Store {
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
-         where task_id = $1 and session_id is not null order by attempt desc limit 1`,
-        [task.id],
+         where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
+        [task.id, task.agent],
       );
 
       const executionToken = randomBytes(24).toString("base64url");
       const [execRow] = await q.query(
-        `insert into executions (id, task_id, runner_id, attempt, status, token_hash, lease_expires_at)
-         values ($1, $2, $3, $4, 'assigned', $5, now() + make_interval(secs => $6)) returning *`,
-        [randomUUID(), task.id, runnerId, (previous?.attempt ?? 0) + 1, sha256(executionToken), this.leaseSeconds],
+        `insert into executions (id, task_id, runner_id, attempt, status, token_hash, lease_expires_at, agent)
+         values ($1, $2, $3, $4, 'assigned', $5, now() + make_interval(secs => $6), $7) returning *`,
+        [randomUUID(), task.id, runnerId, (previous?.attempt ?? 0) + 1, sha256(executionToken), this.leaseSeconds, task.agent],
       );
       const execution = toExecution(execRow!);
       await appendEvent(q, {
@@ -884,7 +940,8 @@ export class Store {
     await this.db.tx(async (q) => {
       const task = await this.getTask(taskId, q);
       const project = await this.getProject(task.projectId, q);
-      const reviewer = project.reviewAgents.find((a) => a !== task.agent);
+      const reviewers = project.reviewAgents.filter((a) => a !== task.agent);
+      const reviewer = reviewers[0];
       if (task.kind !== "work" || !reviewer) return;
       const [p] = await q.query<{ key: string; task_seq: number }>(
         "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
@@ -892,8 +949,9 @@ export class Store {
       );
       const key = `${p!.key}-${p!.task_seq}`;
       const [row] = await q.query(
-        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, kind, review_of)
-         values ($1, $2, $3, $4, $5, $6, 'CREATED', 2, 'review', $7) returning *`,
+        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, kind, review_of,
+           fallback_agents, excluded_agents)
+         values ($1, $2, $3, $4, $5, $6, 'CREATED', 2, 'review', $7, $8, $9) returning *`,
         [
           randomUUID(),
           project.id,
@@ -902,6 +960,9 @@ export class Store {
           `Review the changes delivered for ${task.key} ("${task.title}") by ${task.agent}.`,
           reviewer,
           task.id,
+          JSON.stringify(reviewers.slice(1)),
+          // The author never reviews its own work, even as a fallback.
+          JSON.stringify([task.agent]),
         ],
       );
       const reviewTask = toTask(row!);
@@ -1415,7 +1476,7 @@ export class Store {
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {
-        const task = toTask(row);
+        const task = row.state === "RETRYING" ? await this.maybeReassign(q, toTask(row)) : toTask(row);
         if (row.attempts < task.maxAttempts) {
           await changeTaskState(q, task, "unassigned", { attempts: row.attempts });
           result.requeued++;
@@ -1426,6 +1487,72 @@ export class Store {
       }
       return result;
     });
+  }
+
+  /**
+   * Spec §46: when the agent is unavailable (quota, rate limit, login) or
+   * failed the task twice in a row, move the task to another agent: auto
+   * routing excludes it and lets the scheduler choose again; fixed routing
+   * switches to the next fallback agent.
+   */
+  private async maybeReassign(q: Queryable, task: TaskDto): Promise<TaskDto> {
+    const recent = await q.query<{ agent: string | null; status: string; result: any }>(
+      "select agent, status, result from executions where task_id = $1 order by attempt desc limit 2",
+      [task.id],
+    );
+    const last = recent[0];
+    if (!last?.agent || last.agent !== task.agent) return task;
+    const reason = String(last.result?.reason ?? "");
+    const unavailable = isAgentUnavailable(reason);
+    const repeated = recent.length === 2 && recent.every((e) => e.agent === last.agent && ["failed", "lost"].includes(e.status));
+    if (!unavailable && !repeated) return task;
+
+    const excluded = [...new Set([...task.excludedAgents, last.agent])];
+    const next =
+      task.routing === "auto" ? AUTO : task.fallbackAgents.find((a) => !excluded.includes(a) && a !== task.agent);
+    if (!next) return task;
+    const [row] = await q.query("update tasks set agent = $2, excluded_agents = $3 where id = $1 returning *", [
+      task.id,
+      next,
+      JSON.stringify(excluded),
+    ]);
+    await appendEvent(q, {
+      type: "TaskReassigned",
+      projectId: task.projectId,
+      taskId: task.id,
+      payload: { from: last.agent, to: next, reason: unavailable ? `agent unavailable: ${reason.slice(0, 200)}` : "failed twice in a row" },
+    });
+    return toTask(row!);
+  }
+
+  /** Execution history per agent (spec §40), optionally for one project. */
+  async agentStats(projectId?: string, q: Queryable = this.db): Promise<AgentStats[]> {
+    const rows = await q.query(
+      `select e.agent,
+         count(*)::int as executions,
+         count(*) filter (where e.status = 'succeeded')::int as succeeded,
+         count(*) filter (where e.status in ('failed', 'lost'))::int as failed,
+         count(*) filter (where e.status in ('assigned', 'running', 'validating', 'delivering'))::int as active,
+         avg(extract(epoch from (e.finished_at - e.started_at)) * 1000)
+           filter (where e.finished_at is not null and e.started_at is not null) as avg_ms,
+         count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and (
+             (a.type = 'validation_result' and a.content->>'passed' = 'false') or
+             (a.type = 'review_result' and a.content->>'decision' = 'reject'))))::int as reworked
+       from executions e join tasks t on t.id = e.task_id
+       where e.agent is not null and ($1::uuid is null or t.project_id = $1)
+       group by e.agent order by e.agent`,
+      [projectId ?? null],
+    );
+    return rows.map((r) => ({
+      agent: r.agent,
+      executions: r.executions,
+      succeeded: r.succeeded,
+      failed: r.failed,
+      active: r.active,
+      avgDurationMs: r.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
+      reworkRate: r.executions ? Math.round((r.reworked / r.executions) * 1000) / 1000 : 0,
+    }));
   }
 
   // ---- events -------------------------------------------------------------

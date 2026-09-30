@@ -111,9 +111,13 @@ export function describeEvent(e: EventDto): string {
   const by = p.actor ? ` by ${p.actor}` : "";
   switch (e.type) {
     case "TaskCreated":
-      return `created "${p.title}" for ${p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
+      return `created "${p.title}" for ${p.agent === "auto" ? `the scheduler${p.requires?.length ? ` (needs ${p.requires.join(", ")})` : ""}` : p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
     case "TaskStateChanged":
       return `${stateLabel(p.from)} → ${stateLabel(p.to)}${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "AgentSelected":
+      return `routed to ${p.agent} — ${p.reason}`;
+    case "TaskReassigned":
+      return `reassigned from ${p.from} to ${p.to === "auto" ? "the scheduler" : p.to}: ${p.reason}`;
     case "ExecutionAssigned":
       return `attempt ${p.attempt} assigned${p.resumable ? " (resuming session)" : ""}${p.rework ? `, rework: ${p.rework}` : ""}`;
     case "ExecutionStarted":

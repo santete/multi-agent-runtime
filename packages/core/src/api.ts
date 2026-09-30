@@ -1,5 +1,6 @@
 /** Wire types shared by the control plane HTTP API and its clients (runner, UI). */
 import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
+import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
 /** A validation command run by the runner in the task worktree (spec §28). */
@@ -24,6 +25,8 @@ export interface ProjectDto {
   reviewAgents: string[];
   /** An agent approval also approves the task for merging (otherwise a human still reviews). */
   autoApproveOnAgentReview: boolean;
+  /** How the scheduler weighs reliability, cost and load when it picks an agent. */
+  routingPolicy: RoutingPolicy;
   createdAt: string;
 }
 
@@ -37,6 +40,14 @@ export interface TaskDto {
   state: TaskState;
   /** Attempts before the task is BLOCKED. */
   maxAttempts: number;
+  /** "auto": the scheduler picks the agent by `requires` (agent is "auto" until then). */
+  routing: "fixed" | "auto";
+  /** Skills the agent must have (auto routing). */
+  requires: string[];
+  /** Agents to switch to when the agent keeps failing or is unavailable (fixed routing). */
+  fallbackAgents: string[];
+  /** Agents that failed this task and will not get it again. */
+  excludedAgents: string[];
   /** "review": an agent review of another task (reviewOf); it produces a review, not code. */
   kind: "work" | "review";
   reviewOf: string | null;
@@ -73,6 +84,8 @@ export interface ExecutionDto {
   taskId: string;
   runnerId: string;
   attempt: number;
+  /** Agent that ran this attempt. */
+  agent: string | null;
   status: ExecutionStatus;
   sessionId: string | null;
   workspace: string | null;
@@ -108,6 +121,7 @@ export interface CreateProjectRequest {
   maxParallel?: number | undefined;
   reviewAgents?: string[] | undefined;
   autoApproveOnAgentReview?: boolean | undefined;
+  routingPolicy?: RoutingPolicy | undefined;
 }
 
 export interface ReviewPolicy {
@@ -206,7 +220,10 @@ export interface DeliveryResponse {
 export interface CreateTaskRequest {
   title: string;
   objective: string;
+  /** An agent id, or "auto" to let the scheduler pick one with the `requires` skills. */
   agent: string;
+  requires?: string[] | undefined;
+  fallbackAgents?: string[] | undefined;
   maxAttempts?: number | undefined;
   /** Ids or keys of tasks in the same project that must be merged first. */
   dependsOn?: string[] | undefined;
@@ -219,6 +236,10 @@ export interface AgentDescriptor {
   /** Adapter that runs it, e.g. "claude-code", "antigravity", "generic-cli". */
   adapter: string;
   capabilities: AdapterCapabilities;
+  /** What the agent is good at (languages, frameworks, task types), for routing. */
+  skills?: string[] | undefined;
+  /** Relative cost of using the agent. */
+  cost?: CostTier | undefined;
 }
 
 export interface RegisterRunnerRequest {

@@ -98,7 +98,13 @@ export class Runner {
   }
 
   get agents(): AgentDescriptor[] {
-    return [...this.adapters].map(([id, adapter]) => ({ id, adapter: adapter.id, capabilities: adapter.capabilities }));
+    return [...this.adapters].map(([id, adapter]) => ({
+      id,
+      adapter: adapter.id,
+      capabilities: adapter.capabilities,
+      skills: this.config.agents[id]!.skills,
+      cost: this.config.agents[id]!.cost,
+    }));
   }
 
   async register(): Promise<string> {
