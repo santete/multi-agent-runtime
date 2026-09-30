@@ -2176,6 +2176,20 @@ export class Store {
     return rows.map(toEvent);
   }
 
+  /** Position of an event log consumer (null: never ran). */
+  async eventCursor(name: string): Promise<number | null> {
+    const [row] = await this.db.query<{ seq: string | number }>("select seq from event_cursors where name = $1", [name]);
+    return row ? Number(row.seq) : null;
+  }
+
+  async setEventCursor(name: string, seq: number): Promise<void> {
+    await this.db.query(
+      `insert into event_cursors (name, seq) values ($1, $2)
+       on conflict (name) do update set seq = excluded.seq, updated_at = now()`,
+      [name, seq],
+    );
+  }
+
   async latestEventSeq(): Promise<number> {
     const [row] = await this.db.query<{ seq: string | number | null }>("select max(seq) as seq from events");
     return Number(row?.seq ?? 0);
