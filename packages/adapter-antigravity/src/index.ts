@@ -1,11 +1,12 @@
-import type {
-  AdapterCapabilities,
-  AgentAdapter,
-  AgentEvent,
-  AgentOutputParser,
-  AgentRunRequest,
-  CommandSpec,
-  TokenUsage,
+import {
+  exitWithoutResult,
+  type AdapterCapabilities,
+  type AgentAdapter,
+  type AgentEvent,
+  type AgentOutputParser,
+  type AgentRunRequest,
+  type CommandSpec,
+  type TokenUsage,
 } from "@mar/core";
 
 export interface AntigravityAdapterOptions {
@@ -81,6 +82,7 @@ function toUsage(u: AgyUsage | undefined): TokenUsage | undefined {
 
 export class AntigravityStreamParser implements AgentOutputParser {
   private sessionId: string | undefined;
+  private terminated = false;
   /** agent_response text arrives as deltas per step; flushed when the step is DONE. */
   private readonly textByStep = new Map<number, string>();
 
@@ -138,7 +140,12 @@ export class AntigravityStreamParser implements AgentOutputParser {
     return [];
   }
 
+  finish(exitCode: number | null): AgentEvent[] {
+    return this.terminated ? [] : [exitWithoutResult(exitCode, this.sessionId)];
+  }
+
   private result(r: Record<string, any>): AgentEvent[] {
+    this.terminated = true;
     const denied: Array<{ action?: string; display_name?: string }> = Array.isArray(r.denied_actions)
       ? r.denied_actions
       : [];

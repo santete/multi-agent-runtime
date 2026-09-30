@@ -96,4 +96,18 @@ export interface AgentAdapter {
 export interface AgentOutputParser {
   /** Parse one stdout line; returns zero or more normalized events. */
   push(line: string): AgentEvent[];
+  /**
+   * Called once when the process exits (exitCode null = killed). Must emit a
+   * terminal event (`completed` or `failed`) if the stream did not contain one.
+   */
+  finish(exitCode: number | null): AgentEvent[];
+}
+
+/** Terminal event for a process that exited without reporting a result. */
+export function exitWithoutResult(exitCode: number | null, sessionId?: string): AgentEvent {
+  return {
+    kind: "failed",
+    ...(sessionId && { sessionId }),
+    reason: exitCode === null ? "process was killed" : `process exited with code ${exitCode} without a result`,
+  };
 }

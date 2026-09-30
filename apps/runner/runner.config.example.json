@@ -1,0 +1,13 @@
+{
+  "controlPlaneUrl": "http://127.0.0.1:7700",
+  "name": "dev-laptop",
+  "home": "./.runner",
+  "pollIntervalMs": 2000,
+  "maxConcurrent": 2,
+  "timeoutSeconds": 1800,
+  "agents": {
+    "shell": { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{prompt}"] },
+    "claude-code": { "adapter": "claude-code" },
+    "antigravity": { "adapter": "antigravity", "executable": "agy" }
+  }
+}

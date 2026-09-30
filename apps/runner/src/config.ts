@@ -1,0 +1,58 @@
+import { readFile } from "node:fs/promises";
+import { AntigravityAdapter } from "@mar/adapter-antigravity";
+import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
+import { GenericCliAdapter } from "@mar/adapter-generic-cli";
+import type { AgentAdapter } from "@mar/core";
+import { z } from "zod";
+
+const agentConfig = z.discriminatedUnion("adapter", [
+  z.object({ adapter: z.literal("claude-code"), executable: z.string().optional() }),
+  z.object({
+    adapter: z.literal("antigravity"),
+    executable: z.string().optional(),
+    defaultTimeoutSeconds: z.number().int().positive().optional(),
+  }),
+  z.object({
+    adapter: z.literal("generic-cli"),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    promptViaStdin: z.boolean().optional(),
+  }),
+]);
+
+export const runnerConfig = z.object({
+  controlPlaneUrl: z.url(),
+  name: z.string().min(1),
+  /** Where repos and worktrees live. */
+  home: z.string().min(1),
+  pollIntervalMs: z.number().int().positive().default(2000),
+  maxConcurrent: z.number().int().positive().default(2),
+  timeoutSeconds: z.number().int().positive().default(1800),
+  /** Logical agent id (what tasks ask for) -> how this machine runs it. */
+  agents: z.record(z.string(), agentConfig),
+});
+
+export type RunnerConfig = z.infer<typeof runnerConfig>;
+export type AgentConfig = z.infer<typeof agentConfig>;
+
+export async function loadConfig(path: string): Promise<RunnerConfig> {
+  return runnerConfig.parse(JSON.parse(await readFile(path, "utf8")));
+}
+
+export function createAdapter(config: AgentConfig): AgentAdapter {
+  switch (config.adapter) {
+    case "claude-code":
+      return new ClaudeCodeAdapter({ ...(config.executable && { executable: config.executable }) });
+    case "antigravity":
+      return new AntigravityAdapter({
+        ...(config.executable && { executable: config.executable }),
+        ...(config.defaultTimeoutSeconds && { defaultTimeoutSeconds: config.defaultTimeoutSeconds }),
+      });
+    case "generic-cli":
+      return new GenericCliAdapter({
+        command: config.command,
+        ...(config.args && { args: config.args }),
+        ...(config.promptViaStdin !== undefined && { promptViaStdin: config.promptViaStdin }),
+      });
+  }
+}
