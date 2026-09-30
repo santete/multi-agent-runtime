@@ -145,9 +145,16 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Resume chỉ trong cùng agent (`executions.agent`); review task có fallback reviewer và không bao giờ giao cho tác giả
 - [x] `GET /agents/stats` (runs, success, fail, thời gian trung bình, rework rate) + bảng Track record trên UI; hộp thoại tạo task hỗ trợ auto/required skills/fallback
 
+### Planner hỗ trợ — trạng thái ✅ ([ADR-0013](adr/0013-assisted-planning.md))
+
+- [x] `POST /projects/:id/plans {goal, agent}`: planner task `kind: "plan"` chạy read-only trên base branch với `PLAN.md` (goal, agent online + skill, task đang mở) và `PLAN_SCHEMA`
+- [x] `checkPlan`: ref duy nhất, không vòng, thứ tự topo, dependency tới task có sẵn theo key; đọc được JSON trong text với agent không có structured output
+- [x] Người duyệt: approve (có thể sửa task trước), revise kèm feedback (plan mới có context proposal cũ), reject; approve tạo DAG trong một transaction, `agent: null` → auto routing
+- [x] UI: tab Plans, trang plan chỉnh sửa và duyệt; event `Plan*` trên timeline
+
 ## Phase 3
 
-Planner tự động · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
+Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
 
 ## Rủi ro đang theo dõi
 

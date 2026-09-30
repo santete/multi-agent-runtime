@@ -2,6 +2,12 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import {
   type AgentDescriptor,
   type AgentStats,
+  type ApprovePlanRequest,
+  type CreatePlanRequest,
+  type PlanDto,
+  type PlanningContext,
+  type PlanProposal,
+  type RevisePlanRequest,
   type AgentEvent,
   type ApprovalDecision,
   type ApprovalDto,
@@ -37,6 +43,7 @@ import {
   type ValidationStep,
   ACTIVE_EXECUTION_STATUSES,
   approvalKey,
+  checkPlan,
   chooseAgent,
   isAgentUnavailable,
   evaluateToolCall,
@@ -154,12 +161,39 @@ const toTask = (r: Row): TaskDto => ({
   excludedAgents: r.excluded_agents ?? [],
   kind: r.kind ?? "work",
   reviewOf: r.review_of ?? null,
+  planId: r.plan_id ?? null,
   dependsOn: r.depends_on ?? [],
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
   version: r.version,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
+});
+
+/** Plans with their (latest) planner task; "failed" is derived from that task. */
+const PLAN_SELECT = `select p.*, t.id as planner_task_id, t.key as planner_task_key, t.agent as planner_agent,
+    t.state as planner_state
+  from plans p left join lateral (
+    select * from tasks t where t.plan_id = p.id and t.kind = 'plan' order by t.created_at desc limit 1
+  ) t on true`;
+
+const toPlan = (r: Row): PlanDto => ({
+  id: r.id,
+  projectId: r.project_id,
+  goal: r.goal,
+  status: r.status === "planning" && ["BLOCKED", "CANCELLED"].includes(r.planner_state) ? "failed" : r.status,
+  plannerTaskId: r.planner_task_id ?? null,
+  plannerTaskKey: r.planner_task_key ?? null,
+  plannerAgent: r.planner_agent ?? null,
+  proposal: r.proposal ?? null,
+  createdTasks: r.created_tasks ?? [],
+  feedback: r.feedback ?? null,
+  previousPlanId: r.previous_plan_id ?? null,
+  createdBy: r.created_by ?? null,
+  decidedBy: r.decided_by ?? null,
+  comment: r.comment ?? null,
+  createdAt: iso(r.created_at),
+  decidedAt: r.decided_at ? iso(r.decided_at) : null,
 });
 
 const toExecution = (r: Row): ExecutionDto => ({
@@ -340,42 +374,61 @@ export class Store {
   // ---- tasks --------------------------------------------------------------
 
   async createTask(projectId: string, req: CreateTaskRequest, actor?: string): Promise<TaskDto> {
-    return this.db.tx(async (q) => {
-      const [p] = await q.query<{ key: string; task_seq: number }>(
-        "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
-        [projectId],
-      );
-      if (!p) throw new NotFoundError("project", projectId);
-      const key = `${p.key}-${p.task_seq}`;
-      const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
-      const [row] = await q.query(
-        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
-           routing, requires, fallback_agents)
-         values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11) returning *`,
-        [
-          randomUUID(),
-          projectId,
-          key,
-          req.title,
-          req.objective,
-          req.agent,
-          req.maxAttempts ?? 3,
-          deps.map((d) => d.id),
-          req.agent === AUTO ? "auto" : "fixed",
-          JSON.stringify(req.requires ?? []),
-          JSON.stringify(req.fallbackAgents ?? []),
-        ],
-      );
-      const task = toTask(row!);
-      await appendEvent(q, {
-        type: "TaskCreated",
+    return this.db.tx((q) => this.insertTask(q, projectId, req, actor));
+  }
+
+  private async insertTask(
+    q: Queryable,
+    projectId: string,
+    req: CreateTaskRequest,
+    actor?: string,
+    planId: string | null = null,
+    kind: "work" | "plan" = "work",
+  ): Promise<TaskDto> {
+    const [p] = await q.query<{ key: string; task_seq: number }>(
+      "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
+      [projectId],
+    );
+    if (!p) throw new NotFoundError("project", projectId);
+    const key = `${p.key}-${p.task_seq}`;
+    const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
+    const [row] = await q.query(
+      `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
+         routing, requires, fallback_agents, plan_id, kind)
+       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13) returning *`,
+      [
+        randomUUID(),
         projectId,
-        taskId: task.id,
-        payload: { key, title: task.title, agent: task.agent, requires: task.requires, dependsOn: deps.map((d) => d.key), actor: actor ?? null },
-      });
-      if (deps.every((d) => d.state === "COMPLETED")) return changeTaskState(q, task, "dependencies_satisfied");
-      return task; // stays CREATED (waiting for dependencies) until they are merged
+        key,
+        req.title,
+        req.objective,
+        req.agent,
+        req.maxAttempts ?? 3,
+        deps.map((d) => d.id),
+        req.agent === AUTO ? "auto" : "fixed",
+        JSON.stringify(req.requires ?? []),
+        JSON.stringify(req.fallbackAgents ?? []),
+        planId,
+        kind,
+      ],
+    );
+    const task = toTask(row!);
+    await appendEvent(q, {
+      type: "TaskCreated",
+      projectId,
+      taskId: task.id,
+      payload: {
+        key,
+        title: task.title,
+        agent: task.agent,
+        requires: task.requires,
+        dependsOn: deps.map((d) => d.key),
+        ...(planId && { planId }),
+        actor: actor ?? null,
+      },
     });
+    if (deps.every((d) => d.state === "COMPLETED")) return changeTaskState(q, task, "dependencies_satisfied");
+    return task; // stays CREATED (waiting for dependencies) until they are merged
   }
 
   /** Resolves ids or keys of existing tasks in the same project; unknown or foreign tasks are rejected. */
@@ -403,6 +456,205 @@ export class Store {
     for (const row of waiting) {
       await changeTaskState(q, toTask(row), "dependencies_satisfied", { unlockedBy: completed.key });
     }
+  }
+
+  // ---- plans (assisted planning, spec §24) ----------------------------------
+
+  /** Asks a planner agent to break the goal into a task DAG for a human to approve. */
+  async createPlan(projectId: string, req: CreatePlanRequest, actor?: string): Promise<PlanDto> {
+    return this.db.tx(async (q) => this.getPlan(await this.insertPlan(q, projectId, req, actor), q));
+  }
+
+  private async insertPlan(
+    q: Queryable,
+    projectId: string,
+    req: CreatePlanRequest,
+    actor?: string,
+    previous?: { id: string; feedback: string },
+  ): Promise<string> {
+    await this.getProject(projectId, q);
+    const id = randomUUID();
+    await q.query(
+      `insert into plans (id, project_id, goal, previous_plan_id, feedback, created_by)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [id, projectId, req.goal, previous?.id ?? null, previous?.feedback ?? null, actor ?? null],
+    );
+    const title = req.goal.replace(/\s+/g, " ").trim();
+    const task = await this.insertTask(
+      q,
+      projectId,
+      { title: `Plan: ${title.length > 80 ? `${title.slice(0, 79)}…` : title}`, objective: req.goal, agent: req.agent, maxAttempts: 2 },
+      actor,
+      id,
+      "plan",
+    );
+    await appendEvent(q, {
+      type: "PlanRequested",
+      projectId,
+      taskId: task.id,
+      payload: { planId: id, goal: title.slice(0, 200), agent: req.agent, revises: previous?.id ?? null, actor: actor ?? null },
+    });
+    return id;
+  }
+
+  listPlans(projectId: string): Promise<PlanDto[]> {
+    return this.db.query(`${PLAN_SELECT} where p.project_id = $1 order by p.created_at desc`, [projectId]).then((rows) => rows.map(toPlan));
+  }
+
+  getPlan(id: string, q: Queryable = this.db): Promise<PlanDto> {
+    return one(q.query(`${PLAN_SELECT} where p.id = $1`, [id]), toPlan, "plan", id);
+  }
+
+  private async lockPlan(q: Queryable, id: string): Promise<PlanDto> {
+    await one(q.query("select id from plans where id = $1 for update", [id]), (r) => r, "plan", id);
+    return this.getPlan(id, q);
+  }
+
+  /**
+   * Creates the planned tasks (as proposed, or as edited by the reviewer) in
+   * dependency order; each becomes READY once its dependencies are merged.
+   */
+  async approvePlan(id: string, req: ApprovePlanRequest, actor?: string): Promise<PlanDto> {
+    return this.db.tx(async (q) => {
+      const plan = await this.lockPlan(q, id);
+      if (plan.status !== "proposed") throw new ConflictError(`plan is ${plan.status}; only a proposed plan can be approved`);
+      const check = checkPlan(req.tasks ? { summary: plan.proposal?.summary ?? "", tasks: req.tasks } : plan.proposal);
+      if (!check.ok) throw new ConflictError(`invalid plan: ${check.error}`);
+      const created: PlanDto["createdTasks"] = [];
+      for (const t of check.plan.tasks) {
+        const task = await this.insertTask(
+          q,
+          plan.projectId,
+          {
+            title: t.title,
+            objective: t.objective,
+            agent: t.agent ?? AUTO,
+            requires: t.requires,
+            dependsOn: t.dependsOn.map((d) => created.find((c) => c.ref === d)?.taskId ?? d),
+          },
+          actor,
+          plan.id,
+        );
+        created.push({ ref: t.ref, taskId: task.id, key: task.key });
+      }
+      await q.query(
+        `update plans set status = 'approved', proposal = $2, created_tasks = $3, decided_by = $4, comment = $5,
+           decided_at = now() where id = $1`,
+        [id, JSON.stringify(check.plan), JSON.stringify(created), actor ?? null, req.comment ?? null],
+      );
+      await appendEvent(q, {
+        type: "PlanApproved",
+        projectId: plan.projectId,
+        payload: { planId: id, tasks: created.map((c) => c.key), edited: Boolean(req.tasks), actor: actor ?? null },
+      });
+      return this.getPlan(id, q);
+    });
+  }
+
+  /** Rejects the plan; a planner still working on it is cancelled. */
+  async rejectPlan(id: string, comment: string | undefined, actor?: string): Promise<PlanDto> {
+    return this.db.tx(async (q) => {
+      const plan = await this.lockPlan(q, id);
+      if (!["planning", "proposed", "failed"].includes(plan.status)) throw new ConflictError(`plan is already ${plan.status}`);
+      await this.closePlan(q, plan, "rejected", comment, actor);
+      return this.getPlan(id, q);
+    });
+  }
+
+  /** Sends the proposal back to a planner with the reviewer's feedback, as a new plan. */
+  async revisePlan(id: string, req: RevisePlanRequest, actor?: string): Promise<PlanDto> {
+    return this.db.tx(async (q) => {
+      const plan = await this.lockPlan(q, id);
+      if (plan.status !== "proposed") throw new ConflictError(`plan is ${plan.status}; only a proposed plan can be revised`);
+      await this.closePlan(q, plan, "revised", req.feedback, actor);
+      const planner = plan.plannerTaskId ? await this.getTask(plan.plannerTaskId, q) : undefined;
+      const agent = !planner || planner.routing === "auto" ? AUTO : planner.agent;
+      return this.getPlan(await this.insertPlan(q, plan.projectId, { goal: plan.goal, agent }, actor, { id, feedback: req.feedback }), q);
+    });
+  }
+
+  private async closePlan(q: Queryable, plan: PlanDto, status: "rejected" | "revised", comment: string | undefined, actor?: string) {
+    await q.query("update plans set status = $2, comment = $3, decided_by = $4, decided_at = now() where id = $1", [
+      plan.id,
+      status,
+      comment ?? null,
+      actor ?? null,
+    ]);
+    if (plan.plannerTaskId) {
+      const planner = await this.getTask(plan.plannerTaskId, q);
+      if (!isTerminal(planner.state)) {
+        await q.query("update executions set cancel_requested = true where task_id = $1 and status = any($2::text[])", [
+          planner.id,
+          ACTIVE,
+        ]);
+        await changeTaskState(q, planner, "cancelled", { actor: actor ?? null });
+      }
+    }
+    await appendEvent(q, {
+      type: status === "rejected" ? "PlanRejected" : "PlanRevisionRequested",
+      projectId: plan.projectId,
+      payload: { planId: plan.id, comment: comment ?? null, actor: actor ?? null },
+    });
+  }
+
+  /** What the planner agent needs: the goal, the agents it can plan for and the open work. */
+  private async planningContext(q: Queryable, planId: string, project: ProjectDto): Promise<PlanningContext> {
+    const plan = await this.getPlan(planId, q);
+    const previous = plan.previousPlanId ? await this.getPlan(plan.previousPlanId, q) : undefined;
+    const open = await q.query(
+      `select key, title, state from tasks where project_id = $1 and kind = 'work'
+         and state not in ('COMPLETED', 'CANCELLED') order by created_at limit 50`,
+      [project.id],
+    );
+    return {
+      planId,
+      goal: plan.goal,
+      baseBranch: project.defaultBranch,
+      agents: await this.onlineAgents(q),
+      openTasks: open.map((r) => ({ key: r.key, title: r.title, state: r.state })),
+      ...(previous?.proposal && { previous: { proposal: previous.proposal, feedback: plan.feedback ?? "" } }),
+    };
+  }
+
+  private async onlineAgents(q: Queryable): Promise<PlanningContext["agents"]> {
+    const rows = await q.query<{ agents: AgentDescriptor[] }>(
+      "select agents from runners where last_seen_at > now() - make_interval(secs => $1) order by name",
+      [this.runnerOnlineSeconds],
+    );
+    const agents = new Map<string, PlanningContext["agents"][number]>();
+    for (const a of rows.flatMap((r) => r.agents)) {
+      if (!agents.has(a.id)) agents.set(a.id, { id: a.id, skills: a.skills ?? [], cost: a.cost ?? null });
+    }
+    return [...agents.values()];
+  }
+
+  /** Records the planner's proposal for a human to decide on. */
+  private async finishPlan(
+    q: Queryable,
+    task: TaskDto,
+    id: string,
+    req: CompleteExecutionRequest,
+    proposal: PlanProposal,
+  ): Promise<ExecutionDto> {
+    // Agents the planner made up are left to the scheduler instead.
+    const known = new Set((await this.onlineAgents(q)).map((a) => a.id));
+    const plan = { ...proposal, tasks: proposal.tasks.map((t) => (t.agent && !known.has(t.agent) ? { ...t, agent: null } : t)) };
+    const execution = await this.finishExecution(q, task, id, req, "succeeded", { tasks: plan.tasks.length });
+    await this.addArtifact(q, task, id, "plan_proposal", plan as unknown as Record<string, unknown>);
+    if (!isTerminal(task.state)) await changeTaskState(q, task, "review_submitted", { tasks: plan.tasks.length });
+    const [updated] = await q.query(
+      "update plans set status = 'proposed', proposal = $2 where id = $1 and status = 'planning' returning id",
+      [task.planId, JSON.stringify(plan)],
+    );
+    if (updated) {
+      await appendEvent(q, {
+        type: "PlanProposed",
+        projectId: task.projectId,
+        taskId: task.id,
+        payload: { planId: task.planId, tasks: plan.tasks.length, summary: plan.summary.slice(0, 500) },
+      });
+    }
+    return execution;
   }
 
   async graph(projectId: string): Promise<TaskGraph> {
@@ -554,6 +806,7 @@ export class Store {
       const approvals = previous ? await this.approvalDecisions(q, previous.id) : [];
       const dependencies = await this.dependencyContext(q, task);
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
+      const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
       const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
@@ -590,6 +843,7 @@ export class Store {
         ...(dependencies.length > 0 && { dependencies }),
         ...(approvals.length > 0 && { approvals }),
         ...(review && { review }),
+        ...(plan && { plan }),
       };
     });
   }
@@ -825,6 +1079,14 @@ export class Store {
         return this.finishExecution(q, task, id, req, "failed", { reason: "the reviewer did not return a usable review" });
       }
       if (review) return this.finishReview(q, task, id, req, review);
+      // A plan task is done once the planner proposed a usable DAG; a human decides on it.
+      if (task.kind === "plan" && status === "validating") {
+        const check = checkPlan(t.kind === "completed" ? t.result : null, { allowEmpty: true });
+        if (!check.ok) {
+          return this.finishExecution(q, task, id, req, "failed", { reason: `the planner did not return a usable plan: ${check.error}` });
+        }
+        return this.finishPlan(q, task, id, req, check.plan);
+      }
       const stillActive = status === "validating";
 
       const [row] = await q.query(

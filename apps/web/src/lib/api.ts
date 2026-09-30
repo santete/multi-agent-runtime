@@ -3,6 +3,8 @@ import type {
   AgentStats,
   ApprovalDto,
   ArtifactDto,
+  PlanDto,
+  PlannedTask,
   EventDto,
   EventsPage,
   ExecutionDto,
@@ -81,6 +83,13 @@ export const api = {
     body: { title: string; objective: string; agent: string; dependsOn?: string[]; requires?: string[]; fallbackAgents?: string[] },
   ) =>
     post<TaskDto>(`/projects/${projectId}/tasks`, body),
+
+  plans: (projectId: string) => get<PlanDto[]>(`/projects/${projectId}/plans`),
+  plan: (id: string) => get<PlanDto>(`/plans/${id}`),
+  createPlan: (projectId: string, body: { goal: string; agent: string }) => post<PlanDto>(`/projects/${projectId}/plans`, body),
+  approvePlan: (id: string, body: { tasks?: PlannedTask[]; comment?: string }) => post<PlanDto>(`/plans/${id}/approve`, body),
+  revisePlan: (id: string, feedback: string) => post<PlanDto>(`/plans/${id}/revise`, { feedback }),
+  rejectPlan: (id: string, comment?: string) => post<PlanDto>(`/plans/${id}/reject`, comment ? { comment } : {}),
 
   task: (id: string) => get<TaskDto>(`/tasks/${id}`),
   taskEvents: (id: string) => get<EventsPage>(`/tasks/${id}/events?limit=1000`),

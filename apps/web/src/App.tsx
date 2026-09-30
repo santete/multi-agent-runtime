@@ -4,6 +4,7 @@ import { AgentsPage } from "./components/AgentsPage.js";
 import { ApprovalsPage } from "./components/ApprovalsPage.js";
 import { Login } from "./components/Login.js";
 import { Overview } from "./components/Overview.js";
+import { PlanPage } from "./components/PlansPage.js";
 import { ProjectPage } from "./components/ProjectPage.js";
 import { TaskPage } from "./components/TaskPage.js";
 import { api, setToken } from "./lib/api.js";
@@ -68,6 +69,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
         {route.page === "overview" && <Overview />}
         {route.page === "project" && <ProjectPage id={route.id} tab={route.tab} />}
         {route.page === "task" && <TaskPage id={route.id} actor={actor} />}
+        {route.page === "plan" && <PlanPage id={route.id} actor={actor} />}
         {route.page === "approvals" && <ApprovalsPage actor={actor} />}
         {route.page === "agents" && <AgentsPage />}
       </main>

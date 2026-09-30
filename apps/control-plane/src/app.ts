@@ -95,6 +95,25 @@ const createTaskBody = z.object({
   dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
 
+const createPlanBody = z.object({
+  goal: z.string().min(1).max(20_000),
+  /** The planner agent, or "auto". */
+  agent: z.string().min(1),
+});
+
+const plannedTask = z.object({
+  ref: z.string().min(1).max(40),
+  title: z.string().min(1),
+  objective: z.string().min(1),
+  agent: z.string().min(1).nullable(),
+  requires: z.array(z.string().min(1)).max(20).default([]),
+  dependsOn: z.array(z.string().min(1)).max(50).default([]),
+});
+const approvePlanBody = z
+  .object({ tasks: z.array(plannedTask).min(1).max(20).optional(), comment: z.string().max(10_000).optional() })
+  .default({});
+const revisePlanBody = z.object({ feedback: z.string().min(1).max(10_000) });
+
 const reviewBody = z.object({ decision: z.enum(["approve", "reject"]), comment: z.string().max(10_000).optional() });
 const decisionBody = z.object({ comment: z.string().max(10_000).optional() }).default({});
 const approvalsQuery = z.object({ status: z.enum(["pending", "approved", "rejected"]).optional() });
@@ -231,6 +250,27 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ projectId: idParams.parse(req.params).id }, after, limit), after);
   });
+
+  // Assisted planning (spec §24): a planner agent proposes a task DAG, a human decides.
+  app.post("/projects/:id/plans", role("member"), async (req, reply) => {
+    const { id } = idParams.parse(req.params);
+    const body = createPlanBody.parse(req.body);
+    reply.status(201);
+    return store.createPlan(id, body, req.actor.name);
+  });
+  app.get("/projects/:id/plans", (req) => store.listPlans(idParams.parse(req.params).id));
+  app.get("/plans/:id", (req) => store.getPlan(idParams.parse(req.params).id));
+  app.post("/plans/:id/approve", role("member"), (req) =>
+    store.approvePlan(idParams.parse(req.params).id, approvePlanBody.parse(req.body ?? {}), req.actor.name),
+  );
+  app.post("/plans/:id/revise", role("member"), async (req, reply) => {
+    const plan = await store.revisePlan(idParams.parse(req.params).id, revisePlanBody.parse(req.body), req.actor.name);
+    reply.status(201);
+    return plan;
+  });
+  app.post("/plans/:id/reject", role("member"), (req) =>
+    store.rejectPlan(idParams.parse(req.params).id, decisionBody.parse(req.body ?? {}).comment, req.actor.name),
+  );
 
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", role("member"), (req) => store.cancelTask(idParams.parse(req.params).id, req.actor.name));

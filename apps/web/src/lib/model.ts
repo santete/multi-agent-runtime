@@ -114,6 +114,16 @@ export function describeEvent(e: EventDto): string {
       return `created "${p.title}" for ${p.agent === "auto" ? `the scheduler${p.requires?.length ? ` (needs ${p.requires.join(", ")})` : ""}` : p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
     case "TaskStateChanged":
       return `${stateLabel(p.from)} → ${stateLabel(p.to)}${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "PlanRequested":
+      return `plan requested from ${p.agent}${p.revises ? " (revision)" : ""}: “${p.goal}”${by}`;
+    case "PlanProposed":
+      return `planner proposed ${p.tasks} tasks`;
+    case "PlanApproved":
+      return `plan approved${p.edited ? " with edits" : ""}: created ${(p.tasks ?? []).join(", ")}${by}`;
+    case "PlanRejected":
+      return `plan rejected${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "PlanRevisionRequested":
+      return `plan sent back to the planner — “${p.comment}”${by}`;
     case "AgentSelected":
       return `routed to ${p.agent} — ${p.reason}`;
     case "TaskReassigned":
