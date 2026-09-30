@@ -2,7 +2,9 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **M4** — task DAGs across Claude Code and Antigravity agents: dependencies with shared handoffs, parallel branches, a policy hook on every tool call with a human approval gateway for risky actions, validation with automatic rework, review, and a merge queue that merges the GitHub pull requests in order. Next: M5 (UI, hardening).
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code and Antigravity agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Next: Phase 2 (see the development plan).
+
+![Task graph in the dashboard](docs/images/ui-graph.png)
 
 ## Task lifecycle
 
@@ -32,6 +34,7 @@ packages/
 apps/
   control-plane/           Fastify API, Postgres/PGlite, append-only event store
   runner/                  claims tasks, prepares git worktrees, runs adapters, streams events
+  web/                     dashboard (React + Vite), served by the control plane at /ui/
 ```
 
 ## Development
@@ -47,6 +50,9 @@ pnpm typecheck
 ## Run locally
 
 ```sh
+# 0. Build the dashboard once (served at http://127.0.0.1:7700/ui/)
+pnpm --filter @mar/web build
+
 # 1. Control plane on http://127.0.0.1:7700
 #    Without DATABASE_URL it uses embedded PGlite in ./.data/pglite.
 #    With Postgres: docker compose up -d && export DATABASE_URL=postgres://mar:mar@localhost:5432/mar
@@ -85,16 +91,20 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/tasks/:id/executions` | execution attempts |
 | GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |
 | GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
-| GET | `/runners` | agent registry: runners, their agents and capabilities, online status |
+| GET | `/runners` | agent registry: runners, their agents and capabilities, online status, active executions |
+| GET | `/me` | the calling user and role |
+| GET | `/stream?projectId=&after=` | live events (server-sent events) |
+| GET | `/events/recent?projectId=&limit=` | recent events, newest first |
+| POST | `/runners/:id/gc` | runner protocol: which task worktrees can be removed |
 | POST | `/runners/register`, `/runners/:id/claim` | runner protocol |
 | POST | `/executions/:id/start`, `/heartbeat`, `/events`, `/complete`, `/validation`, `/delivery` | runner protocol |
 | POST | `/executions/:id/tool-check` | policy check for the agent's PreToolUse hook (execution token) |
 
 ### Security
 
-- `MAR_API_TOKEN`: when set, every route except `/health` and `tool-check` requires `Authorization: Bearer <token>` (runner: `apiToken` in its config or the same env var). Without it the control plane refuses to listen on a non-loopback address.
-- Agents never receive the API token. Their policy hook uses a per-execution token that only authorizes `tool-check`.
-- Policy (`packages/core/src/policy.ts`) denies HIGH/CRITICAL actions (push, remote/credential changes, publishing, infra changes, secrets, network, writes outside the worktree or into `.git`); a denied call parks the task in `WAITING_FOR_HUMAN`. See [ADR-0004](docs/adr/0004-policy-enforcement.md).
+- **Users and roles** ([ADR-0009](docs/adr/0009-roles-recovery-ui.md)): `MAR_USERS_FILE` points at a JSON array of `{ "name", "role", "token" }` (tokens ≥ 16 chars); `MAR_API_TOKEN` adds an owner named `admin`. Roles: `viewer` (read) < `member` (create/cancel/retry/review tasks) < `senior` (decide HIGH-risk approvals) < `owner` (projects, validation), plus `runner` for runner machines (runner protocol only; set `apiToken` in the runner config). Actors are recorded in the event log. With no users configured the API runs in open mode and refuses to listen on a non-loopback address.
+- Agents never receive an API token. Their policy hook uses a per-execution token that only authorizes `tool-check`.
+- Policy (`packages/core/src/policy.ts`): HIGH-risk actions (network, secrets, destructive git, writes outside the worktree) need a human approval; CRITICAL ones (push, remote/credential changes, publishing, infrastructure, `.git`) are always denied. See [ADR-0004](docs/adr/0004-policy-enforcement.md) and [ADR-0008](docs/adr/0008-dag-approvals-merge-queue.md).
 
 ### Control plane settings
 

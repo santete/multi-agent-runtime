@@ -45,7 +45,7 @@ describe("ClaudeCodeAdapter.buildCommand", () => {
       model: "x",
       hooks: {
         PreToolUse: [
-          { matcher: "*", hooks: [{ type: "command", command: '"node" "/hook.mjs" "claude"', timeout: 30 }] },
+          { matcher: "*", hooks: [{ type: "command", command: '"node" "/hook.mjs" "claude"', timeout: 120 }] },
         ],
       },
     });

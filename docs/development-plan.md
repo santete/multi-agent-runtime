@@ -94,6 +94,20 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - [x] **Demo thật** (tiêu chí xong của M4) trên `santete/mar-sandbox`: DAG 4 task PAY-1 → (PAY-2 ∥ PAY-3) → PAY-4, 1 lần approval (`curl`), 4 PR (#3–#6) được merge tự động theo thứ tự, `main` có 32/32 test pass, khoảng $1.00
 - Chưa làm (M5 / Phase 2): UI, phân quyền người duyệt theo mức rủi ro, merge queue re-validate trên base mới, dọn worktree khi task `COMPLETED`
 
+### M5 UI & hardening — trạng thái ✅ ([ADR-0009](adr/0009-roles-recovery-ui.md))
+
+- [x] Vai trò viewer/member/senior/owner + runner, quyền theo từng route, approval HIGH cần senior, audit `actor`/`decidedBy`
+- [x] Phục hồi: gia hạn lease khi control plane khởi động; runner retry kết quả công việc; policy hook chịu được control plane gián đoạn ngắn
+- [x] Dọn worktree + branch local của task đã xong
+- [x] SSE `/stream`, `/events/recent`, runner đang làm gì
+- [x] Dashboard `apps/web` tại `/ui/`: overview, board, DAG, task (agent console realtime, review, retry, approval), approvals, agents
+- [x] **Demo thật** (tiêu chí xong của M5, §54 rút gọn) trên `mar-sandbox`: DAG RFD-1 → (RFD-2 ∥ RFD-3); kill control plane 40 giây lúc Claude đang chạy mà không mất execution; retry + review + approve đều qua UI; PR #7–#9 được merge, `main` đạt 44/44 test
+- Phát hiện khi chạy thật và đã sửa: hook fail-closed ngay khi control plane restart (giờ retry 90 giây)
+
+## Phase 1 (MVP) — hoàn tất
+
+Toàn bộ M1–M5 đã xong. Việc tiếp theo thuộc Phase 2 (xem bên dưới), ưu tiên đề xuất: Codex adapter, planner hỗ trợ (LLM đề xuất DAG), review agent chéo, OpenTelemetry, merge queue re-validate trên base mới, agy `unattendedShell` trong sandbox.
+
 | Milestone | Nội dung | Tiêu chí xong |
 |---|---|---|
 | **M1 Walking skeleton** | `apps/control-plane` (Fastify + Postgres + migrations), Project/Task CRUD, event store append-only, `apps/runner` đăng ký với control plane, `GenericCliAdapter`, worktree manager | Tạo task qua API, runner chạy lệnh trong worktree riêng, log và event hiện qua API |

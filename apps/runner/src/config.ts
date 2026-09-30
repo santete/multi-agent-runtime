@@ -29,6 +29,8 @@ export const runnerConfig = z.object({
   apiToken: z.string().min(1).optional(),
   pollIntervalMs: z.number().int().positive().default(2000),
   heartbeatIntervalMs: z.number().int().positive().default(10_000),
+  /** How often worktrees of finished (merged or cancelled) tasks are removed. */
+  gcIntervalMs: z.number().int().positive().default(300_000),
   maxConcurrent: z.number().int().positive().default(2),
   timeoutSeconds: z.number().int().positive().default(1800),
   /** Install the platform PreToolUse policy hook into agents that support it. */

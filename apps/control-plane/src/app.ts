@@ -1,14 +1,34 @@
-import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import fastifyStatic from "@fastify/static";
 import { InvalidTransitionError } from "@mar/core";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
-import { ConflictError, NotFoundError, type Store, UnauthorizedError } from "./store.js";
+import { type Actor, Authenticator, type Role, type UserConfig, hasRole } from "./auth.js";
+import { ConflictError, ForbiddenError, NotFoundError, type Store, UnauthorizedError } from "./store.js";
 
 export const EXECUTION_TOKEN_HEADER = "x-mar-execution-token";
 
+declare module "fastify" {
+  interface FastifyRequest {
+    actor: Actor;
+  }
+  interface FastifyContextConfig {
+    /** Minimum role for the route (default: viewer). */
+    role?: Role;
+    /** No API token (health; tool-check uses the execution token). */
+    public?: boolean;
+  }
+}
+
 export interface AppOptions extends FastifyServerOptions {
-  /** When set, every route except /health and tool-check requires `Authorization: Bearer <token>`. */
+  /** API users; none (and no apiToken) = open mode, every caller is the local owner. */
+  users?: UserConfig[] | undefined;
+  /** Shorthand for a single owner token. */
   apiToken?: string | undefined;
+  /** Built web UI (apps/web/dist), served under /ui/. */
+  webRoot?: string | undefined;
+  /** How often the event stream polls for new events. */
+  streamPollMs?: number | undefined;
 }
 
 const idParams = z.object({ id: z.uuid() });
@@ -109,28 +129,46 @@ const eventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(200),
 });
 
-/** Routes that do not use the API token (tool-check has its own execution token). */
-const PUBLIC_ROUTES = new Set(["/health", "/executions/:id/tool-check"]);
+const streamQuery = z.object({
+  projectId: z.uuid().optional(),
+  after: z.coerce.number().int().min(0).optional(),
+});
+
+const gcBody = z.object({ taskKeys: z.array(z.string().min(1)).max(1000) });
+
+const recentQuery = z.object({
+  projectId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+
+const role = (min: Role) => ({ config: { role: min } });
+const PUBLIC = { config: { public: true } };
 
 export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
-  const { apiToken, ...fastifyOpts } = opts;
+  const { users, apiToken, webRoot, streamPollMs = 1000, ...fastifyOpts } = opts;
   const app = Fastify(fastifyOpts);
+  const auth = new Authenticator([
+    ...(users ?? []),
+    ...(apiToken ? [{ name: "admin", role: "owner" as const, token: apiToken }] : []),
+  ]);
 
-  if (apiToken) {
-    const expected = Buffer.from(`Bearer ${apiToken}`);
-    app.addHook("onRequest", async (req, reply) => {
-      if (PUBLIC_ROUTES.has(req.routeOptions.url ?? "")) return;
-      const given = Buffer.from(req.headers.authorization ?? "");
-      if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-        return reply.status(401).send({ error: "unauthorized" });
-      }
-    });
-  }
+  app.decorateRequest("actor", null as unknown as Actor);
+  app.addHook("onRequest", async (req, reply) => {
+    const url = req.routeOptions.url;
+    // Static UI files and unmatched routes (404) need no token.
+    if (req.routeOptions.config?.public || !url || url.startsWith("/ui")) return;
+    const actor = auth.authenticate(req.headers.authorization);
+    if (!actor) return reply.status(401).send({ error: "unauthorized" });
+    const min = req.routeOptions.config?.role ?? "viewer";
+    if (!hasRole(actor, min)) return reply.status(403).send({ error: "forbidden", message: `requires role ${min}` });
+    req.actor = actor;
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: "validation", issues: err.issues });
     if (err instanceof NotFoundError) return reply.status(404).send({ error: "not_found", message: err.message });
     if (err instanceof UnauthorizedError) return reply.status(401).send({ error: "unauthorized" });
+    if (err instanceof ForbiddenError) return reply.status(403).send({ error: "forbidden", message: err.message });
     if (err instanceof ConflictError || err instanceof InvalidTransitionError) {
       return reply.status(409).send({ error: "conflict", message: err.message });
     }
@@ -139,25 +177,31 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     return reply.status(500).send({ error: "internal" });
   });
 
-  app.get("/health", async () => ({ ok: true }));
+  app.get("/health", PUBLIC, async () => ({ ok: true }));
+  app.get("/me", (req) => req.actor);
+
+  if (webRoot && existsSync(webRoot)) {
+    app.register(fastifyStatic, { root: webRoot, prefix: "/ui/" });
+    app.get("/", PUBLIC, (_req, reply) => reply.redirect("/ui/"));
+  }
 
   // ---- projects & tasks ---------------------------------------------------
 
-  app.post("/projects", async (req, reply) => {
+  app.post("/projects", role("owner"), async (req, reply) => {
     reply.status(201);
     return store.createProject(createProjectBody.parse(req.body));
   });
   app.get("/projects", () => store.listProjects());
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
-  app.put("/projects/:id/validation", (req) =>
+  app.put("/projects/:id/validation", role("owner"), (req) =>
     store.setValidation(idParams.parse(req.params).id, validationSteps.parse(req.body)),
   );
 
-  app.post("/projects/:id/tasks", async (req, reply) => {
+  app.post("/projects/:id/tasks", role("member"), async (req, reply) => {
     const { id } = idParams.parse(req.params);
     const body = createTaskBody.parse(req.body);
     reply.status(201);
-    return store.createTask(id, body);
+    return store.createTask(id, body, req.actor.name);
   });
   app.get("/projects/:id/tasks", (req) => store.listTasks(idParams.parse(req.params).id));
   app.get("/projects/:id/graph", (req) => store.graph(idParams.parse(req.params).id));
@@ -167,23 +211,12 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   });
 
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
-  app.post("/tasks/:id/cancel", (req) => store.cancelTask(idParams.parse(req.params).id));
-  app.post("/tasks/:id/retry", (req) => store.retryTask(idParams.parse(req.params).id));
-  app.post("/tasks/:id/review", (req) => store.reviewTask(idParams.parse(req.params).id, reviewBody.parse(req.body)));
+  app.post("/tasks/:id/cancel", role("member"), (req) => store.cancelTask(idParams.parse(req.params).id, req.actor.name));
+  app.post("/tasks/:id/retry", role("member"), (req) => store.retryTask(idParams.parse(req.params).id, req.actor.name));
+  app.post("/tasks/:id/review", role("member"), (req) =>
+    store.reviewTask(idParams.parse(req.params).id, reviewBody.parse(req.body), req.actor.name),
+  );
   app.get("/tasks/:id/approvals", (req) => store.listApprovals({ taskId: idParams.parse(req.params).id }));
-
-  // ---- approval gateway ---------------------------------------------------
-
-  app.get("/approvals", (req) => {
-    const { status } = approvalsQuery.parse(req.query);
-    return store.listApprovals(status ? { status } : {});
-  });
-  app.post("/approvals/:id/approve", (req) =>
-    store.decideApproval(idParams.parse(req.params).id, "approved", decisionBody.parse(req.body ?? {}).comment),
-  );
-  app.post("/approvals/:id/reject", (req) =>
-    store.decideApproval(idParams.parse(req.params).id, "rejected", decisionBody.parse(req.body ?? {}).comment),
-  );
   app.get("/tasks/:id/executions", (req) => store.listExecutions(idParams.parse(req.params).id));
   app.get("/tasks/:id/artifacts", (req) => store.listArtifacts(idParams.parse(req.params).id));
   app.get("/tasks/:id/events", async (req) => {
@@ -191,40 +224,94 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     return page(await store.listEvents({ taskId: idParams.parse(req.params).id }, after, limit), after);
   });
 
+  // ---- approval gateway ---------------------------------------------------
+
+  app.get("/approvals", (req) => {
+    const { status } = approvalsQuery.parse(req.query);
+    return store.listApprovals(status ? { status } : {});
+  });
+  // The store enforces the risk-specific role (HIGH needs senior).
+  app.post("/approvals/:id/approve", role("member"), (req) =>
+    store.decideApproval(idParams.parse(req.params).id, "approved", decisionBody.parse(req.body ?? {}).comment, req.actor),
+  );
+  app.post("/approvals/:id/reject", role("member"), (req) =>
+    store.decideApproval(idParams.parse(req.params).id, "rejected", decisionBody.parse(req.body ?? {}).comment, req.actor),
+  );
+
+  // ---- live events (server-sent events) -----------------------------------
+
+  app.get("/events/recent", (req) => {
+    const { projectId, limit } = recentQuery.parse(req.query);
+    return store.recentEvents(limit, projectId);
+  });
+
+  app.get("/stream", async (req, reply) => {
+    const { projectId, after } = streamQuery.parse(req.query);
+    let cursor = after ?? (await store.latestEventSeq());
+    let open = true;
+    req.raw.on("close", () => {
+      open = false;
+    });
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    reply.raw.write(`: connected at ${cursor}\n\n`);
+    let idle = 0;
+    while (open) {
+      const events = await store.listEvents(projectId ? { projectId } : {}, cursor, 500);
+      for (const e of events) reply.raw.write(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`);
+      if (events.length) {
+        cursor = events.at(-1)!.seq;
+        idle = 0;
+      } else if ((idle += streamPollMs) >= 15_000) {
+        reply.raw.write(": keep-alive\n\n");
+        idle = 0;
+      }
+      await new Promise((r) => setTimeout(r, streamPollMs));
+    }
+    reply.raw.end();
+  });
+
   // ---- agent registry & runner protocol -----------------------------------
 
   app.get("/runners", () => store.listRunners());
 
-  app.post("/runners/register", async (req, reply) => {
+  app.post("/runners/register", role("runner"), async (req, reply) => {
     const { name, agents } = registerRunnerBody.parse(req.body);
     reply.status(201);
     return { runnerId: await store.registerRunner(name, agents) };
   });
 
-  app.post("/runners/:id/claim", async (req, reply) => {
+  app.post("/runners/:id/claim", role("runner"), async (req, reply) => {
     const claim = await store.claim(idParams.parse(req.params).id);
     return claim ?? reply.status(204).send();
   });
 
+  /** Which of the runner's worktrees belong to finished tasks and can be removed. */
+  app.post("/runners/:id/gc", role("runner"), (req) => store.finishedTaskKeys(gcBody.parse(req.body).taskKeys));
+
   app.get("/executions/:id", (req) => store.getExecution(idParams.parse(req.params).id));
-  app.post("/executions/:id/start", (req) => {
+  app.post("/executions/:id/start", role("runner"), (req) => {
     const { workspace, branch } = startExecutionBody.parse(req.body);
     return store.startExecution(idParams.parse(req.params).id, workspace, branch);
   });
-  app.post("/executions/:id/heartbeat", (req) => store.heartbeat(idParams.parse(req.params).id));
-  app.post("/executions/:id/events", async (req, reply) => {
+  app.post("/executions/:id/heartbeat", role("runner"), (req) => store.heartbeat(idParams.parse(req.params).id));
+  app.post("/executions/:id/events", role("runner"), async (req, reply) => {
     const { events } = appendEventsBody.parse(req.body);
     await store.appendAgentEvents(idParams.parse(req.params).id, events as never);
     return reply.status(204).send();
   });
-  app.post("/executions/:id/complete", (req) => {
+  app.post("/executions/:id/complete", role("runner"), (req) => {
     const body = completeExecutionBody.parse(req.body);
     return store.completeExecution(idParams.parse(req.params).id, body as never);
   });
-  app.post("/executions/:id/validation", (req) =>
+  app.post("/executions/:id/validation", role("runner"), (req) =>
     store.recordValidation(idParams.parse(req.params).id, validationReportBody.parse(req.body)),
   );
-  app.post("/executions/:id/delivery", (req) =>
+  app.post("/executions/:id/delivery", role("runner"), (req) =>
     store.recordDelivery(idParams.parse(req.params).id, deliveryBody.parse(req.body)),
   );
   app.get("/executions/:id/events", async (req) => {
@@ -232,8 +319,8 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     return page(await store.listEvents({ executionId: idParams.parse(req.params).id }, after, limit), after);
   });
 
-  // Called by the agent's PreToolUse hook (execution token, not the API token).
-  app.post("/executions/:id/tool-check", (req) => {
+  // Called by the agent's PreToolUse hook (execution token, not an API token).
+  app.post("/executions/:id/tool-check", PUBLIC, (req) => {
     const token = req.headers[EXECUTION_TOKEN_HEADER];
     return store.checkToolCall(
       idParams.parse(req.params).id,

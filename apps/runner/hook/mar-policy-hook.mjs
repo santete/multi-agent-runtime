@@ -42,16 +42,36 @@ async function decide() {
   const call = d.parse(JSON.parse(await readStdin()));
   if (!call.tool) return { decision: "deny", reason: "policy hook: could not read the tool call" };
 
-  const res = await fetch(`${base.replace(/\/$/, "")}/executions/${id}/tool-check`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-mar-execution-token": token },
-    body: JSON.stringify({ tool: call.tool, input: call.input ?? {} }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) return { decision: "deny", reason: `policy service returned HTTP ${res.status}` };
-  const verdict = await res.json();
-  const reason = `[${verdict.risk}] ${verdict.reason}`;
-  return { decision: verdict.decision === "allow" ? "allow" : "deny", reason };
+  // Ride out a short control plane outage (e.g. a restart) before failing
+  // closed; the agents' hook timeout (120 s) is longer than this budget.
+  const budgetMs = Number(process.env.MAR_POLICY_HOOK_BUDGET_MS ?? 90_000);
+  const deadline = Date.now() + budgetMs;
+  let delay = 500;
+  let lastProblem = "";
+  for (;;) {
+    try {
+      const res = await fetch(`${base.replace(/\/$/, "")}/executions/${id}/tool-check`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-mar-execution-token": token },
+        body: JSON.stringify({ tool: call.tool, input: call.input ?? {} }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (res.ok) {
+        const verdict = await res.json();
+        return { decision: verdict.decision === "allow" ? "allow" : "deny", reason: `[${verdict.risk}] ${verdict.reason}` };
+      }
+      // 4xx is a real answer (e.g. a revoked execution token): do not retry.
+      if (res.status < 500) return { decision: "deny", reason: `policy service returned HTTP ${res.status}` };
+      lastProblem = `HTTP ${res.status}`;
+    } catch (err) {
+      lastProblem = err instanceof Error ? err.message : String(err);
+    }
+    if (Date.now() + delay > deadline) {
+      return { decision: "deny", reason: `policy hook error: policy service unavailable (${lastProblem})` };
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 5000);
+  }
 }
 
 let result;
