@@ -179,7 +179,7 @@ function TaskActions({ task, onDone }: { task: TaskDto; onDone: () => void }) {
         {(task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && (
           <button onClick={run(() => api.retry(task.id))}>Retry</button>
         )}
-        {!TERMINAL.has(task.state) && (
+        {!TERMINAL.has(task.state) && task.state !== "MERGING" && (
           <button className="danger-outline" onClick={run(() => api.cancel(task.id))}>
             Cancel task
           </button>

@@ -181,6 +181,14 @@ describe("CI checks", () => {
     expect(await types(task.id)).toContain("CiSkipped");
   });
 
+  it("does not let a task be cancelled while it is being merged", async () => {
+    const { task } = await approved();
+    status = { ...green(), checks: { state: "pending", runs: [] } };
+    await store.processMergeQueue();
+    expect(await state(task.id)).toBe("MERGING");
+    expect((await call("POST", `/tasks/${task.id}/cancel`)).status).toBe(409);
+  });
+
   it("ignores checks unless the project waits for them", async () => {
     await approved({});
     status = { ...green(), checks: { state: "failure", runs: [] } };

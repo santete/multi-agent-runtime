@@ -171,6 +171,8 @@ export function describeEvent(e: EventDto): string {
       return `CI passed (${(p.checks ?? []).join(", ")})`;
     case "CiFailed":
       return `CI failed: ${(p.checks ?? []).join(", ")}`;
+    case "AutoApprovalSkipped":
+      return `not auto-approved: ${p.reason} (${(p.files ?? []).join(", ")}); a person decides`;
     case "CiSkipped":
       return `merging without CI: ${p.reason}`;
     case "TaskMerged":

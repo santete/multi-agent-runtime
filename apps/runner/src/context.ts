@@ -103,6 +103,7 @@ function reworkBrief(rework: NonNullable<ClaimResponse["rework"]>, extras: Conte
       return [
         ...header,
         "The pull request's CI checks failed. Reproduce the failures locally, fix their cause, and make sure the validation still passes.",
+        "Fix the code, not the checks: do not change the CI configuration or weaken a check to make it pass. If a check itself looks wrong, say so in your handoff instead.",
         "",
         ...checks.flatMap((c) => [
           `## ${c.name}${c.url ? ` — ${c.url}` : ""}`,

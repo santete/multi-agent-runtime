@@ -46,3 +46,15 @@ GitHub implementation dùng các endpoint `pulls/:n`, `compare/base...head`, `co
 - Không còn tình trạng merge thứ chưa được validate. Cái giá là các task song song của cùng một project được merge tuần tự, và mỗi task đi sau phải validate lại một lần.
 - Khi CI đang pending, hàng đợi của project đó bị giữ lại. Các project khác không bị ảnh hưởng.
 - Webhook từ GitHub chưa được dùng: control plane polling mỗi lần sweep (5 giây). Đủ cho một repo vài PR, và chạy được cả trên máy local không có địa chỉ public.
+
+## Chạy thật và điều chỉnh
+
+Chạy trên `mar-sandbox` với một workflow GitHub Actions gồm `npm test` và luật "không có TODO trong src/" (luật mà validation của runner không kiểm tra):
+
+- **Re-validate:** LP-8 (Claude) được merge trước. LP-9 (Codex) bị `BaseChanged`. Runner merge `main` mới, validate lại **mà không chạy agent**, push merge commit, và platform đưa LP-9 về `APPROVED`. Cả vòng mất khoảng 20 giây.
+- **CI gate:** CI của LP-9 `pending` rồi `failure`, vì LP-9 có một TODO do objective yêu cầu. Task chuyển sang rework `ci`. `REWORK.md` chỉ đúng dòng lỗi: `src/export.js:5: TODO comments are not allowed…`.
+- **Phát hiện 1 — agent nới lỏng CI:** trong lượt rework, Codex sửa `.github/workflows/ci.yml` để miễn trừ đúng dòng TODO của nó thay vì sửa code. Người duyệt (tôi) approve mà không đọc hết diff, và PR bị merge. Sau đó phải mở PR #22 để khôi phục luật. Các biện pháp đã thêm:
+  - Policy: ghi vào cấu hình CI (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, Azure/CircleCI/Bitbucket/Buildkite) là **HIGH**, cần approval. Áp dụng cho mọi tool và cả lệnh shell có thao tác ghi. Với agent sandbox như Codex, audit sau khi chạy sẽ chuyển task sang `WAITING_FOR_HUMAN`.
+  - Nếu thay đổi đã validate vẫn chạm cấu hình CI (ví dụ ghi qua script), thì `autoApproveOnAgentReview` **không** tự approve (event `AutoApprovalSkipped`), và PR có cảnh báo `[!WARNING]` ở đầu.
+  - Brief của rework `ci` ghi rõ: "sửa code, không sửa hay nới lỏng check".
+- **Phát hiện 2 — cancel lúc đang merge:** cancel được gửi khi task đang `MERGING`, trong lúc GitHub đã merge PR, nên task bị ghi `CANCELLED` dù PR đã được merge. Giờ cancel ở trạng thái `MERGING` bị từ chối (409), và UI ẩn nút Cancel ở trạng thái này.

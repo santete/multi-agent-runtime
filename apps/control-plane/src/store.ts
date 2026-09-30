@@ -56,6 +56,7 @@ import {
   sameKnowledge,
   chooseAgent,
   isAgentUnavailable,
+  isCiConfigPath,
   evaluateToolCall,
   isTerminal,
   formatReview,
@@ -869,6 +870,8 @@ export class Store {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
       if (isTerminal(task.state)) throw new ConflictError(`task ${task.key} is already ${task.state}`);
+      // The provider may be merging the pull request right now; that cannot be undone.
+      if (task.state === "MERGING") throw new ConflictError(`task ${task.key} is being merged and can no longer be cancelled`);
       await q.query(
         "update executions set cancel_requested = true where task_id = $1 and status = any($2::text[])",
         [id, ACTIVE],
@@ -1398,11 +1401,32 @@ export class Store {
       if (review.verdict === "request_changes") {
         await changeTaskState(q, target, "review_rejected", { comment: review.summary, actor: reviewer });
       } else if (project.autoApproveOnAgentReview) {
-        await changeTaskState(q, target, "review_approved", { comment: review.summary, actor: reviewer });
+        // Changing what "passing" means is for a person to approve, not an agent.
+        const ciFiles = await this.changedCiConfig(q, target.id);
+        if (ciFiles.length) {
+          await appendEvent(q, {
+            type: "AutoApprovalSkipped",
+            projectId: target.projectId,
+            taskId: target.id,
+            payload: { reason: "the change modifies CI configuration", files: ciFiles },
+          });
+        } else {
+          await changeTaskState(q, target, "review_approved", { comment: review.summary, actor: reviewer });
+        }
       }
     }
     this.pendingReviewComments.push({ project, target, body: comment });
     return execution;
+  }
+
+  /** CI configuration files among the task's latest validated changes. */
+  private async changedCiConfig(q: Queryable, taskId: string): Promise<string[]> {
+    const [row] = await q.query<{ files: string[] | null }>(
+      `select content->'changedFiles' as files from artifacts
+       where task_id = $1 and type = 'validation_result' order by created_at desc limit 1`,
+      [taskId],
+    );
+    return (row?.files ?? []).filter(isCiConfigPath);
   }
 
   /** Creates a review task for a delivered task, with a reviewer other than its author. */
