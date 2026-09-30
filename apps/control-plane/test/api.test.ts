@@ -143,11 +143,22 @@ describe("runner protocol", () => {
       exitCode: 0,
       terminal: { kind: "completed", sessionId: "sess-1", success: true, deniedActions: [], result: "hi" },
     });
-    expect(done.body).toMatchObject({ status: "succeeded", exitCode: 0, sessionId: "sess-1" });
+    // Still leased: the runner validates next.
+    expect(done.body).toMatchObject({ status: "validating", exitCode: 0, sessionId: "sess-1" });
+    expect(done.body.leaseExpiresAt).not.toBeNull();
     expect((await call<TaskDto>("GET", `/tasks/${task.id}`)).body.state).toBe("VALIDATING");
 
     const log = (await call<EventsPage>("GET", `/executions/${execution.id}/events`)).body.events;
-    expect(log.map((e) => e.type)).toEqual(["ExecutionAssigned", "ExecutionStarted", "AgentEvent", "AgentEvent", "ExecutionFinished"]);
+    expect(log.map((e) => e.type)).toEqual([
+      "ExecutionAssigned",
+      "ExecutionStarted",
+      "AgentEvent",
+      "AgentEvent",
+      "AgentFinished",
+      "ArtifactCreated",
+    ]);
+    const [handoff] = (await call<Array<{ type: string; content: object }>>("GET", `/tasks/${task.id}/artifacts`)).body;
+    expect(handoff).toMatchObject({ type: "handoff", content: { summary: "hi", changes: [] } });
     expect(log[3]!.payload).toEqual({ kind: "message", text: "hi" });
   });
 

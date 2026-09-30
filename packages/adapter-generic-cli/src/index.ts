@@ -9,7 +9,10 @@ import {
 
 export interface GenericCliAdapterOptions {
   command: string;
-  /** Arguments; the literal `{prompt}` is replaced by the task prompt. */
+  /**
+   * Arguments. `{objective}` is replaced by the task objective alone (for plain
+   * tools such as a shell), `{prompt}` by the full LLM prompt with context.
+   */
   args?: string[];
   /** Deliver the prompt on stdin instead of (or in addition to) `{prompt}`. */
   promptViaStdin?: boolean;
@@ -17,6 +20,7 @@ export interface GenericCliAdapterOptions {
 }
 
 const PROMPT_PLACEHOLDER = "{prompt}";
+const OBJECTIVE_PLACEHOLDER = "{objective}";
 
 /**
  * Wraps any command-line tool: every stdout line becomes a message and the
@@ -38,7 +42,7 @@ export class GenericCliAdapter implements AgentAdapter {
 
   buildCommand(request: AgentRunRequest): CommandSpec {
     const args = (this.options.args ?? [PROMPT_PLACEHOLDER]).map((a) =>
-      a.split(PROMPT_PLACEHOLDER).join(request.prompt),
+      a.split(PROMPT_PLACEHOLDER).join(request.prompt).split(OBJECTIVE_PLACEHOLDER).join(request.objective),
     );
     const env = { ...request.env, ...this.options.env };
     return {

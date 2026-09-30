@@ -68,6 +68,19 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - Phát hiện khi chạy thật và đã sửa: hook agy trên Windows không chạy được vì `cmd /c` làm hỏng dấu nháy; agy báo `SUCCESS` dù mọi tool fail → control plane dùng audit của chính nó làm nguồn sự thật
 - Chưa làm: agy `unattendedShell` (sandbox), cách ly config của agy theo runner, dọn worktree khi task kết thúc
 
+### M3 Context · Validation · Git — trạng thái ✅ ([ADR-0007](adr/0007-validation-rework-delivery.md))
+
+- [x] Context cho agent: `.orchestrator/context/TASK.md` và `REWORK.md` (git-exclude); prompt ngắn trỏ tới context; placeholder `{objective}` cho agent không phải LLM
+- [x] Handoff artifact qua `--json-schema` (Claude và agy đều trả `structured_output`), lưu thành artifact `handoff`; `GET /tasks/:id/artifacts`
+- [x] Validation theo project (`validation` khi tạo project, `PUT /projects/:id/validation`), runner chạy tuần tự trong worktree, có timeout, không lộ biến `MAR_*`; artifact `validation_result`
+- [x] Rework tự động: validation fail → `REWORK` → requeue (tối đa `maxAttempts`) → lần sau nhận `rework` và resume session
+- [x] Delivery: runner commit và push `task/<KEY>`; control plane mở PR qua `GitHubProvider` (`GITHUB_TOKEN`), nội dung PR lấy từ handoff và validation; ghi event cho các trường hợp không có thay đổi, provider lỗi, push lỗi
+- [x] Execution có pha `validating` và `delivering` được lease; mất runner khi validating thì retry, khi delivering thì ghi `DeliveryLost` và giữ `REVIEW`
+- [x] E2E (generic agent): validation fail → rework → pass → commit, push vào git thật → PR (provider giả)
+- [x] **Chạy thật** trên `santete/mar-sandbox` (private): Claude Code viết `refund()` và test, `npm test` pass, runner push, **PR #1 và #2 được mở tự động** (tổng khoảng $0.5)
+- Phát hiện khi chạy thật và đã sửa: danh sách file đổi mất ký tự đầu (do `trim()` output porcelain); cancel đến trước khi agent kịp spawn thì bị bỏ qua (lỗi có từ M2)
+- Chưa làm (M4): merge PR và merge queue, dependency giữa các task (task sau phải nhìn thấy thay đổi của task trước)
+
 | Milestone | Nội dung | Tiêu chí xong |
 |---|---|---|
 | **M1 Walking skeleton** | `apps/control-plane` (Fastify + Postgres + migrations), Project/Task CRUD, event store append-only, `apps/runner` đăng ký với control plane, `GenericCliAdapter`, worktree manager | Tạo task qua API, runner chạy lệnh trong worktree riêng, log và event hiện qua API |

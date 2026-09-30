@@ -2,7 +2,16 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **M2** — real Claude Code and Antigravity runs in per-task git worktrees, every tool call checked by a platform policy hook and audited, cancel via heartbeat, lost-runner detection with automatic retry and session resume. Next: M3 (context, validation, commit/push/PR).
+> Status: **M3** — real Claude Code and Antigravity runs in per-task git worktrees with task context, a policy hook on every tool call, structured handoffs, project validation with automatic rework, and delivery as a GitHub pull request. Next: M4 (task DAG, approval gateway, merge queue).
+
+## Task lifecycle
+
+```text
+READY → ASSIGNED → RUNNING ──(agent done)──→ VALIDATING ──pass──→ REVIEW  (branch pushed, PR opened)
+                     │                           └──fail──→ REWORK → READY (retry with failure context + resumed session)
+                     ├─ policy denial ─→ WAITING_FOR_HUMAN
+                     └─ crash / lost runner ─→ RETRYING → READY … BLOCKED after maxAttempts
+```
 
 ## Layout
 
@@ -59,16 +68,18 @@ curl -s localhost:7700/tasks/<taskId>/events
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`) |
+| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
+| PUT | `/projects/:id/validation` | replace the project's validation steps |
 | POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`) → `READY` |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
 | POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
 | GET | `/tasks/:id/executions` | execution attempts |
+| GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |
 | GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
 | GET | `/runners` | agent registry: runners, their agents and capabilities, online status |
 | POST | `/runners/register`, `/runners/:id/claim` | runner protocol |
-| POST | `/executions/:id/start`, `/heartbeat`, `/events`, `/complete` | runner protocol |
+| POST | `/executions/:id/start`, `/heartbeat`, `/events`, `/complete`, `/validation`, `/delivery` | runner protocol |
 | POST | `/executions/:id/tool-check` | policy check for the agent's PreToolUse hook (execution token) |
 
 ### Security
@@ -84,4 +95,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `DATABASE_URL` | – | Postgres; unset = embedded PGlite in `PGLITE_DIR` (`./.data/pglite`) |
 | `HOST` / `PORT` | `127.0.0.1` / `7700` | |
 | `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
-| `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING → READY/BLOCKED |
+| `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING/REWORK → READY/BLOCKED |
+| `GITHUB_TOKEN` | – | opens pull requests for delivered tasks (e.g. `GITHUB_TOKEN=$(gh auth token)`); without it the branch is pushed and the PR is skipped |
+
+The runner pushes task branches with its machine's own git credentials; agents never can (the policy denies `git push`).

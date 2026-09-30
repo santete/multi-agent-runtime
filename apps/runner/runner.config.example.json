@@ -8,7 +8,7 @@
   "timeoutSeconds": 1800,
   "policyHook": true,
   "agents": {
-    "shell": { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{prompt}"] },
+    "shell": { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{objective}"] },
     "claude-code": { "adapter": "claude-code" },
     "antigravity": { "adapter": "antigravity", "executable": "C:/Users/<you>/AppData/Local/agy/bin/agy.exe" }
   }

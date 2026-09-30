@@ -15,7 +15,7 @@ describe("AntigravityAdapter.buildCommand", () => {
   it("builds a headless command with a bounded timeout", () => {
     const cmd = new AntigravityAdapter({ executable: "agy.exe" }).buildCommand({
       workspace: "/ws/TASK-2",
-      prompt: "Write tests",
+      prompt: "Write tests", objective: "Write tests",
       permissionProfile: "edit",
       resumeSessionId: "conv-1",
       model: "gemini-3.8-flash-high",
@@ -32,7 +32,7 @@ describe("AntigravityAdapter.buildCommand", () => {
   it("installs the policy hook as a merged workspace hooks.json and passes env", () => {
     const request = {
       workspace: "/ws",
-      prompt: "x",
+      prompt: "x", objective: "x",
       permissionProfile: "edit" as const,
       env: { MAR_EXECUTION_ID: "e1" },
       policyHook: { command: "C:\\Program Files\\node.exe", args: ["C:\\hook.mjs"] },

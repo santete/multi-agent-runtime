@@ -3,9 +3,13 @@ import type {
   AgentEvent,
   ClaimResponse,
   CompleteExecutionRequest,
+  DeliveryRequest,
+  DeliveryResponse,
   ExecutionDto,
   HeartbeatResponse,
   RegisterRunnerResponse,
+  ValidationReport,
+  ValidationResponse,
 } from "@mar/core";
 
 export class ControlPlaneError extends Error {
@@ -48,6 +52,14 @@ export class ControlPlaneClient {
 
   async complete(executionId: string, req: CompleteExecutionRequest): Promise<ExecutionDto> {
     return (await this.post<ExecutionDto>(`/executions/${executionId}/complete`, req))!;
+  }
+
+  async validation(executionId: string, report: ValidationReport): Promise<ValidationResponse> {
+    return (await this.post<ValidationResponse>(`/executions/${executionId}/validation`, report))!;
+  }
+
+  async delivery(executionId: string, req: DeliveryRequest): Promise<DeliveryResponse> {
+    return (await this.post<DeliveryResponse>(`/executions/${executionId}/delivery`, req))!;
   }
 
   /** Returns undefined for 204 No Content. */

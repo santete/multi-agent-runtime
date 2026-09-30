@@ -10,7 +10,7 @@ function node(script: string, opts: { stdin?: boolean } = {}) {
     ...(opts.stdin && { promptViaStdin: true }),
   });
   return {
-    spec: adapter.buildCommand({ workspace: process.cwd(), prompt: "PROMPT", permissionProfile: "edit" }),
+    spec: adapter.buildCommand({ workspace: process.cwd(), prompt: "PROMPT", objective: "PROMPT", permissionProfile: "edit" }),
     parser: adapter.createParser(),
   };
 }
@@ -53,10 +53,20 @@ describe("runAgentProcess", () => {
     expect(outcome.terminal).toEqual({ kind: "failed", reason: "cancelled" });
   });
 
+  it("does not start the agent when cancelled before it was spawned", async () => {
+    const { spec, parser } = node("require('fs').writeFileSync('should-not-exist.txt', 'x')");
+    const ac = new AbortController();
+    ac.abort();
+    const events: string[] = [];
+    const outcome = await runAgentProcess(spec, parser, { signal: ac.signal, onEvent: (e) => events.push(e.kind) });
+    expect(outcome).toEqual({ exitCode: null, terminal: { kind: "failed", reason: "cancelled" } });
+    expect(events).toEqual(["failed"]);
+  });
+
   it("reports a missing executable instead of throwing", async () => {
     const adapter = new GenericCliAdapter({ command: "definitely-not-a-real-binary-xyz" });
     const outcome = await runAgentProcess(
-      adapter.buildCommand({ workspace: process.cwd(), prompt: "x", permissionProfile: "edit" }),
+      adapter.buildCommand({ workspace: process.cwd(), prompt: "x", objective: "x", permissionProfile: "edit" }),
       adapter.createParser(),
       { onEvent: () => undefined },
     );

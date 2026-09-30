@@ -70,11 +70,13 @@ const TRANSITIONS: TransitionTable = {
   },
   WAITING_FOR_HUMAN: { approval_resolved: "RUNNING" },
   WAITING_FOR_AGENT: { agent_available: "RUNNING", unassigned: "READY" },
-  VALIDATING: { validation_passed: "REVIEW", validation_failed: "REWORK" },
+  // agent_failed: the runner was lost while validating.
+  VALIDATING: { validation_passed: "REVIEW", validation_failed: "REWORK", agent_failed: "RETRYING" },
   REVIEW: { review_approved: "APPROVED", review_rejected: "REWORK" },
   APPROVED: { merge_started: "MERGING" },
   MERGING: { merge_succeeded: "COMPLETED", merge_conflict: "REWORK" },
-  REWORK: { rework_started: "RUNNING", limit_exceeded: "BLOCKED" },
+  // Requeued ("unassigned") so any runner offering the agent can pick it up again.
+  REWORK: { rework_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
   RETRYING: { retry_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
   BLOCKED: { unblocked: "READY" },
 };

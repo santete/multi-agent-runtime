@@ -69,7 +69,7 @@ describe("M1 walking skeleton (control plane + runner + generic CLI agent)", () 
             args: [
               "-e",
               "const f = process.argv[1]; require('fs').writeFileSync(f, 'idempotency matters\\n'); console.log('wrote ' + f); console.log('done');",
-              "{prompt}",
+              "{objective}",
             ],
           },
         },
@@ -80,8 +80,8 @@ describe("M1 walking skeleton (control plane + runner + generic CLI agent)", () 
     expect(await runner.runOnce()).toBe(true);
     expect(await runner.runOnce()).toBe(false);
 
-    // Task reached the validation gate (validation itself arrives in M3).
-    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("VALIDATING");
+    // No validation configured and no git provider: validated, pushed, waiting for review.
+    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("REVIEW");
 
     // The change lives only in the task worktree, on the task branch.
     const [execution] = await api<ExecutionDto[]>(`/tasks/${task.id}/executions`);
@@ -99,7 +99,7 @@ describe("M1 walking skeleton (control plane + runner + generic CLI agent)", () 
     const timeline = (await api<EventsPage>(`/tasks/${task.id}/events`)).events
       .filter((e) => e.type === "TaskStateChanged")
       .map((e) => e.payload.to);
-    expect(timeline).toEqual(["READY", "ASSIGNED", "RUNNING", "VALIDATING"]);
+    expect(timeline).toEqual(["READY", "ASSIGNED", "RUNNING", "VALIDATING", "REVIEW"]);
   });
 
   it("runs tasks concurrently through the poll loop", async () => {
@@ -132,12 +132,12 @@ describe("M1 walking skeleton (control plane + runner + generic CLI agent)", () 
     const waitForAll = async () => {
       for (let i = 0; i < 200; i++) {
         const states = await Promise.all(tasks.map((t) => api<TaskDto>(`/tasks/${t.id}`).then((x) => x.state)));
-        if (states.every((s) => s === "VALIDATING")) return states;
+        if (states.every((s) => s === "REVIEW")) return states;
         await new Promise((r) => setTimeout(r, 50));
       }
       throw new Error("tasks did not finish");
     };
-    expect(await waitForAll()).toEqual(["VALIDATING", "VALIDATING", "VALIDATING"]);
+    expect(await waitForAll()).toEqual(["REVIEW", "REVIEW", "REVIEW"]);
     runner.stop();
     await loop;
   });

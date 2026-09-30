@@ -1,5 +1,6 @@
 import { buildApp } from "./app.js";
 import { createPgDb, createPgliteDb, migrate } from "./db.js";
+import { GitHubProvider } from "./git-provider.js";
 import { Store } from "./store.js";
 
 // DATABASE_URL=postgres://... for Postgres; unset = embedded PGlite under ./.data/pglite.
@@ -16,7 +17,12 @@ if (!apiToken && !["127.0.0.1", "localhost", "::1"].includes(host)) {
 const db = databaseUrl ? createPgDb(databaseUrl) : await createPgliteDb(process.env.PGLITE_DIR ?? "./.data/pglite");
 const applied = await migrate(db);
 
-const store = new Store(db, { leaseSeconds: Number(process.env.MAR_LEASE_SECONDS ?? 60) });
+// GitHub token for opening pull requests, e.g. GITHUB_TOKEN=$(gh auth token).
+const githubToken = process.env.GITHUB_TOKEN || undefined;
+const store = new Store(db, {
+  leaseSeconds: Number(process.env.MAR_LEASE_SECONDS ?? 60),
+  gitProvider: githubToken ? new GitHubProvider(githubToken, process.env.GITHUB_API_URL) : undefined,
+});
 const app = buildApp(store, { apiToken, logger: { level: process.env.LOG_LEVEL ?? "info" } });
 if (applied.length) app.log.info({ applied }, "migrations applied");
 

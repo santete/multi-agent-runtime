@@ -2,26 +2,39 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import {
   type AgentDescriptor,
   type AgentEvent,
+  type ArtifactDto,
+  type ArtifactType,
   type ClaimResponse,
   type CompleteExecutionRequest,
   type CreateProjectRequest,
   type CreateTaskRequest,
+  type DeliveryRequest,
+  type DeliveryResponse,
   type EventDto,
   type ExecutionDto,
   type ExecutionStatus,
+  type Handoff,
   type HeartbeatResponse,
   type PolicyVerdict,
   type ProjectDto,
+  type ReworkContext,
   type RunnerDto,
   type TaskDto,
   type TaskState,
   type TaskTransitionTrigger,
   type ToolCheckRequest,
+  type ValidationReport,
+  type ValidationResponse,
+  type ValidationStep,
+  ACTIVE_EXECUTION_STATUSES,
   evaluateToolCall,
   isTerminal,
+  toHandoff,
   transition,
 } from "@mar/core";
 import type { Db, Queryable } from "./db.js";
+import type { GitProvider } from "./git-provider.js";
+import { pullRequestBody } from "./pull-request.js";
 
 export class NotFoundError extends Error {
   constructor(what: string, id: string) {
@@ -49,11 +62,13 @@ export interface StoreOptions {
   leaseSeconds?: number;
   /** A runner counts as online if seen within this window. */
   runnerOnlineSeconds?: number;
+  /** Opens pull requests for delivered tasks; without one, delivery stops at the pushed branch. */
+  gitProvider?: GitProvider | undefined;
 }
 
 type Row = Record<string, any>;
 
-const ACTIVE: ExecutionStatus[] = ["assigned", "running"];
+const ACTIVE = [...ACTIVE_EXECUTION_STATUSES];
 
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 const isoOrNull = (v: unknown): string | null => (v == null ? null : iso(v));
@@ -65,6 +80,17 @@ const toProject = (r: Row): ProjectDto => ({
   name: r.name,
   repoUrl: r.repo_url,
   defaultBranch: r.default_branch,
+  validation: r.validation ?? [],
+  createdAt: iso(r.created_at),
+});
+
+const toArtifact = (r: Row): ArtifactDto => ({
+  id: r.id,
+  projectId: r.project_id,
+  taskId: r.task_id,
+  executionId: r.execution_id,
+  type: r.type,
+  content: r.content,
   createdAt: iso(r.created_at),
 });
 
@@ -77,6 +103,7 @@ const toTask = (r: Row): TaskDto => ({
   agent: r.agent,
   state: r.state,
   maxAttempts: r.max_attempts,
+  pullRequestUrl: r.pull_request_url ?? null,
   version: r.version,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
@@ -165,6 +192,7 @@ export interface SweepResult {
 export class Store {
   private readonly leaseSeconds: number;
   private readonly runnerOnlineSeconds: number;
+  private readonly gitProvider: GitProvider | undefined;
 
   constructor(
     private readonly db: Db,
@@ -172,6 +200,7 @@ export class Store {
   ) {
     this.leaseSeconds = options.leaseSeconds ?? 60;
     this.runnerOnlineSeconds = options.runnerOnlineSeconds ?? 30;
+    this.gitProvider = options.gitProvider;
   }
 
   // ---- projects -----------------------------------------------------------
@@ -181,8 +210,9 @@ export class Store {
       const existing = await q.query("select 1 from projects where key = $1", [req.key]);
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
-        "insert into projects (id, key, name, repo_url, default_branch) values ($1, $2, $3, $4, $5) returning *",
-        [randomUUID(), req.key, req.name, req.repoUrl, req.defaultBranch ?? "main"],
+        `insert into projects (id, key, name, repo_url, default_branch, validation)
+         values ($1, $2, $3, $4, $5, $6) returning *`,
+        [randomUUID(), req.key, req.name, req.repoUrl, req.defaultBranch ?? "main", JSON.stringify(req.validation ?? [])],
       );
       const project = toProject(row!);
       await appendEvent(q, { type: "ProjectCreated", projectId: project.id, payload: { key: project.key } });
@@ -196,6 +226,23 @@ export class Store {
 
   getProject(id: string, q: Queryable = this.db): Promise<ProjectDto> {
     return one(q.query("select * from projects where id = $1", [id]), toProject, "project", id);
+  }
+
+  async setValidation(id: string, steps: ValidationStep[]): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set validation = $2 where id = $1 returning *", [id, JSON.stringify(steps)]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, {
+        type: "ProjectValidationChanged",
+        projectId: id,
+        payload: { steps: steps.map((s) => s.name) },
+      });
+      return project;
+    });
   }
 
   // ---- tasks --------------------------------------------------------------
@@ -314,10 +361,11 @@ export class Store {
       if (!taskRow) return null;
       const task = await changeTaskState(q, toTask(taskRow), "assigned", { runnerId });
 
-      const [previous] = await q.query<{ attempt: number; session_id: string | null; runner_id: string }>(
-        "select attempt, session_id, runner_id from executions where task_id = $1 order by attempt desc limit 1",
+      const [previous] = await q.query<{ id: string; attempt: number }>(
+        "select id, attempt from executions where task_id = $1 order by attempt desc limit 1",
         [task.id],
       );
+      const rework = previous ? await this.reworkContext(q, previous.id, previous.attempt) : undefined;
       const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null order by attempt desc limit 1`,
@@ -336,7 +384,7 @@ export class Store {
         projectId: task.projectId,
         taskId: task.id,
         executionId: execution.id,
-        payload: { runnerId, attempt: execution.attempt, resumable: Boolean(lastSession) },
+        payload: { runnerId, attempt: execution.attempt, resumable: Boolean(lastSession), rework: Boolean(rework) },
       });
       return {
         execution,
@@ -344,8 +392,21 @@ export class Store {
         project: await this.getProject(task.projectId, q),
         executionToken,
         ...(lastSession && { resume: { sessionId: lastSession.session_id, runnerId: lastSession.runner_id } }),
+        ...(rework && { rework }),
       };
     });
+  }
+
+  /** Rework context when the given execution failed validation (spec §29). */
+  private async reworkContext(q: Queryable, executionId: string, attempt: number): Promise<ReworkContext | undefined> {
+    const [row] = await q.query<{ content: ValidationReport }>(
+      `select content from artifacts where execution_id = $1 and type = 'validation_result'
+       order by created_at desc limit 1`,
+      [executionId],
+    );
+    if (!row || row.content.passed) return undefined;
+    const failed = row.content.steps.filter((s) => !s.passed).map((s) => s.name);
+    return { attempt, reason: `validation failed: ${failed.join(", ")}`, validation: row.content };
   }
 
   // ---- executions ---------------------------------------------------------
@@ -417,9 +478,10 @@ export class Store {
     });
   }
 
+  /** The agent finished. On success the execution stays leased while the runner validates. */
   async completeExecution(id: string, req: CompleteExecutionRequest): Promise<ExecutionDto> {
     return this.db.tx(async (q) => {
-      const { task, row: current } = await this.lockExecution(q, id, ACTIVE);
+      const { task, row: current } = await this.lockExecution(q, id, ["assigned", "running"]);
       const t = req.terminal;
       // Our own audit log is authoritative: an agent that reports success after
       // a policy denial still needs a human to look at it.
@@ -434,30 +496,185 @@ export class Store {
         : t.kind === "completed" && denied
           ? "needs_approval"
           : t.kind === "completed" && t.success
-            ? "succeeded"
+            ? "validating"
             : "failed";
+      const stillActive = status === "validating";
 
       const [row] = await q.query(
-        `update executions set status = $2, exit_code = $3, result = $4, finished_at = now(), lease_expires_at = null,
+        `update executions set status = $2, exit_code = $3, result = $4,
+           finished_at = case when $6 then null else now() end,
+           lease_expires_at = case when $6 then now() + make_interval(secs => $7) else null end,
            session_id = coalesce($5, session_id) where id = $1 returning *`,
-        [id, status, req.exitCode, JSON.stringify(t), t.sessionId || null],
+        [id, status, req.exitCode, JSON.stringify(t), t.sessionId || null, stillActive, this.leaseSeconds],
       );
       await appendEvent(q, {
-        type: "ExecutionFinished",
+        type: "AgentFinished",
         projectId: task.projectId,
         taskId: task.id,
         executionId: id,
         payload: { status, exitCode: req.exitCode },
       });
+      if (t.kind === "completed" && status !== "cancelled") {
+        await this.addArtifact(q, task, id, "handoff", toHandoff(t.result) as unknown as Record<string, unknown>);
+      }
 
       // A task cancelled while running keeps its terminal state.
       if (!isTerminal(task.state) && status !== "cancelled") {
         const trigger: TaskTransitionTrigger =
-          status === "succeeded" ? "agent_completed" : status === "needs_approval" ? "approval_requested" : "agent_failed";
+          status === "validating" ? "agent_completed" : status === "needs_approval" ? "approval_requested" : "agent_failed";
         await changeTaskState(q, task, trigger, { executionId: id });
       }
       return toExecution(row!);
     });
+  }
+
+  private async addArtifact(
+    q: Queryable,
+    task: TaskDto,
+    executionId: string,
+    type: ArtifactType,
+    content: Record<string, unknown>,
+  ): Promise<void> {
+    const artifactId = randomUUID();
+    await q.query(
+      "insert into artifacts (id, project_id, task_id, execution_id, type, content) values ($1, $2, $3, $4, $5, $6)",
+      [artifactId, task.projectId, task.id, executionId, type, JSON.stringify(content)],
+    );
+    await appendEvent(q, {
+      type: "ArtifactCreated",
+      projectId: task.projectId,
+      taskId: task.id,
+      executionId,
+      payload: { artifactId, type },
+    });
+  }
+
+  listArtifacts(taskId: string): Promise<ArtifactDto[]> {
+    return this.db
+      .query("select * from artifacts where task_id = $1 order by created_at", [taskId])
+      .then((rows) => rows.map(toArtifact));
+  }
+
+  /**
+   * Validation results from the runner (spec §28). Passing moves the task to
+   * REVIEW and asks the runner to deliver; failing sends it to REWORK with the
+   * results as context for the next attempt.
+   */
+  async recordValidation(id: string, report: ValidationReport): Promise<ValidationResponse> {
+    return this.db.tx(async (q) => {
+      const { task, row: current } = await this.lockExecution(q, id, ["validating"]);
+      await this.addArtifact(q, task, id, "validation_result", report as unknown as Record<string, unknown>);
+      await appendEvent(q, {
+        type: report.passed ? "ValidationPassed" : "ValidationFailed",
+        projectId: task.projectId,
+        taskId: task.id,
+        executionId: id,
+        payload: {
+          steps: report.steps.map((s) => ({ name: s.name, passed: s.passed, exitCode: s.exitCode })),
+          changedFiles: report.changedFiles.length,
+        },
+      });
+
+      if (current.cancel_requested || isTerminal(task.state)) {
+        await q.query(
+          "update executions set status = 'cancelled', finished_at = now(), lease_expires_at = null where id = $1",
+          [id],
+        );
+        return { deliver: false };
+      }
+      if (!report.passed) {
+        await q.query(
+          "update executions set status = 'failed', finished_at = now(), lease_expires_at = null where id = $1",
+          [id],
+        );
+        await changeTaskState(q, task, "validation_failed", { executionId: id });
+        return { deliver: false };
+      }
+      await q.query(
+        "update executions set status = 'delivering', lease_expires_at = now() + make_interval(secs => $2) where id = $1",
+        [id, this.leaseSeconds],
+      );
+      await changeTaskState(q, task, "validation_passed", { executionId: id });
+      return { deliver: true };
+    });
+  }
+
+  /**
+   * The runner committed and pushed the task branch; open (or find) the pull
+   * request. The provider call happens outside the transaction.
+   */
+  async recordDelivery(id: string, req: DeliveryRequest): Promise<DeliveryResponse> {
+    const { task, project } = await this.db.tx(async (q) => {
+      const { task } = await this.lockExecution(q, id, ["delivering"]);
+      await q.query(
+        "update executions set status = $2, finished_at = now(), lease_expires_at = null where id = $1",
+        [id, req.error ? "failed" : "succeeded"],
+      );
+      await appendEvent(q, {
+        type: req.error ? "DeliveryFailed" : req.commitSha ? "BranchPushed" : "NoChanges",
+        projectId: task.projectId,
+        taskId: task.id,
+        executionId: id,
+        payload: { branch: req.branch, commitSha: req.commitSha, changedFiles: req.changedFiles, error: req.error },
+      });
+      return { task, project: await this.getProject(task.projectId, q) };
+    });
+    if (req.error) return { pullRequest: null };
+
+    const skip = async (reason: string) => {
+      await appendEvent(this.db, {
+        type: "PullRequestSkipped",
+        projectId: task.projectId,
+        taskId: task.id,
+        executionId: id,
+        payload: { reason },
+      });
+      return { pullRequest: null };
+    };
+    if (!req.commitSha) return skip("no file changes");
+    if (!this.gitProvider) return skip("no git provider configured");
+
+    const artifacts = await this.listArtifacts(task.id);
+    const handoff = artifacts.filter((a) => a.type === "handoff" && a.executionId === id).at(-1)?.content as
+      | Handoff
+      | undefined;
+    const validation = artifacts.filter((a) => a.type === "validation_result" && a.executionId === id).at(-1)
+      ?.content as ValidationReport | undefined;
+
+    let pullRequest;
+    try {
+      pullRequest = await this.gitProvider.openPullRequest({
+        repoUrl: project.repoUrl,
+        head: req.branch,
+        base: project.defaultBranch,
+        title: `${task.key}: ${task.title}`,
+        body: pullRequestBody({ task, handoff, validation, changedFiles: req.changedFiles }),
+      });
+    } catch (err) {
+      await appendEvent(this.db, {
+        type: "PullRequestFailed",
+        projectId: task.projectId,
+        taskId: task.id,
+        executionId: id,
+        payload: { error: String(err) },
+      });
+      return { pullRequest: null };
+    }
+    if (!pullRequest) return skip("repository not handled by the git provider");
+
+    await this.db.query("update tasks set pull_request_url = $2, pull_request_number = $3 where id = $1", [
+      task.id,
+      pullRequest.url,
+      pullRequest.number,
+    ]);
+    await appendEvent(this.db, {
+      type: "PullRequestOpened",
+      projectId: task.projectId,
+      taskId: task.id,
+      executionId: id,
+      payload: { ...pullRequest },
+    });
+    return { pullRequest };
   }
 
   /**
@@ -510,17 +727,29 @@ export class Store {
           projectId: task.projectId,
           taskId: task.id,
           executionId: row.id,
-          payload: { runnerId: row.runner_id, attempt: row.attempt },
+          payload: { runnerId: row.runner_id, attempt: row.attempt, phase: row.status },
         });
-        if (task.state === "ASSIGNED" || task.state === "RUNNING") {
+        if (["ASSIGNED", "RUNNING", "VALIDATING"].includes(task.state)) {
           await changeTaskState(q, task, "agent_failed", { executionId: row.id, reason: "runner lease expired" });
+        } else if (row.status === "delivering") {
+          // Validated work may or may not have been pushed; leave the task in
+          // REVIEW for a human instead of redoing validated work.
+          await appendEvent(q, {
+            type: "DeliveryLost",
+            projectId: task.projectId,
+            taskId: task.id,
+            executionId: row.id,
+            payload: { branch: row.branch },
+          });
         }
         result.lost++;
       }
 
+      // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
+      // queue until maxAttempts is used up.
       const retrying = await q.query(
         `select t.*, (select count(*) from executions e where e.task_id = t.id)::int as attempts
-         from tasks t where t.state = 'RETRYING' for update skip locked`,
+         from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {
         const task = toTask(row);

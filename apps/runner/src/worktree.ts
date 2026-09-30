@@ -7,9 +7,70 @@ import type { WorkspaceFile } from "@mar/core";
 
 const execFileAsync = promisify(execFile);
 
-export async function git(cwd: string, ...args: string[]): Promise<string> {
+async function gitRaw(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
-  return stdout.trim();
+  return stdout;
+}
+
+export async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await gitRaw(cwd, ...args)).trim();
+}
+
+/** Paths changed in the worktree (modified, added, deleted, untracked), excluding git-excluded files. */
+export async function changedFiles(worktree: string): Promise<string[]> {
+  // Not trimmed: each entry starts with a two-letter status that may begin with a space (" M path").
+  const out = await gitRaw(worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all");
+  const entries = out.split("\0").filter(Boolean);
+  const files = new Set<string>();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    // A path can appear twice (e.g. deleted from the index but present on disk).
+    files.add(entry.slice(3));
+    // Renames/copies are followed by the original path.
+    if (entry[0] === "R" || entry[0] === "C") i++;
+  }
+  return [...files];
+}
+
+export interface CommitOptions {
+  branch: string;
+  message: string;
+  author: { name: string; email: string };
+  /** Tracked files the runner modified for its own use; restored before committing. */
+  restore: string[];
+}
+
+export interface CommitResult {
+  commitSha: string | null;
+  changedFiles: string[];
+}
+
+/**
+ * Commits all task changes and pushes the task branch. Done by the runner
+ * after validation, never by the agent (ADR-0004). Returns a null sha when
+ * there is nothing to commit.
+ */
+export async function commitAndPush(worktree: string, opts: CommitOptions): Promise<CommitResult> {
+  if (opts.restore.length) await git(worktree, "checkout", "--", ...opts.restore);
+  const files = await changedFiles(worktree);
+  if (!files.length) return { commitSha: null, changedFiles: [] };
+
+  await git(worktree, "add", "-A");
+  await git(
+    worktree,
+    "-c",
+    `user.name=${opts.author.name}`,
+    "-c",
+    `user.email=${opts.author.email}`,
+    "commit",
+    "-q",
+    "--no-verify",
+    "-m",
+    opts.message,
+  );
+  const commitSha = await git(worktree, "rev-parse", "HEAD");
+  await git(worktree, "push", "origin", `HEAD:refs/heads/${opts.branch}`);
+  return { commitSha, changedFiles: files };
 }
 
 async function isTracked(worktree: string, path: string): Promise<boolean> {
@@ -91,13 +152,19 @@ export class WorktreeManager {
     const modifiedTracked: string[] = [];
     for (const file of files) {
       const full = join(worktree, ...file.path.split("/"));
-      let content = file.content;
-      if (file.mergeJson && existsSync(full)) {
-        const existing = JSON.parse(await readFile(full, "utf8")) as Record<string, unknown>;
-        content = { ...existing, ...file.content };
+      let text: string;
+      if (typeof file.content === "string") {
+        text = file.content;
+      } else {
+        let content = file.content;
+        if (file.mergeJson && existsSync(full)) {
+          const existing = JSON.parse(await readFile(full, "utf8")) as Record<string, unknown>;
+          content = { ...existing, ...file.content };
+        }
+        text = JSON.stringify(content, null, 2) + "\n";
       }
       await mkdir(dirname(full), { recursive: true });
-      await writeFile(full, JSON.stringify(content, null, 2) + "\n");
+      await writeFile(full, text);
 
       if (await isTracked(worktree, file.path)) {
         modifiedTracked.push(file.path);

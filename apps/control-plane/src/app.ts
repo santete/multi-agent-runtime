@@ -13,6 +13,16 @@ export interface AppOptions extends FastifyServerOptions {
 
 const idParams = z.object({ id: z.uuid() });
 
+const validationSteps = z
+  .array(
+    z.object({
+      name: z.string().min(1),
+      command: z.string().min(1),
+      timeoutSeconds: z.number().int().positive().max(7200).optional(),
+    }),
+  )
+  .max(20);
+
 const createProjectBody = z.object({
   key: z
     .string()
@@ -20,6 +30,29 @@ const createProjectBody = z.object({
   name: z.string().min(1),
   repoUrl: z.string().min(1),
   defaultBranch: z.string().min(1).optional(),
+  validation: validationSteps.optional(),
+});
+
+const validationReportBody = z.object({
+  passed: z.boolean(),
+  steps: z.array(
+    z.object({
+      name: z.string(),
+      command: z.string(),
+      passed: z.boolean(),
+      exitCode: z.number().int().nullable(),
+      durationMs: z.number().nonnegative(),
+      outputTail: z.string().max(20_000),
+    }),
+  ),
+  changedFiles: z.array(z.string()).max(5000),
+});
+
+const deliveryBody = z.object({
+  branch: z.string().min(1),
+  commitSha: z.string().regex(/^[0-9a-f]{7,64}$/).nullable(),
+  changedFiles: z.array(z.string()).max(5000),
+  error: z.string().max(4000).optional(),
 });
 
 const createTaskBody = z.object({
@@ -110,6 +143,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   });
   app.get("/projects", () => store.listProjects());
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
+  app.put("/projects/:id/validation", (req) =>
+    store.setValidation(idParams.parse(req.params).id, validationSteps.parse(req.body)),
+  );
 
   app.post("/projects/:id/tasks", async (req, reply) => {
     const { id } = idParams.parse(req.params);
@@ -126,6 +162,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", (req) => store.cancelTask(idParams.parse(req.params).id));
   app.get("/tasks/:id/executions", (req) => store.listExecutions(idParams.parse(req.params).id));
+  app.get("/tasks/:id/artifacts", (req) => store.listArtifacts(idParams.parse(req.params).id));
   app.get("/tasks/:id/events", async (req) => {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ taskId: idParams.parse(req.params).id }, after, limit), after);
@@ -161,6 +198,12 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     const body = completeExecutionBody.parse(req.body);
     return store.completeExecution(idParams.parse(req.params).id, body as never);
   });
+  app.post("/executions/:id/validation", (req) =>
+    store.recordValidation(idParams.parse(req.params).id, validationReportBody.parse(req.body)),
+  );
+  app.post("/executions/:id/delivery", (req) =>
+    store.recordDelivery(idParams.parse(req.params).id, deliveryBody.parse(req.body)),
+  );
   app.get("/executions/:id/events", async (req) => {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ executionId: idParams.parse(req.params).id }, after, limit), after);
