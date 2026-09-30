@@ -39,6 +39,17 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 
 ## Phase 1 — MVP
 
+### M1 Walking skeleton — trạng thái
+
+- [x] `apps/control-plane`: Fastify + zod, Postgres (`pg`) hoặc PGlite nhúng, migrations SQL, event store append-only
+- [x] Project/Task API; task mới → `READY` (chưa có dependency ở M1)
+- [x] Runner protocol: register, claim (`FOR UPDATE SKIP LOCKED`, lọc theo agent), start, events, complete
+- [x] Kết quả execution → state: success → `VALIDATING`, denied actions → `WAITING_FOR_HUMAN`, lỗi → `RETRYING`
+- [x] `apps/runner`: WorktreeManager (clone theo project, worktree + branch `task/<KEY>` theo task, khóa git theo repo), process runner (timeout, cancel, stderr → diagnostic), gom event theo batch, poll loop có `maxConcurrent`
+- [x] `packages/adapter-generic-cli`
+- [x] E2E test: task tạo qua API → runner chạy trong worktree riêng → log và timeline xem được qua API
+- Chưa làm (chuyển sang M2): auth API, cancel một execution đang chạy từ control plane, heartbeat/lease cho runner bị mất, retry tự động từ `RETRYING`
+
 | Milestone | Nội dung | Tiêu chí xong |
 |---|---|---|
 | **M1 Walking skeleton** | `apps/control-plane` (Fastify + Postgres + migrations), Project/Task CRUD, event store append-only, `apps/runner` đăng ký với control plane, `GenericCliAdapter`, worktree manager | Tạo task qua API, runner chạy lệnh trong worktree riêng, log và event hiện qua API |

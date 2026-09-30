@@ -5,7 +5,9 @@ coverage/
 .env
 .env.*
 !.env.example
-# per-task workspaces created by the runner
-.worktrees/
+# embedded PGlite data, runner home (repos + per-task worktrees) and local runner config
+.data/
+.runner/
+runner.config.json
 # local agent state
 .claude/settings.local.json

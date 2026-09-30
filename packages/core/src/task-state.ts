@@ -55,7 +55,13 @@ const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(["COMPLETED", "CANCE
 const TRANSITIONS: TransitionTable = {
   CREATED: { dependencies_satisfied: "READY" },
   READY: { assigned: "ASSIGNED" },
-  ASSIGNED: { agent_started: "RUNNING", unassigned: "READY", agent_unavailable: "WAITING_FOR_AGENT" },
+  ASSIGNED: {
+    agent_started: "RUNNING",
+    unassigned: "READY",
+    agent_unavailable: "WAITING_FOR_AGENT",
+    // e.g. the runner could not prepare the workspace
+    agent_failed: "RETRYING",
+  },
   RUNNING: {
     approval_requested: "WAITING_FOR_HUMAN",
     agent_completed: "VALIDATING",

@@ -1,11 +1,12 @@
-import type {
-  AdapterCapabilities,
-  AgentAdapter,
-  AgentEvent,
-  AgentOutputParser,
-  AgentRunRequest,
-  CommandSpec,
-  TokenUsage,
+import {
+  exitWithoutResult,
+  type AdapterCapabilities,
+  type AgentAdapter,
+  type AgentEvent,
+  type AgentOutputParser,
+  type AgentRunRequest,
+  type CommandSpec,
+  type TokenUsage,
 } from "@mar/core";
 
 export interface ClaudeCodeAdapterOptions {
@@ -106,6 +107,7 @@ function stringifyToolOutput(content: unknown): string | undefined {
 
 export class ClaudeStreamParser implements AgentOutputParser {
   private sessionId: string | undefined;
+  private terminated = false;
   private readonly toolNames = new Map<string, string>();
 
   push(line: string): AgentEvent[] {
@@ -166,7 +168,12 @@ export class ClaudeStreamParser implements AgentOutputParser {
     return Array.isArray(content) ? content : [];
   }
 
+  finish(exitCode: number | null): AgentEvent[] {
+    return this.terminated ? [] : [exitWithoutResult(exitCode, this.sessionId)];
+  }
+
   private result(msg: Record<string, any>): AgentEvent[] {
+    this.terminated = true;
     const denials: Array<{ tool_name?: string }> = Array.isArray(msg.permission_denials) ? msg.permission_denials : [];
     const deniedActions = denials.map((d) => d.tool_name ?? "unknown");
     const sessionId = msg.session_id ?? this.sessionId ?? "";
