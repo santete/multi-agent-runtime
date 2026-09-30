@@ -20,6 +20,10 @@ export interface ProjectDto {
   validation: ValidationStep[];
   /** Max tasks of this project working at once (null = unlimited). */
   maxParallel: number | null;
+  /** Agents that review delivered tasks; one different from the task's agent is picked. */
+  reviewAgents: string[];
+  /** An agent approval also approves the task for merging (otherwise a human still reviews). */
+  autoApproveOnAgentReview: boolean;
   createdAt: string;
 }
 
@@ -33,6 +37,9 @@ export interface TaskDto {
   state: TaskState;
   /** Attempts before the task is BLOCKED. */
   maxAttempts: number;
+  /** "review": an agent review of another task (reviewOf); it produces a review, not code. */
+  kind: "work" | "review";
+  reviewOf: string | null;
   /** Ids of tasks that must be COMPLETED (merged) before this one becomes READY. */
   dependsOn: string[];
   /** Set once the task's branch has been delivered as a pull request. */
@@ -99,6 +106,13 @@ export interface CreateProjectRequest {
   defaultBranch?: string | undefined;
   validation?: ValidationStep[] | undefined;
   maxParallel?: number | undefined;
+  reviewAgents?: string[] | undefined;
+  autoApproveOnAgentReview?: boolean | undefined;
+}
+
+export interface ReviewPolicy {
+  reviewAgents: string[];
+  autoApproveOnAgentReview: boolean;
 }
 
 export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result";
@@ -257,6 +271,23 @@ export interface ClaimResponse {
   dependencies?: DependencyContext[];
   /** Human decisions on actions the previous attempt was not allowed to take. */
   approvals?: ApprovalDecision[];
+  /** For review tasks: what to review. */
+  review?: ReviewTarget;
+}
+
+export interface ReviewTarget {
+  taskId: string;
+  taskKey: string;
+  title: string;
+  objective: string;
+  /** Branch with the delivered work (pushed). */
+  branch: string;
+  baseBranch: string;
+  pullRequestUrl: string | null;
+  handoff: Record<string, unknown> | null;
+  validation: ValidationReport | null;
+  /** Agent that did the work. */
+  author: string;
 }
 
 export interface ReworkContext {

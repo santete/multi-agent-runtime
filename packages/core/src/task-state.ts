@@ -46,6 +46,7 @@ export type TaskTransitionTrigger =
   | "retry_started"
   | "limit_exceeded"
   | "unblocked"
+  | "review_submitted"
   | "cancelled";
 
 type TransitionTable = Partial<Record<TaskState, Partial<Record<TaskTransitionTrigger, TaskState>>>>;
@@ -63,6 +64,8 @@ const TRANSITIONS: TransitionTable = {
     agent_failed: "RETRYING",
   },
   RUNNING: {
+    // Review tasks produce a review, not code: no validation, delivery or merge.
+    review_submitted: "COMPLETED",
     approval_requested: "WAITING_FOR_HUMAN",
     agent_completed: "VALIDATING",
     agent_failed: "RETRYING",

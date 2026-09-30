@@ -139,6 +139,10 @@ export function describeEvent(e: EventDto): string {
       return `pull request #${p.number} opened`;
     case "PullRequestSkipped":
       return `pull request skipped: ${p.reason}`;
+    case "AgentReviewRequested":
+      return `review requested from ${p.reviewer} (${p.reviewTask})`;
+    case "AgentReviewCompleted":
+      return `${p.reviewer} review: ${p.verdict === "approve" ? "approved" : "changes requested"} (${p.findings} findings)`;
     case "TaskMerged":
       return "merged";
     case "ExecutionLost":

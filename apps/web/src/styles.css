@@ -892,3 +892,15 @@ details summary {
   max-height: 90vh;
   overflow: auto;
 }
+
+/* ---- reviews ---- */
+.review-card {
+  margin-bottom: 10px;
+}
+.findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}

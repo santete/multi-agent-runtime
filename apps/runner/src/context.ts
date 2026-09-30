@@ -125,6 +125,59 @@ function approvalsBrief(approvals: NonNullable<ClaimResponse["approvals"]>): str
   ].join("\n");
 }
 
+function reviewBrief(target: NonNullable<ClaimResponse["review"]>): string {
+  const h = target.handoff ? toHandoff(target.handoff) : undefined;
+  const validation = target.validation
+    ? target.validation.steps.map((s) => `- ${s.passed ? "✓" : "✗"} **${s.name}** \`${s.command}\``).join("\n") || "- _No steps configured._"
+    : "- _Not validated._";
+  return [
+    `# Review ${target.taskKey}: ${target.title}`,
+    "",
+    `Written by the \`${target.author}\` agent on branch \`${target.branch}\`${target.pullRequestUrl ? ` (${target.pullRequestUrl})` : ""}. This worktree is a checkout of that branch.`,
+    "",
+    "## What the change had to do",
+    "",
+    target.objective,
+    "",
+    "## What the author reports",
+    "",
+    h ? h.summary : "_No handoff._",
+    ...(h ? ["", "**Decisions**", bullets(h.decisions), "", "**Known issues**", bullets(h.knownIssues)] : []),
+    "",
+    "## Validation (already run by the platform)",
+    "",
+    validation,
+    "",
+    "## The change",
+    "",
+    `The full diff against \`${target.baseBranch}\` is in \`${CONTEXT_DIR}/DIFF.patch\`. Read the changed files around it as needed.`,
+    "",
+    "## Your job",
+    "",
+    "- Review for correctness (does it do what the objective asks, edge cases), security, tests and maintainability.",
+    "- Do **not** modify any file; only report.",
+    "- `request_changes` only for real problems (bugs, missing requirements, security, significant maintainability issues). Style nits alone are not a reason.",
+    "- Give each finding a severity (blocker, major, minor, nit), the file, the line when it applies, and how to fix it.",
+    "",
+  ].join("\n");
+}
+
+/** Context files for a review task: the brief and the diff. */
+export function reviewFiles(target: NonNullable<ClaimResponse["review"]>, diff: string): WorkspaceFile[] {
+  return [
+    { path: `${CONTEXT_DIR}/REVIEW.md`, content: reviewBrief(target), mergeJson: false },
+    { path: `${CONTEXT_DIR}/DIFF.patch`, content: diff || "(no changes)\n", mergeJson: false },
+  ];
+}
+
+export function buildReviewPrompt(target: NonNullable<ClaimResponse["review"]>): string {
+  return [
+    `You are reviewing another agent's change for ${target.taskKey} ("${target.title}").`,
+    `Read ${CONTEXT_DIR}/REVIEW.md and the diff in ${CONTEXT_DIR}/DIFF.patch, inspect the code as needed, and do not modify any file.`,
+    "Answer with your verdict (approve or request_changes), a short summary and your findings.",
+  ].join("\n\n");
+}
+
 /** Context files for the agent, written into the worktree before it starts. */
 export function contextFiles(claim: ClaimResponse, extras: ContextExtras = {}): WorkspaceFile[] {
   const file = (name: string, content: string): WorkspaceFile => ({ path: `${CONTEXT_DIR}/${name}`, content, mergeJson: false });

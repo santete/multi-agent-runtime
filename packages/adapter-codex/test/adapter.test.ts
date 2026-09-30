@@ -32,7 +32,10 @@ describe("CodexAdapter.buildCommand", () => {
     ]);
   });
 
-  it("does not select the Windows sandbox elsewhere and uses read-only for analysis tasks", () => {
+  it("uses read-only for analysis tasks (except on Windows, where read-only blocks all commands)", () => {
+    expect(new CodexAdapter({ platform: "win32" }).buildCommand({ ...base, permissionProfile: "read-only" }).args).toContain(
+      'sandbox_mode="workspace-write"',
+    );
     const cmd = new CodexAdapter({ platform: "linux" }).buildCommand({ ...base, permissionProfile: "read-only" });
     expect(cmd.args).toContain('sandbox_mode="read-only"');
     expect(cmd.args.join(" ")).not.toContain("windows.sandbox");

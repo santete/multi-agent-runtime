@@ -54,7 +54,10 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   buildCommand(request: AgentRunRequest): CommandSpec {
-    const sandbox = request.permissionProfile === "read-only" ? "read-only" : "workspace-write";
+    // On Windows the read-only sandbox rejects every command, reads included, so
+    // read-only runs (reviews) use workspace-write there; the runner never
+    // delivers anything from a read-only run's worktree.
+    const sandbox = request.permissionProfile === "read-only" && !this.windows ? "read-only" : "workspace-write";
     const config = [
       `sandbox_mode="${sandbox}"`,
       'approval_policy="never"',

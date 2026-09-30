@@ -6,12 +6,13 @@ import {
   type AgentRunRequest,
   type ClaimResponse,
   HANDOFF_SCHEMA,
+  REVIEW_SCHEMA,
   toHandoff,
 } from "@mar/core";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
-import { type ContextExtras, buildPrompt, contextFiles } from "./context.js";
+import { type ContextExtras, buildPrompt, buildReviewPrompt, contextFiles, reviewFiles } from "./context.js";
 import { runValidation } from "./validator.js";
 import { WorktreeManager, commitAndPush, mergeBase } from "./worktree.js";
 
@@ -210,8 +211,11 @@ export class Runner {
     }
 
     let workspace;
+    let reviewDiff = "";
     try {
-      workspace = await this.worktrees.prepare(project, task.key);
+      // A review task checks out the reviewed task's delivered branch.
+      workspace = await this.worktrees.prepare(project, task.key, claim.review?.branch);
+      if (claim.review) reviewDiff = await this.worktrees.diffAgainst(workspace.path, claim.review.baseBranch);
     } catch (err) {
       this.log.error("workspace preparation failed", { ...log, error: String(err) });
       await this.fail(execution.id, `workspace preparation failed: ${String(err)}`);
@@ -226,9 +230,10 @@ export class Runner {
 
     const request: AgentRunRequest = {
       workspace: workspace.path,
-      prompt: buildPrompt(claim, Boolean(resumeSessionId)),
+      prompt: claim.review ? buildReviewPrompt(claim.review) : buildPrompt(claim, Boolean(resumeSessionId)),
       objective: task.objective,
-      permissionProfile: "edit",
+      // Reviewers only read: nothing of a review worktree is ever delivered.
+      permissionProfile: claim.review ? "read-only" : "edit",
       timeoutSeconds: this.config.timeoutSeconds,
       env: {
         MAR_CONTROL_PLANE_URL: this.client.baseUrl,
@@ -236,7 +241,7 @@ export class Runner {
         MAR_EXECUTION_TOKEN: claim.executionToken,
       },
       ...(resumeSessionId && { resumeSessionId }),
-      ...(adapter.capabilities.structuredOutput && { outputSchema: HANDOFF_SCHEMA }),
+      ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
         // Also for sandboxed agents: their hook works wherever the CLI fires it.
         (adapter.capabilities.approval === "pre-tool-hook" || adapter.capabilities.approval === "sandbox") && {
@@ -262,7 +267,7 @@ export class Runner {
     }, this.config.heartbeatIntervalMs);
 
     try {
-      const { outcome, restore } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal);
+      const { outcome, restore } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff);
       let after;
       try {
         after = await this.client.complete(execution.id, outcome);
@@ -294,6 +299,7 @@ export class Runner {
     request: AgentRunRequest,
     worktree: string,
     signal: AbortSignal,
+    reviewDiff = "",
   ): Promise<{ outcome: ProcessOutcome; restore: string[] }> {
     const shipper = new EventShipper(this.client, claim.execution.id);
     let outcome: ProcessOutcome;
@@ -313,7 +319,8 @@ export class Runner {
             : `runner merged origin/${base} cleanly`,
         });
       }
-      const files = [...contextFiles(claim, extras), ...(adapter.workspaceFiles?.(request) ?? [])];
+      const context = claim.review ? reviewFiles(claim.review, reviewDiff) : contextFiles(claim, extras);
+      const files = [...context, ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {
         shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });

@@ -131,6 +131,13 @@ Toàn bộ M1–M5 đã xong. Việc tiếp theo thuộc Phase 2 (xem bên dư�
 
 Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · review agent chéo · shared knowledge base · scheduler theo capability, policy và cost · reassign khi agent lỗi · container sandbox · Slack/Telegram approval · OpenTelemetry · CI integration.
 
+### Review agent chéo — trạng thái ✅ ([ADR-0011](adr/0011-cross-agent-review.md))
+
+- [x] Project `reviewAgents` + `autoApproveOnAgentReview`; mỗi lần deliver tạo review task cho một agent khác tác giả
+- [x] Reviewer chạy read-only trên branch đã push, context `REVIEW.md` + `DIFF.patch`, output `REVIEW_SCHEMA` (verdict + findings)
+- [x] `request_changes` → rework của tác giả kèm findings; `approve` → người duyệt hoặc tự approve; comment review lên PR
+- [x] **Chạy thật**: Codex ↔ Claude review lẫn nhau (PR #12, #13 merged), Codex bắt đúng 3 lỗi của một agent cố tình làm sai
+
 ## Phase 3
 
 Planner tự động · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.

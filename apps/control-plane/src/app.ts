@@ -52,6 +52,13 @@ const createProjectBody = z.object({
   defaultBranch: z.string().min(1).optional(),
   validation: validationSteps.optional(),
   maxParallel: z.number().int().min(1).max(100).optional(),
+  reviewAgents: z.array(z.string().min(1)).max(10).optional(),
+  autoApproveOnAgentReview: z.boolean().optional(),
+});
+
+const reviewPolicyBody = z.object({
+  reviewAgents: z.array(z.string().min(1)).max(10),
+  autoApproveOnAgentReview: z.boolean().default(false),
 });
 
 const validationReportBody = z.object({
@@ -193,6 +200,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   });
   app.get("/projects", () => store.listProjects());
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
+  app.put("/projects/:id/review", role("owner"), (req) =>
+    store.setReviewPolicy(idParams.parse(req.params).id, reviewPolicyBody.parse(req.body)),
+  );
   app.put("/projects/:id/validation", role("owner"), (req) =>
     store.setValidation(idParams.parse(req.params).id, validationSteps.parse(req.body)),
   );

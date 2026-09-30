@@ -14,7 +14,7 @@ CREATED ─(dependencies merged)→ READY → ASSIGNED → RUNNING ─(agent don
                                    │                  ├─ HIGH-risk call → WAITING_FOR_HUMAN ─(approvals decided)┤
                                    │                  └─ crash / lost runner → RETRYING ───────────────────────┤
                                    └────────────── requeued (context + resumed session) ◄──────────────────────┘
-REVIEW ─approve→ APPROVED → MERGING ─merged→ COMPLETED (unlocks dependents)
+REVIEW (agent review by another agent, then human) ─approve→ APPROVED → MERGING ─merged→ COMPLETED (unlocks dependents)
    └─reject→ REWORK            └─conflict→ REWORK (base merged in, agent resolves)
 ```
 
@@ -78,9 +78,10 @@ curl -s localhost:7700/tasks/<taskId>/events
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`) |
+| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`, `reviewAgents?`, `autoApproveOnAgentReview?`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
 | PUT | `/projects/:id/validation` | replace the project's validation steps |
+| PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
 | POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`, `dependsOn?: [id or key]`) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
 | GET | `/projects/:id/graph` | task DAG (`nodes`, `edges`) |
