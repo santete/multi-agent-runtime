@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateToolCall, isInsideWorkspace } from "../src/index.js";
+import { evaluateToolCall, isCiConfigPath, isInsideWorkspace } from "../src/index.js";
 
 const ctx = { workspace: "C:\\runner\\worktrees\\PAY-1" };
 const shell = (command: string, tool = "Bash") => evaluateToolCall({ tool, input: { command } }, ctx);
@@ -88,5 +88,45 @@ describe("isInsideWorkspace", () => {
     expect(isInsideWorkspace("c:/runner/worktrees/pay-1/a", ctx.workspace)).toBe(true);
     expect(isInsideWorkspace("C:\\runner\\worktrees\\PAY-10\\a", ctx.workspace)).toBe(false);
     expect(isInsideWorkspace("C:\\runner\\worktrees\\PAY-1\\..\\PAY-2\\a", ctx.workspace)).toBe(false);
+  });
+});
+
+describe("policy: CI configuration", () => {
+  it.each([
+    [".github/workflows/ci.yml", true],
+    ["C:\\runner\\worktrees\\PAY-1\\.github\\workflows\\ci.yml", true],
+    [".gitlab-ci.yml", true],
+    ["Jenkinsfile", true],
+    ["ci/azure-pipelines.yaml", true],
+    [".circleci/config.yml", true],
+    ["src/workflows.js", false],
+    ["docs/github-actions.md", false],
+  ])("recognizes %s: %s", (path, ci) => {
+    expect(isCiConfigPath(path)).toBe(ci);
+  });
+
+  it("needs approval to edit CI configuration, whatever the tool", () => {
+    const write = (tool: string, input: object) => evaluateToolCall({ tool, input }, ctx);
+    expect(write("apply_patch", { paths: [`${ctx.workspace}\\.github\\workflows\\ci.yml`] })).toMatchObject({
+      decision: "deny",
+      risk: "HIGH",
+      reason: "changing CI configuration",
+    });
+    expect(write("Write", { file_path: `${ctx.workspace}\\.gitlab-ci.yml` })).toMatchObject({ risk: "HIGH" });
+    for (const cmd of [
+      "sed -i 's/TODO/X/' .github/workflows/ci.yml",
+      "echo x > .github/workflows/ci.yml",
+      "rm .github/workflows/ci.yml",
+      "node -e \"require('fs').writeFileSync('.github/workflows/ci.yml', '')\"",
+    ]) {
+      expect(shell(cmd), cmd).toMatchObject({ decision: "deny", risk: "HIGH", reason: "changing CI configuration" });
+    }
+    expect(shell("Set-Content .github\\workflows\\ci.yml x", "PowerShell")).toMatchObject({ risk: "HIGH" });
+    // Reading it is fine.
+    expect(shell("cat .github/workflows/ci.yml")).toMatchObject({ decision: "allow" });
+    expect(shell("Get-ChildItem .github/workflows -File | ForEach-Object { Get-Content $_.FullName }", "PowerShell")).toMatchObject({
+      decision: "allow",
+    });
+    expect(shell("npm test > out.txt")).toMatchObject({ decision: "allow" });
   });
 });

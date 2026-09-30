@@ -163,6 +163,18 @@ export function describeEvent(e: EventDto): string {
       return `review requested from ${p.reviewer} (${p.reviewTask})`;
     case "AgentReviewCompleted":
       return `${p.reviewer} review: ${p.verdict === "approve" ? "approved" : "changes requested"} (${p.findings} findings)`;
+    case "BaseChanged":
+      return "base branch moved since validation: re-validating on it before merging";
+    case "CiPending":
+      return `waiting for CI${p.checks?.length ? ` (${p.checks.join(", ")})` : ""}`;
+    case "CiPassed":
+      return `CI passed (${(p.checks ?? []).join(", ")})`;
+    case "CiFailed":
+      return `CI failed: ${(p.checks ?? []).join(", ")}`;
+    case "AutoApprovalSkipped":
+      return `not auto-approved: ${p.reason} (${(p.files ?? []).join(", ")}); a person decides`;
+    case "CiSkipped":
+      return `merging without CI: ${p.reason}`;
     case "TaskMerged":
       return "merged";
     case "ExecutionLost":

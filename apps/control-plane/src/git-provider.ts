@@ -1,4 +1,4 @@
-import type { PullRequestRef } from "@mar/core";
+import type { CheckRun, ChecksState, PullRequestRef } from "@mar/core";
 
 export interface OpenPullRequest {
   repoUrl: string;
@@ -24,6 +24,22 @@ export type MergeResult =
   /** Not decidable yet (e.g. GitHub still computing mergeability): try again later. */
   | { status: "pending"; message: string };
 
+/** What the merge queue needs to know before merging a pull request. */
+export interface PullRequestStatus {
+  headSha: string;
+  /** The base branch has commits the pull request's branch does not contain. */
+  behindBase: boolean;
+  checks: { state: ChecksState; runs: CheckRun[] };
+}
+
+/** Combines check runs into one state: any failure fails, anything unfinished is pending. */
+export function checksState(runs: CheckRun[]): ChecksState {
+  if (!runs.length) return "none";
+  if (runs.some((r) => r.state === "failure")) return "failure";
+  if (runs.some((r) => r.state === "pending")) return "pending";
+  return "success";
+}
+
 /**
  * Hosting provider the control plane uses to deliver work (ADR-0002: only
  * the platform talks to GitHub; agents never hold credentials).
@@ -35,6 +51,8 @@ export interface GitProvider {
   mergePullRequest(req: MergePullRequest): Promise<MergeResult>;
   /** Posts a comment on the pull request (agent reviews). Optional. */
   commentOnPullRequest?(req: { repoUrl: string; number: number; body: string }): Promise<void>;
+  /** CI checks and whether the base moved (spec §27, §34). Optional: without it the queue merges directly. */
+  pullRequestStatus?(req: { repoUrl: string; number: number }): Promise<PullRequestStatus>;
 }
 
 export class GitProviderError extends Error {
@@ -118,6 +136,49 @@ export class GitHubProvider implements GitProvider {
     if (res.status !== 201) throw new GitProviderError(`GitHub ${res.status} commenting on PR #${req.number}`);
   }
 
+  async pullRequestStatus(req: { repoUrl: string; number: number }): Promise<PullRequestStatus> {
+    const repo = parseGitHubRepo(req.repoUrl);
+    if (!repo) throw new GitProviderError(`not a GitHub repository: ${req.repoUrl}`);
+    const base = `${this.apiBase}/repos/${repo.owner}/${repo.repo}`;
+    const pr = await this.call("GET", `${base}/pulls/${req.number}`);
+    if (pr.status !== 200) throw new GitProviderError(`GitHub ${pr.status} reading PR #${req.number}`);
+    const headSha: string = pr.body.head.sha;
+
+    const [compare, checkRuns, statuses] = await Promise.all([
+      this.call("GET", `${base}/compare/${encodeURIComponent(pr.body.base.ref)}...${headSha}`),
+      this.call("GET", `${base}/commits/${headSha}/check-runs?per_page=100`),
+      this.call("GET", `${base}/commits/${headSha}/status`),
+    ]);
+    if (compare.status !== 200) throw new GitProviderError(`GitHub ${compare.status} comparing PR #${req.number} with its base`);
+
+    const runs: CheckRun[] = [
+      ...(await Promise.all(
+        (checkRuns.body?.check_runs ?? []).map(async (r: any): Promise<CheckRun> => {
+          const state = r.status !== "completed" ? "pending" : checkConclusion(r.conclusion);
+          // GitHub Actions reports errors as annotations rather than in the summary.
+          const annotations =
+            state === "failure" && r.output?.annotations_count
+              ? await this.call("GET", `${base}/check-runs/${r.id}/annotations?per_page=10`)
+              : undefined;
+          const messages = (Array.isArray(annotations?.body) ? annotations.body : [])
+            .filter((a: any) => a.annotation_level === "failure")
+            .map((a: any) => (a.path && a.path !== ".github" ? `${a.path}:${a.start_line}: ${a.message}` : a.message));
+          const summary = [r.output?.summary || r.output?.title, ...messages].filter(Boolean).join("\n");
+          return { name: r.name, state, url: r.html_url ?? null, summary: summary || null };
+        }),
+      )),
+      ...(statuses.body?.statuses ?? []).map(
+        (s: any): CheckRun => ({
+          name: s.context,
+          state: s.state === "pending" ? "pending" : s.state === "success" ? "success" : "failure",
+          url: s.target_url ?? null,
+          summary: s.description ?? null,
+        }),
+      ),
+    ];
+    return { headSha, behindBase: (compare.body.behind_by ?? 0) > 0, checks: { state: checksState(runs), runs } };
+  }
+
   private async call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {
     const res = await this.fetchImpl(url, {
       method,
@@ -132,6 +193,13 @@ export class GitHubProvider implements GitProvider {
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null };
   }
+}
+
+/** GitHub check run conclusions: neutral and skipped do not block a merge. */
+function checkConclusion(conclusion: string | null): CheckRun["state"] {
+  if (conclusion === "success") return "success";
+  if (conclusion === "neutral" || conclusion === "skipped") return "neutral";
+  return "failure";
 }
 
 function toRef(pr: { html_url: string; number: number }): PullRequestRef {

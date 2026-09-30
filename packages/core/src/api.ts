@@ -29,6 +29,10 @@ export interface ProjectDto {
   autoApproveOnAgentReview: boolean;
   /** How the scheduler weighs reliability, cost and load when it picks an agent. */
   routingPolicy: RoutingPolicy;
+  /** Re-validate a task on the latest base branch before merging it when the base moved (default true). */
+  revalidateOnBaseChange: boolean;
+  /** Wait for the pull request's CI checks to pass before merging (spec §34). */
+  waitForChecks: boolean;
   createdAt: string;
 }
 
@@ -129,14 +133,33 @@ export interface CreateProjectRequest {
   reviewAgents?: string[] | undefined;
   autoApproveOnAgentReview?: boolean | undefined;
   routingPolicy?: RoutingPolicy | undefined;
+  revalidateOnBaseChange?: boolean | undefined;
+  waitForChecks?: boolean | undefined;
 }
+
+export interface MergePolicy {
+  revalidateOnBaseChange: boolean;
+  waitForChecks: boolean;
+}
+
+/** One CI check of a pull request (GitHub check run or commit status). */
+export interface CheckRun {
+  name: string;
+  state: "pending" | "success" | "failure" | "neutral";
+  url: string | null;
+  /** What the check reported (e.g. the failing test), when it says. */
+  summary: string | null;
+}
+
+/** Overall CI state of a commit: "none" when no check reported anything. */
+export type ChecksState = "none" | "pending" | "success" | "failure";
 
 export interface ReviewPolicy {
   reviewAgents: string[];
   autoApproveOnAgentReview: boolean;
 }
 
-export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal";
+export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal" | "ci_result";
 
 /** An entry of the project's shared knowledge base (spec §20, §35). */
 export interface KnowledgeDto {
@@ -423,16 +446,23 @@ export interface ReviewTarget {
   author: string;
 }
 
+/**
+ * base_changed: the base branch moved after validation; the runner merges it
+ * in and re-validates (the agent only runs when that conflicts or fails).
+ * ci: the pull request's CI checks failed.
+ */
 export interface ReworkContext {
-  kind: "validation" | "review" | "merge_conflict";
+  kind: "validation" | "review" | "merge_conflict" | "base_changed" | "ci";
   /** Attempt that produced the rejected work. */
   attempt: number;
   reason: string;
   validation?: ValidationReport;
   /** Reviewer's comment when the review was rejected. */
   comment?: string;
-  /** Branch to merge in when the task conflicts with it. */
+  /** Branch to merge in when the task conflicts with it or it moved. */
   baseBranch?: string;
+  /** The CI checks that failed. */
+  checks?: CheckRun[];
 }
 
 export interface DependencyContext {
@@ -472,6 +502,11 @@ export interface CompleteExecutionRequest {
   exitCode: number | null;
   /** The adapter's terminal event. */
   terminal: Extract<AgentEvent, { kind: "completed" | "failed" }>;
+  /**
+   * The runner only merged the moved base branch in and did not run the agent:
+   * once it validates, the task goes back to the merge queue without a new review.
+   */
+  revalidation?: boolean | undefined;
 }
 
 export interface EventsPage {

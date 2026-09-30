@@ -34,6 +34,8 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
             {project.repoUrl} · base <span className="mono">{project.defaultBranch}</span>
             {project.maxParallel ? ` · max ${project.maxParallel} in parallel` : ""}
             {project.validation.length ? ` · validation: ${project.validation.map((v) => v.name).join(", ")}` : " · no validation"}
+            {project.revalidateOnBaseChange ? " · re-validates on a moved base" : ""}
+            {project.waitForChecks ? " · waits for CI" : ""}
           </p>
         </div>
         <div className="actions">

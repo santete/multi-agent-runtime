@@ -164,6 +164,14 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] UI: tab Knowledge; event `Knowledge*` trên timeline
 - [x] **Chạy thật** trên `mar-sandbox`: Claude (LP-6, PR #17) báo 2 fact về project (một business rule, một convention testing). Khi PR merge, 2 fact này tự chuyển accepted. Task Codex tiếp theo (LP-7) nhận chúng trong `KNOWLEDGE.md`, đọc file ngay khi bắt đầu, và không báo trùng lại.
 
+### CI integration · merge queue re-validate — trạng thái ✅ ([ADR-0015](adr/0015-ci-and-revalidation.md))
+
+- [x] `GitProvider.pullRequestStatus`: base có đổi không, check runs + commit statuses (kèm annotations của check fail); merge policy theo project (`revalidateOnBaseChange`, `waitForChecks`)
+- [x] Base đổi sau khi validate → rework `base_changed`: runner merge base; sạch thì không chạy agent, chỉ validate lại rồi quay về `APPROVED`; conflict hoặc fail thì agent sửa, người review lại; không tính vào `maxAttempts`
+- [x] CI pending giữ hàng đợi; CI fail → rework `ci` với check và thông điệp lỗi; không có CI sau thời gian chờ → merge, ghi `CiSkipped`
+- [x] Sửa cấu hình CI cần approval (HIGH); không tự approve thay đổi chạm CI; PR có cảnh báo; không cho cancel khi đang `MERGING`
+- [x] **Chạy thật** trên `mar-sandbox` với GitHub Actions: re-validate LP-9 trên `main` mới mà không chạy agent; CI fail → rework `ci`; phát hiện agent nới lỏng CI để pass (đã chặn bằng policy) và lỗi cancel lúc đang merge (đã sửa)
+
 ## Phase 3
 
 Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.

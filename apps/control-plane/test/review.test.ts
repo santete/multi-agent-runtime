@@ -61,7 +61,7 @@ const claim = async (runnerId: string) => (await call<ClaimResponse>("POST", `/r
 const state = async (id: string) => (await call<TaskDto>("GET", `/tasks/${id}`)).body;
 
 /** Runs a work task through to delivery (REVIEW). */
-async function deliver(runnerId: string) {
+async function deliver(runnerId: string, changedFiles = ["src/refund.js"]) {
   const c = await claim(runnerId);
   const id = c.execution.id;
   await call("POST", `/executions/${id}/start`, { workspace: "/ws", branch: `task/${c.task.key}` });
@@ -75,8 +75,8 @@ async function deliver(runnerId: string) {
       result: { summary: "Added refund()", changes: ["src/refund.js"], decisions: [], knownIssues: [], remainingWork: [] },
     },
   });
-  await call("POST", `/executions/${id}/validation`, { passed: true, steps: [], changedFiles: ["src/refund.js"] });
-  await call("POST", `/executions/${id}/delivery`, { branch: `task/${c.task.key}`, commitSha: "abc1234", changedFiles: ["src/refund.js"] });
+  await call("POST", `/executions/${id}/validation`, { passed: true, steps: [], changedFiles });
+  await call("POST", `/executions/${id}/delivery`, { branch: `task/${c.task.key}`, commitSha: "abc1234", changedFiles });
   return c;
 }
 
@@ -153,6 +153,18 @@ describe("agent review", () => {
     expect((await state(task.id)).state).toBe("APPROVED");
     await store.processMergeQueue();
     expect((await state(task.id)).state).toBe("COMPLETED");
+  });
+
+  it("never auto-approves a change to the CI configuration", async () => {
+    const { task, runnerId } = await setup({ reviewAgents: ["codex"], autoApproveOnAgentReview: true });
+    await deliver(runnerId, ["src/refund.js", ".github/workflows/ci.yml"]);
+    await review(runnerId, approve);
+    expect((await state(task.id)).state).toBe("REVIEW");
+    const events = (await call<EventsPage>("GET", `/tasks/${task.id}/events`)).body.events;
+    expect(events.find((e) => e.type === "AutoApprovalSkipped")?.payload).toEqual({
+      reason: "the change modifies CI configuration",
+      files: [".github/workflows/ci.yml"],
+    });
   });
 
   it("retries a reviewer that returned no usable review instead of approving", async () => {

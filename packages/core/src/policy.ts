@@ -41,6 +41,16 @@ const WRITE_TOOLS = new Set([
   "edit_file",
 ]);
 
+/** CI configuration files: changing them changes what "passing" means. */
+const CI_CONFIG_SOURCE =
+  "(?:^|[\\\\/\\s\"'])(?:\\.github[\\\\/]workflows[\\\\/]|\\.gitlab-ci\\.ya?ml|jenkinsfile|azure-pipelines\\.ya?ml|\\.circleci[\\\\/]|bitbucket-pipelines\\.ya?ml|\\.buildkite[\\\\/])";
+const CI_CONFIG_PATH = new RegExp(CI_CONFIG_SOURCE, "i");
+
+/** Whether the path is CI configuration (a workflow, pipeline or Jenkinsfile). */
+export function isCiConfigPath(path: string): boolean {
+  return CI_CONFIG_PATH.test(` ${path}`);
+}
+
 interface CommandRule {
   pattern: RegExp;
   risk: Extract<RiskLevel, "HIGH" | "CRITICAL">;
@@ -61,6 +71,12 @@ const COMMAND_RULES: CommandRule[] = [
   { pattern: /\bsudo\b|\brunas\b/, risk: "CRITICAL", reason: "privilege escalation" },
   { pattern: /(curl|wget|iwr|invoke-webrequest|irm|invoke-restmethod)\b[^|;&]*\|\s*(sh|bash|zsh|iex|invoke-expression|python|node)\b/i, risk: "CRITICAL", reason: "piping downloaded code into an interpreter" },
   { pattern: /(^|[\s"'=/\\])\.env(\.[\w-]+)?(\s|$|["'])|[\\/]\.ssh[\\/]|[\\/]\.aws[\\/]|id_rsa|id_ed25519/i, risk: "HIGH", reason: "accessing secrets" },
+  // An agent must fix its code, not the checks that judge it.
+  {
+    pattern: new RegExp(`^(?=.*(?:${CI_CONFIG_SOURCE}))(?=.*(?:>|\\bsed\\s+-i|\\b(?:set|add)-content\\b|\\bout-file\\b|\\btee\\b|\\b(?:mv|cp|rm)\\s|\\b(?:move|copy|remove|new)-item\\b|writefile))`, "is"),
+    risk: "HIGH",
+    reason: "changing CI configuration",
+  },
   { pattern: /\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s|branch\s+-D|rebase|filter-branch|reflog\s+expire)\b/, risk: "HIGH", reason: "destructive git history/worktree operation" },
   { pattern: /\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|scp|rsync|ssh|nc|ncat)\b/i, risk: "HIGH", reason: "network access" },
 ];
@@ -158,6 +174,7 @@ export function evaluateToolCall(call: ToolCall, ctx: PolicyContext): PolicyVerd
     if (paths.some((p) => !isInsideWorkspace(p, ctx.workspace))) {
       return verdict("deny", "HIGH", "writing outside the task workspace", summary);
     }
+    if (paths.some(isCiConfigPath)) return verdict("deny", "HIGH", "changing CI configuration", summary);
     return verdict("allow", "LOW", "edit inside the task workspace", summary);
   }
 

@@ -1,4 +1,4 @@
-import type { Handoff, TaskDto, ValidationReport } from "@mar/core";
+import { type Handoff, isCiConfigPath, type TaskDto, type ValidationReport } from "@mar/core";
 
 const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : "_None._");
 
@@ -10,7 +10,14 @@ export function pullRequestBody(input: {
   changedFiles: string[];
 }): string {
   const { task, handoff, validation, changedFiles } = input;
-  const sections = [`## ${task.key}: ${task.title}`, "### Objective", task.objective];
+  const sections = [`## ${task.key}: ${task.title}`];
+  const ciFiles = changedFiles.filter(isCiConfigPath);
+  if (ciFiles.length) {
+    sections.push(
+      `> [!WARNING]\n> This change modifies CI configuration (${ciFiles.map((f) => `\`${f}\``).join(", ")}). Check that it does not weaken a check.`,
+    );
+  }
+  sections.push("### Objective", task.objective);
 
   if (handoff) {
     sections.push(

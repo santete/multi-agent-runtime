@@ -47,6 +47,8 @@ export type TaskTransitionTrigger =
   | "limit_exceeded"
   | "unblocked"
   | "review_submitted"
+  | "base_changed"
+  | "ci_failed"
   | "cancelled";
 
 type TransitionTable = Partial<Record<TaskState, Partial<Record<TaskTransitionTrigger, TaskState>>>>;
@@ -79,7 +81,14 @@ const TRANSITIONS: TransitionTable = {
   REVIEW: { review_approved: "APPROVED", review_rejected: "REWORK" },
   APPROVED: { merge_started: "MERGING" },
   // limit_exceeded: the merge kept failing for reasons other than a conflict.
-  MERGING: { merge_succeeded: "COMPLETED", merge_conflict: "REWORK", limit_exceeded: "BLOCKED" },
+  // base_changed: the base moved since validation, re-validate first; ci_failed: CI checks failed.
+  MERGING: {
+    merge_succeeded: "COMPLETED",
+    merge_conflict: "REWORK",
+    base_changed: "REWORK",
+    ci_failed: "REWORK",
+    limit_exceeded: "BLOCKED",
+  },
   // Requeued ("unassigned") so any runner offering the agent can pick it up again.
   REWORK: { rework_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
   RETRYING: { retry_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
