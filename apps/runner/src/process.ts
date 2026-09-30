@@ -1,6 +1,17 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentOutputParser, CommandSpec } from "@mar/core";
+import { type ResolvedCommand, resolveCommand } from "./resolve.js";
+
+/**
+ * Agents spawn their own children (tool shells, hooks). On Windows,
+ * `child.kill()` only ends the top process, so kill the whole tree.
+ */
+function killTree(pid: number | undefined, fallback: () => void): void {
+  if (process.platform !== "win32" || pid === undefined) return fallback();
+  const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  killer.on("error", fallback);
+}
 
 export interface ProcessOutcome {
   exitCode: number | null;
@@ -33,9 +44,20 @@ export function runAgentProcess(
       }
     };
 
-    const child = spawn(spec.command, spec.args, {
+    const env = { ...process.env, ...spec.env };
+    let resolved: ResolvedCommand;
+    try {
+      resolved = resolveCommand(spec.command, env);
+    } catch (err) {
+      const failed: ProcessOutcome["terminal"] = { kind: "failed", reason: (err as Error).message };
+      opts.onEvent(failed);
+      resolve({ exitCode: null, terminal: failed });
+      return;
+    }
+
+    const child = spawn(resolved.command, [...resolved.prefixArgs, ...spec.args], {
       cwd: spec.cwd,
-      env: { ...process.env, ...spec.env },
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -44,7 +66,7 @@ export function runAgentProcess(
     const kill = (reason: string) => {
       if (child.exitCode !== null || killedReason) return;
       killedReason = reason;
-      child.kill();
+      killTree(child.pid, () => child.kill());
     };
     const timer = opts.timeoutMs ? setTimeout(() => kill(`timed out after ${opts.timeoutMs} ms`), opts.timeoutMs) : undefined;
     const onAbort = () => kill("cancelled");

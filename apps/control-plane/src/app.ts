@@ -1,7 +1,15 @@
+import { timingSafeEqual } from "node:crypto";
 import { InvalidTransitionError } from "@mar/core";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
-import { ConflictError, NotFoundError, type Store } from "./store.js";
+import { ConflictError, NotFoundError, type Store, UnauthorizedError } from "./store.js";
+
+export const EXECUTION_TOKEN_HEADER = "x-mar-execution-token";
+
+export interface AppOptions extends FastifyServerOptions {
+  /** When set, every route except /health and tool-check requires `Authorization: Bearer <token>`. */
+  apiToken?: string | undefined;
+}
 
 const idParams = z.object({ id: z.uuid() });
 
@@ -18,11 +26,21 @@ const createTaskBody = z.object({
   title: z.string().min(1),
   objective: z.string().min(1),
   agent: z.string().min(1),
+  maxAttempts: z.number().int().min(1).max(10).optional(),
+});
+
+const capabilities = z.object({
+  pause: z.enum(["native", "checkpoint", "none"]),
+  resume: z.boolean(),
+  approval: z.enum(["pre-tool-hook", "static-rules", "none"]),
+  structuredOutput: z.boolean(),
+  streaming: z.boolean(),
+  costReporting: z.boolean(),
 });
 
 const registerRunnerBody = z.object({
   name: z.string().min(1),
-  agents: z.array(z.string().min(1)),
+  agents: z.array(z.object({ id: z.string().min(1), adapter: z.string().min(1), capabilities })),
 });
 
 const startExecutionBody = z.object({ workspace: z.string().min(1), branch: z.string().min(1) });
@@ -45,20 +63,39 @@ const completeExecutionBody = z.object({
   ]),
 });
 
+const toolCheckBody = z.object({ tool: z.string().min(1), input: z.unknown() });
+
 const eventsQuery = z.object({
   after: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(1000).default(200),
 });
 
-export function buildApp(store: Store, opts: FastifyServerOptions = {}): FastifyInstance {
-  const app = Fastify(opts);
+/** Routes that do not use the API token (tool-check has its own execution token). */
+const PUBLIC_ROUTES = new Set(["/health", "/executions/:id/tool-check"]);
+
+export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
+  const { apiToken, ...fastifyOpts } = opts;
+  const app = Fastify(fastifyOpts);
+
+  if (apiToken) {
+    const expected = Buffer.from(`Bearer ${apiToken}`);
+    app.addHook("onRequest", async (req, reply) => {
+      if (PUBLIC_ROUTES.has(req.routeOptions.url ?? "")) return;
+      const given = Buffer.from(req.headers.authorization ?? "");
+      if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+        return reply.status(401).send({ error: "unauthorized" });
+      }
+    });
+  }
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: "validation", issues: err.issues });
     if (err instanceof NotFoundError) return reply.status(404).send({ error: "not_found", message: err.message });
+    if (err instanceof UnauthorizedError) return reply.status(401).send({ error: "unauthorized" });
     if (err instanceof ConflictError || err instanceof InvalidTransitionError) {
       return reply.status(409).send({ error: "conflict", message: err.message });
     }
+    if ((err as { statusCode?: number }).statusCode === 400) return reply.status(400).send({ error: "bad_request" });
     app.log.error(err);
     return reply.status(500).send({ error: "internal" });
   });
@@ -94,7 +131,9 @@ export function buildApp(store: Store, opts: FastifyServerOptions = {}): Fastify
     return page(await store.listEvents({ taskId: idParams.parse(req.params).id }, after, limit), after);
   });
 
-  // ---- runner protocol ----------------------------------------------------
+  // ---- agent registry & runner protocol -----------------------------------
+
+  app.get("/runners", () => store.listRunners());
 
   app.post("/runners/register", async (req, reply) => {
     const { name, agents } = registerRunnerBody.parse(req.body);
@@ -112,6 +151,7 @@ export function buildApp(store: Store, opts: FastifyServerOptions = {}): Fastify
     const { workspace, branch } = startExecutionBody.parse(req.body);
     return store.startExecution(idParams.parse(req.params).id, workspace, branch);
   });
+  app.post("/executions/:id/heartbeat", (req) => store.heartbeat(idParams.parse(req.params).id));
   app.post("/executions/:id/events", async (req, reply) => {
     const { events } = appendEventsBody.parse(req.body);
     await store.appendAgentEvents(idParams.parse(req.params).id, events as never);
@@ -124,6 +164,16 @@ export function buildApp(store: Store, opts: FastifyServerOptions = {}): Fastify
   app.get("/executions/:id/events", async (req) => {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ executionId: idParams.parse(req.params).id }, after, limit), after);
+  });
+
+  // Called by the agent's PreToolUse hook (execution token, not the API token).
+  app.post("/executions/:id/tool-check", (req) => {
+    const token = req.headers[EXECUTION_TOKEN_HEADER];
+    return store.checkToolCall(
+      idParams.parse(req.params).id,
+      typeof token === "string" ? token : undefined,
+      toolCheckBody.parse(req.body),
+    );
   });
 
   return app;

@@ -3,11 +3,13 @@
   "name": "dev-laptop",
   "home": "./.runner",
   "pollIntervalMs": 2000,
+  "heartbeatIntervalMs": 10000,
   "maxConcurrent": 2,
   "timeoutSeconds": 1800,
+  "policyHook": true,
   "agents": {
     "shell": { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{prompt}"] },
     "claude-code": { "adapter": "claude-code" },
-    "antigravity": { "adapter": "antigravity", "executable": "agy" }
+    "antigravity": { "adapter": "antigravity", "executable": "C:/Users/<you>/AppData/Local/agy/bin/agy.exe" }
   }
 }

@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 
 export interface Queryable {
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
+  // Rows are untyped database records unless the caller names a row type.
+  query<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
 export interface Db extends Queryable {

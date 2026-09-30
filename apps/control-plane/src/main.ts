@@ -4,17 +4,40 @@ import { Store } from "./store.js";
 
 // DATABASE_URL=postgres://... for Postgres; unset = embedded PGlite under ./.data/pglite.
 const databaseUrl = process.env.DATABASE_URL;
+const host = process.env.HOST ?? "127.0.0.1";
+const port = Number(process.env.PORT ?? 7700);
+const apiToken = process.env.MAR_API_TOKEN || undefined;
+
+if (!apiToken && !["127.0.0.1", "localhost", "::1"].includes(host)) {
+  console.error(`Refusing to listen on ${host} without MAR_API_TOKEN.`);
+  process.exit(1);
+}
+
 const db = databaseUrl ? createPgDb(databaseUrl) : await createPgliteDb(process.env.PGLITE_DIR ?? "./.data/pglite");
 const applied = await migrate(db);
 
-const app = buildApp(new Store(db), { logger: { level: process.env.LOG_LEVEL ?? "info" } });
+const store = new Store(db, { leaseSeconds: Number(process.env.MAR_LEASE_SECONDS ?? 60) });
+const app = buildApp(store, { apiToken, logger: { level: process.env.LOG_LEVEL ?? "info" } });
 if (applied.length) app.log.info({ applied }, "migrations applied");
 
-// No auth yet (M1): bind to loopback unless explicitly overridden.
-const host = process.env.HOST ?? "127.0.0.1";
-const port = Number(process.env.PORT ?? 7700);
+// Housekeeping: expire lost runners' leases and requeue/block RETRYING tasks.
+const sweepEveryMs = Number(process.env.MAR_SWEEP_INTERVAL_MS ?? 5000);
+let sweeping = false;
+const sweeper = setInterval(async () => {
+  if (sweeping) return;
+  sweeping = true;
+  try {
+    const r = await store.sweep();
+    if (r.lost || r.requeued || r.blocked) app.log.info(r, "sweep");
+  } catch (err) {
+    app.log.error(err, "sweep failed");
+  } finally {
+    sweeping = false;
+  }
+}, sweepEveryMs);
 
 const shutdown = async () => {
+  clearInterval(sweeper);
   await app.close();
   await db.close();
   process.exit(0);

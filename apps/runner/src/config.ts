@@ -25,18 +25,24 @@ export const runnerConfig = z.object({
   name: z.string().min(1),
   /** Where repos and worktrees live. */
   home: z.string().min(1),
+  /** Bearer token for the control plane API (or env MAR_API_TOKEN). */
+  apiToken: z.string().min(1).optional(),
   pollIntervalMs: z.number().int().positive().default(2000),
+  heartbeatIntervalMs: z.number().int().positive().default(10_000),
   maxConcurrent: z.number().int().positive().default(2),
   timeoutSeconds: z.number().int().positive().default(1800),
+  /** Install the platform PreToolUse policy hook into agents that support it. */
+  policyHook: z.boolean().default(true),
   /** Logical agent id (what tasks ask for) -> how this machine runs it. */
   agents: z.record(z.string(), agentConfig),
 });
 
 export type RunnerConfig = z.infer<typeof runnerConfig>;
+export type RunnerConfigInput = z.input<typeof runnerConfig>;
 export type AgentConfig = z.infer<typeof agentConfig>;
 
-export async function loadConfig(path: string): Promise<RunnerConfig> {
-  return runnerConfig.parse(JSON.parse(await readFile(path, "utf8")));
+export async function loadConfig(path: string): Promise<RunnerConfigInput> {
+  return JSON.parse(await readFile(path, "utf8")) as RunnerConfigInput;
 }
 
 export function createAdapter(config: AgentConfig): AgentAdapter {
