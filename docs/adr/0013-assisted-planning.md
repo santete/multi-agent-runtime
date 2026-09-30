@@ -57,3 +57,7 @@ Event ghi lại: `PlanRequested`, `PlanProposed`, `PlanApproved { tasks, edited 
 - Planner không được sửa code. Quyền read-only được đảm bảo bởi permission profile của adapter (Claude dùng plan mode, Codex dùng sandbox) cộng với policy hook, giống cơ chế của review agent.
 - Chất lượng plan phụ thuộc vào agent. Người duyệt vẫn là bên quyết định cuối, và bản sửa (edit hoặc revise) luôn được kiểm tra lại bằng `checkPlan`.
 - Một plan chỉ tạo task mới. Nó không sửa hay hủy task có sẵn: muốn phụ thuộc vào task cũ thì tham chiếu bằng key.
+- Đã kiểm chứng thật trên `mar-sandbox`:
+  - Claude lập plan 2 task song song, và cố ý tách file để hai PR không đụng nhau.
+  - Người duyệt sửa agent của một task, rồi Codex và Claude cùng thực hiện. PR #15 và #16 được merge, `main` đạt 72/72 test.
+  - Với một goal đã làm xong, planner trả về plan rỗng. Kết quả này được coi là hợp lệ, không tính là lỗi.
