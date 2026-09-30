@@ -1,5 +1,6 @@
 import type {
   ActorDto,
+  AgentStats,
   ApprovalDto,
   ArtifactDto,
   EventDto,
@@ -75,7 +76,10 @@ export const api = {
   graph: (projectId: string) => get<TaskGraph>(`/projects/${projectId}/graph`),
   projectEvents: (projectId: string, after = 0, limit = 200) =>
     get<EventsPage>(`/projects/${projectId}/events?after=${after}&limit=${limit}`),
-  createTask: (projectId: string, body: { title: string; objective: string; agent: string; dependsOn?: string[] }) =>
+  createTask: (
+    projectId: string,
+    body: { title: string; objective: string; agent: string; dependsOn?: string[]; requires?: string[]; fallbackAgents?: string[] },
+  ) =>
     post<TaskDto>(`/projects/${projectId}/tasks`, body),
 
   task: (id: string) => get<TaskDto>(`/tasks/${id}`),
@@ -97,6 +101,7 @@ export const api = {
     post<ApprovalDto>(`/approvals/${id}/${decision}`, comment ? { comment } : {}),
 
   runners: () => get<RunnerDto[]>("/runners"),
+  agentStats: () => get<AgentStats[]>("/agents/stats"),
   recentEvents: (limit = 50, projectId?: string) =>
     get<EventDto[]>(`/events/recent?limit=${limit}${projectId ? `&projectId=${projectId}` : ""}`),
 };

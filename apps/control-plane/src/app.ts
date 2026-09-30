@@ -54,6 +54,7 @@ const createProjectBody = z.object({
   maxParallel: z.number().int().min(1).max(100).optional(),
   reviewAgents: z.array(z.string().min(1)).max(10).optional(),
   autoApproveOnAgentReview: z.boolean().optional(),
+  routingPolicy: z.enum(["balanced", "reliability", "cost"]).optional(),
 });
 
 const reviewPolicyBody = z.object({
@@ -86,7 +87,10 @@ const deliveryBody = z.object({
 const createTaskBody = z.object({
   title: z.string().min(1),
   objective: z.string().min(1),
+  /** An agent id, or "auto" to route by `requires`. */
   agent: z.string().min(1),
+  requires: z.array(z.string().min(1)).max(20).optional(),
+  fallbackAgents: z.array(z.string().min(1)).max(10).optional(),
   maxAttempts: z.number().int().min(1).max(10).optional(),
   dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
@@ -106,7 +110,15 @@ const capabilities = z.object({
 
 const registerRunnerBody = z.object({
   name: z.string().min(1),
-  agents: z.array(z.object({ id: z.string().min(1), adapter: z.string().min(1), capabilities })),
+  agents: z.array(
+    z.object({
+      id: z.string().min(1),
+      adapter: z.string().min(1),
+      capabilities,
+      skills: z.array(z.string().min(1)).max(50).optional(),
+      cost: z.enum(["low", "medium", "high"]).optional(),
+    }),
+  ),
 });
 
 const startExecutionBody = z.object({ workspace: z.string().min(1), branch: z.string().min(1) });
@@ -288,6 +300,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   // ---- agent registry & runner protocol -----------------------------------
 
   app.get("/runners", () => store.listRunners());
+  app.get("/agents/stats", (req) => store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId));
 
   app.post("/runners/register", role("runner"), async (req, reply) => {
     const { name, agents } = registerRunnerBody.parse(req.body);

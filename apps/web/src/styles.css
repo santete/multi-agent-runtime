@@ -904,3 +904,26 @@ details summary {
   display: grid;
   gap: 6px;
 }
+
+.table-wrap {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th,
+.table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+.stats-card {
+  margin-bottom: 16px;
+}

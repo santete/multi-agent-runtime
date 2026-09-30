@@ -6,19 +6,27 @@ import { GenericCliAdapter } from "@mar/adapter-generic-cli";
 import type { AgentAdapter } from "@mar/core";
 import { z } from "zod";
 
+/** Routing metadata common to every agent (spec §14-15). */
+const routing = {
+  skills: z.array(z.string().min(1)).default([]),
+  cost: z.enum(["low", "medium", "high"]).default("medium"),
+};
+
 const agentConfig = z.discriminatedUnion("adapter", [
-  z.object({ adapter: z.literal("claude-code"), executable: z.string().optional() }),
-  z.object({ adapter: z.literal("codex"), executable: z.string().optional() }),
+  z.object({ adapter: z.literal("claude-code"), executable: z.string().optional(), ...routing }),
+  z.object({ adapter: z.literal("codex"), executable: z.string().optional(), ...routing }),
   z.object({
     adapter: z.literal("antigravity"),
     executable: z.string().optional(),
     defaultTimeoutSeconds: z.number().int().positive().optional(),
+    ...routing,
   }),
   z.object({
     adapter: z.literal("generic-cli"),
     command: z.string().min(1),
     args: z.array(z.string()).optional(),
     promptViaStdin: z.boolean().optional(),
+    ...routing,
   }),
 ]);
 

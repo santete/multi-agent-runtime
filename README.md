@@ -78,11 +78,11 @@ curl -s localhost:7700/tasks/<taskId>/events
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`, `reviewAgents?`, `autoApproveOnAgentReview?`) |
+| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`, `reviewAgents?`, `autoApproveOnAgentReview?`, `routingPolicy?: "balanced" \| "reliability" \| "cost"`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
 | PUT | `/projects/:id/validation` | replace the project's validation steps |
 | PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
-| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`, `dependsOn?: [id or key]`) |
+| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `maxAttempts?`, `dependsOn?: [id or key]`); see [ADR-0012](docs/adr/0012-capability-routing.md) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
 | GET | `/projects/:id/graph` | task DAG (`nodes`, `edges`) |
 | POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
@@ -94,6 +94,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |
 | GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
 | GET | `/runners` | agent registry: runners, their agents and capabilities, online status, active executions |
+| GET | `/agents/stats?projectId=` | per-agent track record: runs, succeeded, failed, running, average duration, rework rate |
 | GET | `/me` | the calling user and role |
 | GET | `/stream?projectId=&after=` | live events (server-sent events) |
 | GET | `/events/recent?projectId=&limit=` | recent events, newest first |

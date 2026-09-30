@@ -9,8 +9,8 @@
   "policyHook": true,
   "agents": {
     "shell": { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{objective}"] },
-    "claude-code": { "adapter": "claude-code" },
-    "codex": { "adapter": "codex" },
+    "claude-code": { "adapter": "claude-code", "skills": ["typescript", "backend", "frontend", "review"], "cost": "high" },
+    "codex": { "adapter": "codex", "skills": ["typescript", "backend", "review"], "cost": "medium" },
     "antigravity": { "adapter": "antigravity", "executable": "C:/Users/<you>/AppData/Local/agy/bin/agy.exe" }
   }
 }
