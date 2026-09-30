@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { AntigravityAdapter } from "@mar/adapter-antigravity";
 import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
+import { CodexAdapter } from "@mar/adapter-codex";
 import { GenericCliAdapter } from "@mar/adapter-generic-cli";
 import type { AgentAdapter } from "@mar/core";
 import { z } from "zod";
 
 const agentConfig = z.discriminatedUnion("adapter", [
   z.object({ adapter: z.literal("claude-code"), executable: z.string().optional() }),
+  z.object({ adapter: z.literal("codex"), executable: z.string().optional() }),
   z.object({
     adapter: z.literal("antigravity"),
     executable: z.string().optional(),
@@ -53,6 +55,8 @@ export async function loadConfig(path: string): Promise<RunnerConfigInput> {
 
 export function createAdapter(config: AgentConfig): AgentAdapter {
   switch (config.adapter) {
+    case "codex":
+      return new CodexAdapter({ ...(config.executable && { executable: config.executable }) });
     case "claude-code":
       return new ClaudeCodeAdapter({ ...(config.executable && { executable: config.executable }) });
     case "antigravity":

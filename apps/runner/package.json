@@ -10,6 +10,7 @@
   "dependencies": {
     "@mar/adapter-antigravity": "workspace:*",
     "@mar/adapter-claude-code": "workspace:*",
+    "@mar/adapter-codex": "workspace:*",
     "@mar/adapter-generic-cli": "workspace:*",
     "@mar/core": "workspace:*",
     "zod": "^4.6.5"

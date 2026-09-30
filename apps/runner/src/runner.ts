@@ -238,7 +238,8 @@ export class Runner {
       ...(resumeSessionId && { resumeSessionId }),
       ...(adapter.capabilities.structuredOutput && { outputSchema: HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
-        adapter.capabilities.approval === "pre-tool-hook" && {
+        // Also for sandboxed agents: their hook works wherever the CLI fires it.
+        (adapter.capabilities.approval === "pre-tool-hook" || adapter.capabilities.approval === "sandbox") && {
           policyHook: { command: process.execPath, args: [POLICY_HOOK_SCRIPT] },
         }),
     };

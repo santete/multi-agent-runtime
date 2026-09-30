@@ -4,7 +4,7 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 
 | Khả năng | Claude Code CLI 2.1.284 | Antigravity CLI (`agy`) 1.2.13 | Codex CLI |
 |---|---|---|---|
-| Headless | `claude -p` (prompt qua stdin) | `agy -p "<prompt>"` | _chưa spike (ưu tiên sau)_ |
+| Headless | `claude -p` (prompt qua stdin) | `agy -p "<prompt>"` | `codex exec -` (prompt qua stdin) — xem mục Codex bên dưới |
 | Stream event | `--output-format stream-json --verbose` (NDJSON: `system/init`, `assistant`, `user`, `result`) | `--output-format stream-json` (NDJSON: `init`, `step_update`, `result`) | |
 | Session id | `session_id` ở `init` và `result` | `conversation_id` ở `init` và `result` | |
 | Resume | ✅ `--resume <session_id>` | ✅ `--conversation <id>` (hoặc `-c` cho lần gần nhất) | |
@@ -40,3 +40,18 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 - agy: `--sandbox` kết hợp `--dangerously-skip-permissions` (cần owner cho phép chạy).
 - agy: cách ly config riêng cho từng runner (thử override `USERPROFILE`/`HOME` và giữ auth).
 - ~~Claude: hook PreToolUse inject qua `--settings` chạy ở headless~~ → đã kiểm chứng ở M2.
+
+## Codex CLI 0.159.2 (spike 2026-09-30, Windows 11) — [ADR-0010](../adr/0010-codex-adapter.md)
+
+| Khả năng | Codex |
+|---|---|
+| Headless | `codex exec --json -` (JSONL: `thread.started`, `turn.started`, `item.started/completed`, `turn.completed`, `turn.failed`) |
+| Item types | `agent_message`, `command_execution` (command, aggregated_output, exit_code, status), `file_change` (changes[path, kind]), `mcp_tool_call`, `error` |
+| Session / resume | `thread_id`; `codex exec resume <id> -` ✅ (nhớ được ngữ cảnh) |
+| Structured output | `--output-schema <file>`; message cuối là JSON đúng schema |
+| Cách ly config | `--ignore-user-config` — **trên Windows phải kèm `-c windows.sandbox="elevated"`**, nếu không mọi lệnh bị từ chối mà exit vẫn 0 (openai/codex#42172) |
+| Sandbox | `sandbox_mode="workspace-write"`: ghi chỉ trong workspace, **không có mạng** (curl → 000) |
+| PreToolUse hook | Định dạng giống Claude Code (`hookSpecificOutput.permissionDecision`), matcher là **regex**, cần trust (`--dangerously-bypass-hook-trust`) — **không được gọi cho lệnh shell trên Windows** (openai/codex#24453); hook lỗi → fail-open |
+| Cost | Chỉ token (input, cached, output, reasoning), không có USD |
+| Auth | Đăng nhập ChatGPT (`codex login`) hoặc API key |
+| Binary trên Windows | `codex.cmd` (npm shim) → `node .../@openai/codex/bin/codex.js` |

@@ -353,6 +353,72 @@ describe("approval gateway", () => {
   });
 });
 
+describe("post-hoc audit of sandboxed agents (approval: sandbox)", () => {
+  const sandboxed: AgentDescriptor = {
+    id: "codex",
+    adapter: "codex",
+    capabilities: { pause: "checkpoint", resume: true, approval: "sandbox", structuredOutput: true, streaming: true, costReporting: false },
+  };
+
+  async function codexRun() {
+    const p = await project();
+    const t = (await call<TaskDto>("POST", `/projects/${p.id}/tasks`, { title: "c", objective: "o", agent: "codex" })).body;
+    const runnerId = (await call<{ runnerId: string }>("POST", "/runners/register", { name: "cx", agents: [sandboxed] })).body
+      .runnerId;
+    const c = (await claim(runnerId)).body;
+    await call("POST", `/executions/${c.execution.id}/start`, { workspace: "C:\\ws\\PAY-1", branch: "task/PAY-1" });
+    return { t, c };
+  }
+  const toolCall = (callId: string, tool: string, input: object) => ({ kind: "tool_call", callId, tool, input });
+  const complete = (c: ClaimResponse) =>
+    call<ExecutionDto>("POST", `/executions/${c.execution.id}/complete`, {
+      exitCode: 0,
+      terminal: { kind: "completed", sessionId: "th-1", success: true, deniedActions: [], result: "done" },
+    });
+  const audits = async (taskId: string) =>
+    (await call<EventsPage>("GET", `/tasks/${taskId}/events?limit=1000`)).body.events
+      .filter((e) => e.type === "ToolCallChecked")
+      .map((e) => [e.payload.decision, e.payload.audit]);
+
+  it("audits every tool call and lets a clean run through", async () => {
+    const { t, c } = await codexRun();
+    await call("POST", `/executions/${c.execution.id}/events`, {
+      events: [
+        toolCall("i1", "shell", { command: "git status --short" }),
+        toolCall("i2", "apply_patch", { paths: ["C:\\ws\\PAY-1\\src\\a.ts"] }),
+      ],
+    });
+    expect(await audits(t.id)).toEqual([
+      ["allow", true],
+      ["allow", true],
+    ]);
+    expect((await complete(c)).body.status).toBe("validating");
+  });
+
+  it("flags a policy violation the sandbox did not stop, so a human reviews the run", async () => {
+    const { t, c } = await codexRun();
+    await call("POST", `/executions/${c.execution.id}/events`, {
+      events: [toolCall("i1", "shell", { command: "cat .env" }), toolCall("i2", "apply_patch", { paths: ["C:\\elsewhere\\x.ts"] })],
+    });
+    expect(await audits(t.id)).toEqual([
+      ["deny", true],
+      ["deny", true],
+    ]);
+    expect((await complete(c)).body.status).toBe("needs_approval");
+    expect((await get(t.id)).state).toBe("WAITING_FOR_HUMAN");
+  });
+
+  it("does not audit agents whose hook gates calls beforehand", async () => {
+    const p = await project();
+    const t = await task(p.id, "claude task");
+    const r = await runner();
+    const c = (await claim(r)).body;
+    await call("POST", `/executions/${c.execution.id}/start`, { workspace: "C:\\ws", branch: "b" });
+    await call("POST", `/executions/${c.execution.id}/events`, { events: [toolCall("i1", "Bash", { command: "cat .env" })] });
+    expect(await audits(t.id)).toEqual([]);
+  });
+});
+
 describe("project parallelism limit", () => {
   it("does not hand out more working tasks of a project than maxParallel", async () => {
     const p = await project({ maxParallel: 1 });

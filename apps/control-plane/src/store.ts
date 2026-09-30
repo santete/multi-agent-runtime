@@ -625,7 +625,8 @@ export class Store {
 
   async appendAgentEvents(id: string, events: AgentEvent[]): Promise<void> {
     await this.db.tx(async (q) => {
-      const { task } = await this.lockExecution(q, id, ["running"]);
+      const { task, row } = await this.lockExecution(q, id, ["running"]);
+      const audit = await this.auditsToolCalls(q, row.runner_id, task.agent);
       for (const event of events) {
         if (event.kind === "session_started") {
           await q.query("update executions set session_id = $2 where id = $1", [id, event.sessionId]);
@@ -637,7 +638,44 @@ export class Store {
           executionId: id,
           payload: event as unknown as Record<string, unknown>,
         });
+        if (audit && event.kind === "tool_call") await this.auditToolCall(q, task, id, row.workspace, event);
       }
+    });
+  }
+
+  /** Agents whose tool calls cannot be gated beforehand (approval "sandbox") are audited afterwards. */
+  private async auditsToolCalls(q: Queryable, runnerId: string, agentId: string): Promise<boolean> {
+    const [runner] = await q.query<{ agents: AgentDescriptor[] }>("select agents from runners where id = $1", [runnerId]);
+    return runner?.agents.find((a) => a.id === agentId)?.capabilities.approval === "sandbox";
+  }
+
+  /**
+   * Post-hoc policy check of a call the agent already made. A denial is
+   * recorded like a hook denial, so the execution ends in needs_approval and
+   * a human looks at it; human-approved actions count as allowed.
+   */
+  private async auditToolCall(
+    q: Queryable,
+    task: TaskDto,
+    executionId: string,
+    workspace: string,
+    event: Extract<AgentEvent, { kind: "tool_call" }>,
+  ): Promise<void> {
+    const call = { tool: event.tool, input: event.input };
+    let verdict = evaluateToolCall(call, { workspace });
+    if (verdict.decision === "deny" && verdict.risk === "HIGH") {
+      const [approved] = await q.query(
+        "select id from approvals where task_id = $1 and action_key = $2 and status = 'approved' limit 1",
+        [task.id, approvalKey(call)],
+      );
+      if (approved) verdict = { ...verdict, decision: "allow", reason: `${verdict.reason} (approved by a human: ${approved.id})` };
+    }
+    await appendEvent(q, {
+      type: "ToolCallChecked",
+      projectId: task.projectId,
+      taskId: task.id,
+      executionId,
+      payload: { tool: event.tool, ...verdict, audit: true },
     });
   }
 
