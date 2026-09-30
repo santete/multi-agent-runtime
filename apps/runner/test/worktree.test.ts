@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WorktreeManager, git } from "../src/worktree.js";
+import { WorktreeManager, changedFiles, git } from "../src/worktree.js";
 import { createOriginRepo, tempDir } from "./helpers.js";
 
 let origin: Awaited<ReturnType<typeof tempDir>>;
@@ -51,6 +51,25 @@ describe("WorktreeManager", () => {
   it("fails clearly for an unreachable repository", async () => {
     const manager = new WorktreeManager(home.path);
     await expect(manager.prepare({ ...project, repoUrl: join(home.path, "missing") }, "PAY-1")).rejects.toThrow();
+  });
+});
+
+describe("changedFiles", () => {
+  it("lists modified, deleted, renamed and untracked files with their full paths", async () => {
+    await mkdir(join(origin.path, "src"));
+    await writeFile(join(origin.path, "src", "payments.js"), "a\n");
+    await writeFile(join(origin.path, "old.txt"), "o\n");
+    await git(origin.path, "add", ".");
+    await git(origin.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "files");
+
+    const ws = await new WorktreeManager(home.path).prepare(project, "PAY-9");
+    await writeFile(join(ws.path, "src", "payments.js"), "b\n"); // " M" — leading space in porcelain output
+    await git(ws.path, "mv", "old.txt", "renamed.txt");
+    await writeFile(join(ws.path, "README.md"), "changed\n");
+    await git(ws.path, "rm", "-q", "README.md", "--cached");
+    await writeFile(join(ws.path, "new.txt"), "n\n");
+
+    expect((await changedFiles(ws.path)).sort()).toEqual(["README.md", "new.txt", "renamed.txt", "src/payments.js"]);
   });
 });
 

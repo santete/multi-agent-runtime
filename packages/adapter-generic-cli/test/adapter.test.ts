@@ -5,16 +5,26 @@ describe("GenericCliAdapter", () => {
   it("substitutes the prompt into configured args", () => {
     const cmd = new GenericCliAdapter({ command: "bash", args: ["-c", "echo {prompt}"] }).buildCommand({
       workspace: "/ws",
-      prompt: "hello",
+      prompt: "hello", objective: "hello",
       permissionProfile: "edit",
     });
     expect(cmd).toEqual({ command: "bash", args: ["-c", "echo hello"], cwd: "/ws" });
   });
 
+  it("substitutes the bare objective for {objective}", () => {
+    const cmd = new GenericCliAdapter({ command: "bash", args: ["-c", "{objective}"] }).buildCommand({
+      workspace: "/ws",
+      prompt: "long prompt with context",
+      objective: "npm test",
+      permissionProfile: "edit",
+    });
+    expect(cmd.args).toEqual(["-c", "npm test"]);
+  });
+
   it("can deliver the prompt on stdin", () => {
     const cmd = new GenericCliAdapter({ command: "cat", args: [], promptViaStdin: true }).buildCommand({
       workspace: "/ws",
-      prompt: "hello",
+      prompt: "hello", objective: "hello",
       permissionProfile: "edit",
     });
     expect(cmd.stdin).toBe("hello");

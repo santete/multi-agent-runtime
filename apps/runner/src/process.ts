@@ -7,7 +7,7 @@ import { type ResolvedCommand, resolveCommand } from "./resolve.js";
  * Agents spawn their own children (tool shells, hooks). On Windows,
  * `child.kill()` only ends the top process, so kill the whole tree.
  */
-function killTree(pid: number | undefined, fallback: () => void): void {
+export function killTree(pid: number | undefined, fallback: () => void): void {
   if (process.platform !== "win32" || pid === undefined) return fallback();
   const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
   killer.on("error", fallback);
@@ -44,15 +44,21 @@ export function runAgentProcess(
       }
     };
 
+    const failBeforeStart = (reason: string) => {
+      const failed: ProcessOutcome["terminal"] = { kind: "failed", reason };
+      opts.onEvent(failed);
+      resolve({ exitCode: null, terminal: failed });
+    };
+    // Cancelled while the workspace was being prepared: an "abort" listener
+    // added now would never fire, so do not start the agent at all.
+    if (opts.signal?.aborted) return failBeforeStart("cancelled");
+
     const env = { ...process.env, ...spec.env };
     let resolved: ResolvedCommand;
     try {
       resolved = resolveCommand(spec.command, env);
     } catch (err) {
-      const failed: ProcessOutcome["terminal"] = { kind: "failed", reason: (err as Error).message };
-      opts.onEvent(failed);
-      resolve({ exitCode: null, terminal: failed });
-      return;
+      return failBeforeStart((err as Error).message);
     }
 
     const child = spawn(resolved.command, [...resolved.prefixArgs, ...spec.args], {

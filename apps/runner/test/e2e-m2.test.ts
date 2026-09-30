@@ -81,7 +81,7 @@ describe.runIf(process.platform === "win32")("M2: policy hook, cancel, lease + r
       if (done(v)) return v;
       await new Promise((r) => setTimeout(r, 50));
     }
-    throw new Error(`timed out waiting for ${what}`);
+    throw new Error(`timed out waiting for ${what}; last value: ${JSON.stringify(await fn()).slice(0, 600)}`);
   }
 
   const toolChecks = async (taskId: string) =>
@@ -95,7 +95,7 @@ describe.runIf(process.platform === "win32")("M2: policy hook, cancel, lease + r
     await runner.register();
     expect(await runner.runOnce()).toBe(true);
 
-    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("VALIDATING");
+    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("REVIEW");
     expect(await toolChecks(task.id)).toEqual([{ decision: "allow", risk: "LOW" }]);
     const [execution] = await api<ExecutionDto[]>(`/tasks/${task.id}/executions`);
     expect(execution).toMatchObject({ status: "succeeded", sessionId: "fake-session-1" });
@@ -156,6 +156,6 @@ describe.runIf(process.platform === "win32")("M2: policy hook, cancel, lease + r
     expect(executions.map((e) => e.status)).toEqual(["lost", "succeeded"]);
     expect(executions[1]).toMatchObject({ attempt: 2, sessionId: "sess-before-crash" });
     expect(executions[1]!.result).toMatchObject({ result: "resumed sess-before-crash" });
-    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("VALIDATING");
+    expect((await api<TaskDto>(`/tasks/${task.id}`)).state).toBe("REVIEW");
   });
 });

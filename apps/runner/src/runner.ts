@@ -1,9 +1,19 @@
 import { fileURLToPath } from "node:url";
-import type { AgentAdapter, AgentDescriptor, AgentEvent, AgentRunRequest, ClaimResponse } from "@mar/core";
+import {
+  type AgentAdapter,
+  type AgentDescriptor,
+  type AgentEvent,
+  type AgentRunRequest,
+  type ClaimResponse,
+  HANDOFF_SCHEMA,
+  toHandoff,
+} from "@mar/core";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
-import { WorktreeManager } from "./worktree.js";
+import { buildPrompt, contextFiles } from "./context.js";
+import { runValidation } from "./validator.js";
+import { WorktreeManager, commitAndPush } from "./worktree.js";
 
 export interface RunnerLogger {
   info(msg: string, data?: object): void;
@@ -57,14 +67,6 @@ class EventShipper {
     await this.flush();
     if (this.error) throw this.error;
   }
-}
-
-function resumePrompt(objective: string): string {
-  return (
-    "Your previous run on this task was interrupted before it finished. " +
-    "Check the current state of the workspace, then continue and complete the task.\n\n" +
-    objective
-  );
 }
 
 export class Runner {
@@ -157,6 +159,7 @@ export class Runner {
     await this.client.complete(executionId, { exitCode: null, terminal: { kind: "failed", reason } });
   }
 
+
   private async execute(claim: ClaimResponse): Promise<void> {
     const { execution, task, project } = claim;
     const log = { task: task.key, execution: execution.id, attempt: execution.attempt };
@@ -184,7 +187,8 @@ export class Runner {
 
     const request: AgentRunRequest = {
       workspace: workspace.path,
-      prompt: resumeSessionId ? resumePrompt(task.objective) : task.objective,
+      prompt: buildPrompt(claim, Boolean(resumeSessionId)),
+      objective: task.objective,
       permissionProfile: "edit",
       timeoutSeconds: this.config.timeoutSeconds,
       env: {
@@ -193,6 +197,7 @@ export class Runner {
         MAR_EXECUTION_TOKEN: claim.executionToken,
       },
       ...(resumeSessionId && { resumeSessionId }),
+      ...(adapter.capabilities.structuredOutput && { outputSchema: HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
         adapter.capabilities.approval === "pre-tool-hook" && {
           policyHook: { command: process.execPath, args: [POLICY_HOOK_SCRIPT] },
@@ -202,7 +207,7 @@ export class Runner {
     await this.client.start(execution.id, workspace.path, workspace.branch);
     this.log.info("execution started", { ...log, agent: task.agent, workspace: workspace.path, resumeSessionId });
 
-    const shipper = new EventShipper(this.client, execution.id);
+    // The lease covers the whole execution: agent run, validation and delivery.
     const abort = new AbortController();
     const heartbeat = setInterval(() => {
       this.client
@@ -216,41 +221,94 @@ export class Runner {
         .catch((err) => this.log.error("heartbeat failed", { ...log, error: String(err) }));
     }, this.config.heartbeatIntervalMs);
 
-    let outcome: ProcessOutcome;
     try {
-      const files = adapter.workspaceFiles?.(request) ?? [];
-      const { modifiedTracked } = await this.worktrees.writeFiles(workspace.path, files);
-      if (modifiedTracked.length) {
-        shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${modifiedTracked.join(", ")}` });
+      const { outcome, restore } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal);
+      let after;
+      try {
+        after = await this.client.complete(execution.id, outcome);
+      } catch (err) {
+        // 409: the control plane already gave up on this execution (lease expired).
+        if (err instanceof ControlPlaneError && err.status === 409) {
+          this.log.error("execution was no longer active when the agent finished", { ...log, error: err.body });
+          return;
+        }
+        throw err;
+      }
+      this.log.info("agent finished", { ...log, exitCode: outcome.exitCode, status: after.status });
+      if (after.status !== "validating") return;
+
+      const report = await runValidation(workspace.path, project.validation, abort.signal);
+      const { deliver } = await this.client.validation(execution.id, report);
+      this.log.info("validation finished", { ...log, passed: report.passed, deliver });
+      if (!deliver) return;
+
+      await this.deliver(claim, workspace, outcome, restore);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
+  private async runAgent(
+    claim: ClaimResponse,
+    adapter: AgentAdapter,
+    request: AgentRunRequest,
+    worktree: string,
+    signal: AbortSignal,
+  ): Promise<{ outcome: ProcessOutcome; restore: string[] }> {
+    const shipper = new EventShipper(this.client, claim.execution.id);
+    let outcome: ProcessOutcome;
+    let restore: string[] = [];
+    try {
+      const files = [...contextFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
+      restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
+      if (restore.length) {
+        shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });
       }
       outcome = await runAgentProcess(adapter.buildCommand(request), adapter.createParser(), {
         timeoutMs: this.config.timeoutSeconds * 1000,
-        signal: abort.signal,
+        signal,
         onEvent: (e) => shipper.push(e),
       });
     } catch (err) {
       outcome = { exitCode: null, terminal: { kind: "failed", reason: `runner error: ${String(err)}` } };
       shipper.push(outcome.terminal);
-    } finally {
-      clearInterval(heartbeat);
     }
-
     try {
       await shipper.close();
     } catch (err) {
-      this.log.error("some agent events could not be shipped", { ...log, error: String(err) });
+      this.log.error("some agent events could not be shipped", { execution: claim.execution.id, error: String(err) });
     }
+    return { outcome, restore };
+  }
 
+  /** Commits and pushes the validated work, then asks the control plane to open the pull request. */
+  private async deliver(
+    { execution, task }: ClaimResponse,
+    workspace: { path: string; branch: string },
+    outcome: ProcessOutcome,
+    restore: string[],
+  ): Promise<void> {
+    const log = { task: task.key, execution: execution.id };
+    const summary = outcome.terminal.kind === "completed" ? toHandoff(outcome.terminal.result).summary : "";
+    let commit;
     try {
-      await this.client.complete(execution.id, outcome);
+      commit = await commitAndPush(workspace.path, {
+        branch: workspace.branch,
+        author: this.config.gitAuthor,
+        restore,
+        message: `${task.key}: ${task.title}\n\n${summary}\n\nAgent: ${task.agent}\nExecution: ${execution.id}`.trim(),
+      });
     } catch (err) {
-      // 409: the control plane already gave up on this execution (lease expired).
-      if (err instanceof ControlPlaneError && err.status === 409) {
-        this.log.error("execution was no longer active when it finished", { ...log, error: err.body });
-        return;
-      }
-      throw err;
+      this.log.error("delivery failed", { ...log, error: String(err) });
+      await this.client.delivery(execution.id, {
+        branch: workspace.branch,
+        commitSha: null,
+        changedFiles: [],
+        error: String(err).slice(0, 4000),
+      });
+      return;
     }
-    this.log.info("execution finished", { ...log, exitCode: outcome.exitCode, terminal: outcome.terminal.kind });
+    const { pullRequest } = await this.client.delivery(execution.id, { branch: workspace.branch, ...commit });
+    this.log.info("delivered", { ...log, commit: commit.commitSha, pullRequest: pullRequest?.url ?? null });
   }
 }

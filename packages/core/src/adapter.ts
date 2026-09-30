@@ -34,7 +34,10 @@ export type PermissionProfile =
 export interface AgentRunRequest {
   /** Absolute path of the task workspace (git worktree). */
   workspace: string;
+  /** Full instruction for an LLM agent (objective plus pointers to the task context). */
   prompt: string;
+  /** The task objective alone, for tools that are not LLM agents (e.g. a shell command). */
+  objective: string;
   /** Resume an earlier agent session instead of starting a new one. */
   resumeSessionId?: string;
   model?: string;
@@ -60,9 +63,9 @@ export interface PolicyHookSpec {
 export interface WorkspaceFile {
   /** Path relative to the workspace root, with forward slashes. */
   path: string;
-  /** Written as JSON. */
-  content: object;
-  /** Merge top-level keys into an existing JSON file instead of replacing it. */
+  /** An object is written as JSON; a string is written verbatim. */
+  content: object | string;
+  /** Merge top-level keys into an existing JSON file instead of replacing it (object content only). */
   mergeJson: boolean;
 }
 

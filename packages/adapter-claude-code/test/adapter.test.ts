@@ -15,7 +15,7 @@ describe("ClaudeCodeAdapter.buildCommand", () => {
   it("builds an isolated headless command with the prompt on stdin", () => {
     const cmd = new ClaudeCodeAdapter({ settings: { hooks: {} } }).buildCommand({
       workspace: "/ws/TASK-1",
-      prompt: "Implement the refund API",
+      prompt: "Implement the refund API", objective: "Implement the refund API",
       permissionProfile: "edit",
       resumeSessionId: "abc",
       outputSchema: { type: "object" },
@@ -35,7 +35,7 @@ describe("ClaudeCodeAdapter.buildCommand", () => {
   it("injects the policy hook through --settings, merged with configured settings", () => {
     const cmd = new ClaudeCodeAdapter({ settings: { model: "x" } }).buildCommand({
       workspace: "/ws",
-      prompt: "x",
+      prompt: "x", objective: "x",
       permissionProfile: "edit",
       env: { MAR_EXECUTION_ID: "e1" },
       policyHook: { command: "node", args: ["/hook.mjs"] },
@@ -53,12 +53,12 @@ describe("ClaudeCodeAdapter.buildCommand", () => {
   });
 
   it("omits --settings when there is nothing to inject", () => {
-    const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", permissionProfile: "edit" });
+    const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", objective: "x", permissionProfile: "edit" });
     expect(cmd.args).not.toContain("--settings");
   });
 
   it("uses plan mode for read-only runs", () => {
-    const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", permissionProfile: "read-only" });
+    const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", objective: "x", permissionProfile: "read-only" });
     expect(cmd.args[cmd.args.indexOf("--permission-mode") + 1]).toBe("plan");
   });
 });

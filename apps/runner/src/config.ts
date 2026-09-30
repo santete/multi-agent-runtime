@@ -33,6 +33,10 @@ export const runnerConfig = z.object({
   timeoutSeconds: z.number().int().positive().default(1800),
   /** Install the platform PreToolUse policy hook into agents that support it. */
   policyHook: z.boolean().default(true),
+  /** Author of the commits the runner makes for delivered tasks. */
+  gitAuthor: z
+    .object({ name: z.string().min(1), email: z.string().min(3) })
+    .default({ name: "multi-agent-runtime", email: "mar-bot@users.noreply.github.com" }),
   /** Logical agent id (what tasks ask for) -> how this machine runs it. */
   agents: z.record(z.string(), agentConfig),
 });
