@@ -542,8 +542,11 @@ legend {
   color: var(--muted);
 }
 .event-text {
+  flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- project board ---- */
@@ -571,7 +574,7 @@ legend {
 .board {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(210px, 1fr);
+  grid-auto-columns: minmax(150px, 1fr);
   gap: 12px;
   overflow-x: auto;
   padding-bottom: 8px;

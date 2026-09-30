@@ -89,7 +89,13 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             {events ? (
               <ol className="timeline">
                 {events.events
-                  .filter((e) => e.type !== "AgentEvent" && e.type !== "ArtifactCreated")
+                  // Allowed tool calls are in the agent console; the timeline keeps what matters.
+                  .filter(
+                    (e) =>
+                      e.type !== "AgentEvent" &&
+                      e.type !== "ArtifactCreated" &&
+                      !(e.type === "ToolCallChecked" && e.payload.decision === "allow"),
+                  )
                   .map((e) => (
                     <EventRow key={e.id} event={e} showTask={false} />
                   ))}

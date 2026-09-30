@@ -5,14 +5,15 @@ import { describeEvent, timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
 import { Empty, ErrorBox, Loading } from "./ui.js";
 
-/** Noisy per-step events are left to the agent console. */
+/** Noisy per-step events (and allowed tool calls) are left to the agent console. */
 const HIDDEN = new Set(["AgentEvent", "ArtifactCreated", "ExecutionStarted"]);
+const shown = (e: EventDto) => !HIDDEN.has(e.type) && !(e.type === "ToolCallChecked" && e.payload.decision === "allow");
 
 export function ActivityFeed({ projectId, limit = 40 }: { projectId?: string; limit?: number }) {
   const [events, error] = useLiveQuery(
-    async () => (await api.recentEvents(limit * 3, projectId)).filter((e) => !HIDDEN.has(e.type)).slice(0, limit),
+    async () => (await api.recentEvents(limit * 5, projectId)).filter(shown).slice(0, limit),
     [projectId, limit],
-    (e) => !HIDDEN.has(e.type) && (!projectId || e.projectId === projectId),
+    (e) => shown(e) && (!projectId || e.projectId === projectId),
   );
   if (error) return <ErrorBox error={error} />;
   if (!events) return <Loading />;
@@ -37,7 +38,9 @@ export function EventRow({ event, showTask = true }: { event: EventDto; showTask
         </a>
       )}
       <span className="event-type">{event.type}</span>
-      <span className="event-text">{describeEvent(event)}</span>
+      <span className="event-text" title={describeEvent(event)}>
+        {describeEvent(event)}
+      </span>
     </li>
   );
 }
