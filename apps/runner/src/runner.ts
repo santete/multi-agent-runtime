@@ -11,9 +11,9 @@ import {
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
-import { buildPrompt, contextFiles } from "./context.js";
+import { type ContextExtras, buildPrompt, contextFiles } from "./context.js";
 import { runValidation } from "./validator.js";
-import { WorktreeManager, commitAndPush } from "./worktree.js";
+import { WorktreeManager, commitAndPush, mergeBase } from "./worktree.js";
 
 export interface RunnerLogger {
   info(msg: string, data?: object): void;
@@ -259,7 +259,21 @@ export class Runner {
     let outcome: ProcessOutcome;
     let restore: string[] = [];
     try {
-      const files = [...contextFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
+      // Rework after a merge conflict: bring the latest base branch in first;
+      // the agent resolves whatever conflicts remain.
+      let extras: ContextExtras = {};
+      const base = claim.rework?.kind === "merge_conflict" ? claim.rework.baseBranch : undefined;
+      if (base) {
+        const { conflicts } = await mergeBase(worktree, base, this.config.gitAuthor);
+        extras = { conflicts };
+        shipper.push({
+          kind: "diagnostic",
+          text: conflicts.length
+            ? `runner merged origin/${base}: conflicts in ${conflicts.join(", ")}`
+            : `runner merged origin/${base} cleanly`,
+        });
+      }
+      const files = [...contextFiles(claim, extras), ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {
         shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });

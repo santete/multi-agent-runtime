@@ -9,6 +9,21 @@ export interface OpenPullRequest {
   body: string;
 }
 
+export interface MergePullRequest {
+  repoUrl: string;
+  number: number;
+  /** Branch to delete after a successful merge. */
+  head: string;
+  commitTitle: string;
+}
+
+export type MergeResult =
+  | { status: "merged"; sha: string | null }
+  /** The branch conflicts with the base: the task needs rework. */
+  | { status: "conflict"; message: string }
+  /** Not decidable yet (e.g. GitHub still computing mergeability): try again later. */
+  | { status: "pending"; message: string };
+
 /**
  * Hosting provider the control plane uses to deliver work (ADR-0002: only
  * the platform talks to GitHub; agents never hold credentials).
@@ -16,6 +31,8 @@ export interface OpenPullRequest {
 export interface GitProvider {
   /** Returns null when this provider does not handle the repository. */
   openPullRequest(req: OpenPullRequest): Promise<PullRequestRef | null>;
+  /** Idempotent: an already merged pull request reports "merged". */
+  mergePullRequest(req: MergePullRequest): Promise<MergeResult>;
 }
 
 export class GitProviderError extends Error {
@@ -61,6 +78,33 @@ export class GitHubProvider implements GitProvider {
       if (pr) return toRef(pr);
     }
     throw new GitProviderError(`GitHub ${created.status}: ${JSON.stringify(created.body).slice(0, 500)}`);
+  }
+
+  async mergePullRequest(req: MergePullRequest): Promise<MergeResult> {
+    const repo = parseGitHubRepo(req.repoUrl);
+    if (!repo) throw new GitProviderError(`not a GitHub repository: ${req.repoUrl}`);
+    const base = `${this.apiBase}/repos/${repo.owner}/${repo.repo}`;
+
+    const pr = await this.call("GET", `${base}/pulls/${req.number}`);
+    if (pr.status !== 200) throw new GitProviderError(`GitHub ${pr.status} reading PR #${req.number}`);
+    if (pr.body.merged) return { status: "merged", sha: pr.body.merge_commit_sha ?? null };
+    if (pr.body.state !== "open") throw new GitProviderError(`PR #${req.number} is ${pr.body.state}`);
+    if (pr.body.mergeable === false) return { status: "conflict", message: `PR #${req.number} has conflicts with ${pr.body.base?.ref}` };
+    if (pr.body.mergeable == null) return { status: "pending", message: "GitHub is still computing mergeability" };
+
+    const merged = await this.call("PUT", `${base}/pulls/${req.number}/merge`, {
+      merge_method: "squash",
+      commit_title: req.commitTitle,
+    });
+    if (merged.status === 200) {
+      // Best effort: the task branch is no longer needed.
+      await this.call("DELETE", `${base}/git/refs/heads/${req.head}`).catch(() => undefined);
+      return { status: "merged", sha: merged.body?.sha ?? null };
+    }
+    // 405: not mergeable (conflict or checks); 409: head changed while merging.
+    if (merged.status === 405) return { status: "conflict", message: merged.body?.message ?? "not mergeable" };
+    if (merged.status === 409) return { status: "pending", message: merged.body?.message ?? "head changed" };
+    throw new GitProviderError(`GitHub ${merged.status}: ${JSON.stringify(merged.body).slice(0, 500)}`);
   }
 
   private async call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {

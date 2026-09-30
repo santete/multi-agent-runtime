@@ -81,6 +81,19 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - Phát hiện khi chạy thật và đã sửa: danh sách file đổi mất ký tự đầu (do `trim()` output porcelain); cancel đến trước khi agent kịp spawn thì bị bỏ qua (lỗi có từ M2)
 - Chưa làm (M4): merge PR và merge queue, dependency giữa các task (task sau phải nhìn thấy thay đổi của task trước)
 
+### M4 DAG & Approval — trạng thái ✅ ([ADR-0008](adr/0008-dag-approvals-merge-queue.md))
+
+- [x] Task DAG: `dependsOn` (id/key, cùng project, không thể có chu trình), task chờ ở `CREATED` tới khi dependency đã merge, tự mở khóa; `GET /projects/:id/graph`
+- [x] Shared context: handoff của dependency được đưa vào `DEPENDENCIES.md`
+- [x] Chạy song song có giới hạn: `maxParallel` theo project cộng `maxConcurrent` theo runner
+- [x] Approval gateway: action HIGH tạo approval request → `WAITING_FOR_HUMAN` → approve/reject → requeue kèm quyết định + resume; action đã duyệt được phép (khớp theo `approvalKey`); CRITICAL vẫn deny cứng; `POST /tasks/:id/retry`
+- [x] Review: `POST /tasks/:id/review` approve/reject (reject → rework kèm comment)
+- [x] Merge queue: mỗi project merge tuần tự; GitHub squash merge + xóa branch; conflict → rework (runner merge base, agent resolve, validation kiểm tra marker conflict); lỗi khác → retry rồi `BLOCKED`
+- [x] Worktree dựng từ branch task đã có trên remote nếu có (rework trên máy khác)
+- [x] E2E với git thật: 2 nhánh song song, merge conflict thật → rework → resolve → merge, task phụ thuộc chạy trên base đã có cả hai thay đổi
+- [x] **Demo thật** (tiêu chí xong của M4) trên `santete/mar-sandbox`: DAG 4 task PAY-1 → (PAY-2 ∥ PAY-3) → PAY-4, 1 lần approval (`curl`), 4 PR (#3–#6) được merge tự động theo thứ tự, `main` có 32/32 test pass, khoảng $1.00
+- Chưa làm (M5 / Phase 2): UI, phân quyền người duyệt theo mức rủi ro, merge queue re-validate trên base mới, dọn worktree khi task `COMPLETED`
+
 | Milestone | Nội dung | Tiêu chí xong |
 |---|---|---|
 | **M1 Walking skeleton** | `apps/control-plane` (Fastify + Postgres + migrations), Project/Task CRUD, event store append-only, `apps/runner` đăng ký với control plane, `GenericCliAdapter`, worktree manager | Tạo task qua API, runner chạy lệnh trong worktree riêng, log và event hiện qua API |

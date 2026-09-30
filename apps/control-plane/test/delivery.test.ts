@@ -17,6 +17,9 @@ const provider: GitProvider = {
     opened.push(req);
     return { url: `https://github.com/o/r/pull/${opened.length}`, number: opened.length };
   },
+  async mergePullRequest() {
+    return { status: "merged", sha: null };
+  },
 };
 
 beforeAll(async () => {
@@ -26,7 +29,7 @@ beforeAll(async () => {
 afterAll(() => db.close());
 
 beforeEach(async () => {
-  await db.query("truncate events, artifacts, executions, tasks, runners, projects restart identity cascade");
+  await db.query("truncate events, approvals, artifacts, executions, tasks, runners, projects restart identity cascade");
   store = new Store(db, { gitProvider: provider, leaseSeconds: 0.05 });
   app = buildApp(store);
   opened.length = 0;
@@ -154,7 +157,7 @@ describe("validation and delivery", () => {
     expect(await store.sweep()).toMatchObject({ requeued: 1 });
     const retry = (await call<ClaimResponse>("POST", `/runners/${runnerId}/claim`)).body;
     expect(retry.execution.attempt).toBe(2);
-    expect(retry.rework).toEqual({ attempt: 1, reason: "validation failed: test", validation: failing });
+    expect(retry.rework).toEqual({ kind: "validation", attempt: 1, reason: "validation failed: test", validation: failing });
     expect(retry.resume).toEqual({ sessionId: "s-1", runnerId });
   });
 

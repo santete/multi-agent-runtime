@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ValidationReport, ValidationStep, ValidationStepResult } from "@mar/core";
 import { killTree } from "./process.js";
-import { changedFiles } from "./worktree.js";
+import { changedFiles, conflictedFiles } from "./worktree.js";
 
 const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
 const TAIL_LINES = 60;
@@ -60,12 +62,46 @@ function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal): Promi
   });
 }
 
-/** Runs all steps in order, stopping at the first failure. */
+const CONFLICT_MARKER = /^(<{7} |={7}$|>{7} )/m;
+
+/** Files from an in-progress merge that still contain conflict markers. */
+async function unresolvedConflicts(worktree: string): Promise<string[]> {
+  const files = await conflictedFiles(worktree);
+  const unresolved: string[] = [];
+  for (const file of files) {
+    const text = await readFile(join(worktree, file), "utf8").catch(() => "");
+    if (CONFLICT_MARKER.test(text)) unresolved.push(file);
+  }
+  return unresolved;
+}
+
+/**
+ * Runs all steps in order, stopping at the first failure. A merge with
+ * unresolved conflict markers fails before any project step runs.
+ */
 export async function runValidation(
   worktree: string,
   steps: ValidationStep[],
   signal?: AbortSignal,
 ): Promise<ValidationReport> {
+  const unresolved = await unresolvedConflicts(worktree);
+  if (unresolved.length) {
+    return {
+      passed: false,
+      steps: [
+        {
+          name: "merge-conflicts",
+          command: "(runner) check for conflict markers",
+          passed: false,
+          exitCode: null,
+          durationMs: 0,
+          outputTail: `Unresolved conflict markers in:\n${unresolved.join("\n")}`,
+        },
+      ],
+      changedFiles: await changedFiles(worktree),
+    };
+  }
+
   const results: ValidationStepResult[] = [];
   for (const step of steps) {
     if (signal?.aborted) break;

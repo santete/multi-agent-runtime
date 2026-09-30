@@ -109,6 +109,17 @@ function segments(command: string): string[] {
   return command.split(/&&|\|\||;|\n/).map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * Identity of a call for human approvals: the same command approved once is
+ * allowed again even if the agent switches shell tools (Bash vs PowerShell).
+ */
+export function approvalKey(call: ToolCall): string {
+  const tool = call.tool.toLowerCase();
+  if (SHELL_TOOLS.has(tool)) return `shell:${commandOf(call.input).trim()}`;
+  const paths = pathsOf(call.input);
+  return `${WRITE_TOOLS.has(tool) ? "write" : tool}:${paths.join(",")}`;
+}
+
 export function evaluateToolCall(call: ToolCall, ctx: PolicyContext): PolicyVerdict {
   const tool = call.tool.toLowerCase();
 
