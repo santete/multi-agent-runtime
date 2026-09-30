@@ -58,3 +58,4 @@ Chạy trên `mar-sandbox` với một workflow GitHub Actions gồm `npm test` 
   - Nếu thay đổi đã validate vẫn chạm cấu hình CI (ví dụ ghi qua script), thì `autoApproveOnAgentReview` **không** tự approve (event `AutoApprovalSkipped`), và PR có cảnh báo `[!WARNING]` ở đầu.
   - Brief của rework `ci` ghi rõ: "sửa code, không sửa hay nới lỏng check".
 - **Phát hiện 2 — cancel lúc đang merge:** cancel được gửi khi task đang `MERGING`, trong lúc GitHub đã merge PR, nên task bị ghi `CANCELLED` dù PR đã được merge. Giờ cancel ở trạng thái `MERGING` bị từ chối (409), và UI ẩn nút Cancel ở trạng thái này.
+- **Kiểm chứng biện pháp:** giao cho Codex một task yêu cầu sửa workflow (LP-10). Audit đánh dấu `apply_patch` vào `.github/workflows/ci.yml` là HIGH ("changing CI configuration"), task chuyển sang `WAITING_FOR_HUMAN`, và không có gì được push.
