@@ -28,6 +28,9 @@ describe("task state machine", () => {
     expect(transition("VALIDATING", "validation_failed")).toBe("REWORK");
     expect(transition("REVIEW", "review_rejected")).toBe("REWORK");
     expect(transition("MERGING", "merge_conflict")).toBe("REWORK");
+    expect(transition("MERGING", "base_changed")).toBe("REWORK");
+    expect(transition("MERGING", "ci_failed")).toBe("REWORK");
+    expect(() => transition("REVIEW", "ci_failed")).toThrow();
     expect(transition("REWORK", "rework_started")).toBe("RUNNING");
   });
 

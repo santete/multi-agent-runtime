@@ -178,8 +178,8 @@ describe("review and merge queue", () => {
     await call("POST", `/tasks/${a.id}/review`, { decision: "approve" });
     await call("POST", `/tasks/${b.id}/review`, { decision: "approve" });
 
-    expect(await store.processMergeQueue()).toEqual({ merged: 1, conflicts: 0, failed: 0 });
-    expect(await store.processMergeQueue()).toEqual({ merged: 1, conflicts: 0, failed: 0 });
+    expect(await store.processMergeQueue()).toMatchObject({ merged: 1, conflicts: 0, failed: 0 });
+    expect(await store.processMergeQueue()).toMatchObject({ merged: 1, conflicts: 0, failed: 0 });
     expect(merged).toEqual([1, 2]);
     expect([(await get(a.id)).state, (await get(b.id)).state]).toEqual(["COMPLETED", "COMPLETED"]);
     const types = (await call<EventsPage>("GET", `/tasks/${a.id}/events?limit=1000`)).body.events.map((e) => e.type);
@@ -217,7 +217,7 @@ describe("review and merge queue", () => {
     await deliver((await claim(r)).body);
     mergeResults = [{ status: "conflict", message: "PR #1 has conflicts with main" }];
     await call("POST", `/tasks/${t.id}/review`, { decision: "approve" });
-    expect(await store.processMergeQueue()).toEqual({ merged: 0, conflicts: 1, failed: 0 });
+    expect(await store.processMergeQueue()).toMatchObject({ merged: 0, conflicts: 1, failed: 0 });
     expect((await get(t.id)).state).toBe("REWORK");
     await store.sweep();
     expect((await claim(r)).body.rework).toEqual({

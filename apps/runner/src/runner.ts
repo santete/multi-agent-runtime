@@ -287,10 +287,10 @@ export class Runner {
     }, this.config.heartbeatIntervalMs);
 
     try {
-      const { outcome, restore } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff);
+      const { outcome, restore, revalidation } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff);
       let after;
       try {
-        after = await this.client.complete(execution.id, outcome);
+        after = await this.client.complete(execution.id, { ...outcome, ...(revalidation && { revalidation }) });
       } catch (err) {
         // 409: the control plane already gave up on this execution (lease expired).
         if (err instanceof ControlPlaneError && err.status === 409) {
@@ -320,15 +320,17 @@ export class Runner {
     worktree: string,
     signal: AbortSignal,
     reviewDiff = "",
-  ): Promise<{ outcome: ProcessOutcome; restore: string[] }> {
+  ): Promise<{ outcome: ProcessOutcome; restore: string[]; revalidation?: boolean }> {
     const shipper = new EventShipper(this.client, claim.execution.id);
     let outcome: ProcessOutcome;
     let restore: string[] = [];
+    let revalidation = false;
     try {
-      // Rework after a merge conflict: bring the latest base branch in first;
-      // the agent resolves whatever conflicts remain.
+      // Rework after a merge conflict or a moved base: bring the latest base
+      // branch in first; the agent resolves whatever conflicts remain.
       let extras: ContextExtras = {};
-      const base = claim.rework?.kind === "merge_conflict" ? claim.rework.baseBranch : undefined;
+      const kind = claim.rework?.kind;
+      const base = kind === "merge_conflict" || kind === "base_changed" ? claim.rework?.baseBranch : undefined;
       if (base) {
         const { conflicts } = await mergeBase(worktree, base, this.config.gitAuthor);
         extras = { conflicts };
@@ -338,6 +340,24 @@ export class Runner {
             ? `runner merged origin/${base}: conflicts in ${conflicts.join(", ")}`
             : `runner merged origin/${base} cleanly`,
         });
+      }
+      // A moved base that merges cleanly needs no agent: only the validation runs again.
+      if (kind === "base_changed" && !extras.conflicts?.length) {
+        revalidation = true;
+        const summary = `Merged the latest ${base} into the branch; re-validating without agent changes.`;
+        shipper.push({ kind: "diagnostic", text: summary });
+        outcome = {
+          exitCode: 0,
+          terminal: {
+            kind: "completed",
+            sessionId: "",
+            success: true,
+            deniedActions: [],
+            result: { summary, changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [] },
+          },
+        };
+        await shipper.close().catch(() => undefined);
+        return { outcome, restore, revalidation };
       }
       const context = claim.review
         ? reviewFiles(claim.review, reviewDiff)
@@ -363,7 +383,7 @@ export class Runner {
     } catch (err) {
       this.log.error("some agent events could not be shipped", { execution: claim.execution.id, error: String(err) });
     }
-    return { outcome, restore };
+    return { outcome, restore, ...(revalidation && { revalidation }) };
   }
 
   /** Commits and pushes the validated work, then asks the control plane to open the pull request. */

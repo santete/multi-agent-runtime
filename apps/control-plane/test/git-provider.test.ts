@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubProvider, GitProviderError, parseGitHubRepo } from "../src/git-provider.js";
+import { checksState, GitHubProvider, GitProviderError, parseGitHubRepo } from "../src/git-provider.js";
 
 describe("parseGitHubRepo", () => {
   it.each([
@@ -71,5 +71,66 @@ describe("GitHubProvider", () => {
   it("raises on other errors", async () => {
     const f = fakeFetch([{ status: 403, body: { message: "Resource not accessible" } }]);
     await expect(new GitHubProvider("t", "x", f.impl).openPullRequest(req)).rejects.toThrow(GitProviderError);
+  });
+});
+
+describe("pull request status", () => {
+  it("reports whether the base moved and combines check runs with commit statuses", async () => {
+    const f = fakeFetch([
+      { status: 200, body: { head: { sha: "h1" }, base: { ref: "main" } } },
+      { status: 200, body: { behind_by: 2, ahead_by: 1 } },
+      {
+        status: 200,
+        body: {
+          check_runs: [
+            { id: 11, name: "test", status: "completed", conclusion: "failure", html_url: "https://ci/1", output: { title: "1 failing", summary: "refund rounds", annotations_count: 2 } },
+            { name: "lint", status: "completed", conclusion: "skipped", html_url: null, output: {} },
+            { name: "e2e", status: "in_progress", conclusion: null, html_url: null, output: {} },
+          ],
+        },
+      },
+      { status: 200, body: { statuses: [{ context: "deploy/preview", state: "success", target_url: "https://p", description: "ok" }] } },
+      {
+        status: 200,
+        body: [
+          { path: ".github", start_line: 1, annotation_level: "failure", message: "Process completed with exit code 1." },
+          { path: "src/payments.js", start_line: 12, annotation_level: "failure", message: "TODO comments are not allowed" },
+        ],
+      },
+    ]);
+    const status = await new GitHubProvider("t", "https://api.test", f.impl).pullRequestStatus({ repoUrl: "https://github.com/o/r", number: 5 });
+    expect(f.calls.map((c) => c.url)).toEqual([
+      "https://api.test/repos/o/r/pulls/5",
+      "https://api.test/repos/o/r/compare/main...h1",
+      "https://api.test/repos/o/r/commits/h1/check-runs?per_page=100",
+      "https://api.test/repos/o/r/commits/h1/status",
+      "https://api.test/repos/o/r/check-runs/11/annotations?per_page=10",
+    ]);
+    expect(status).toEqual({
+      headSha: "h1",
+      behindBase: true,
+      checks: {
+        state: "failure",
+        runs: [
+          {
+            name: "test",
+            state: "failure",
+            url: "https://ci/1",
+            summary: "refund rounds\nProcess completed with exit code 1.\nsrc/payments.js:12: TODO comments are not allowed",
+          },
+          { name: "lint", state: "neutral", url: null, summary: null },
+          { name: "e2e", state: "pending", url: null, summary: null },
+          { name: "deploy/preview", state: "success", url: "https://p", summary: "ok" },
+        ],
+      },
+    });
+  });
+
+  it("combines check states", () => {
+    const run = (state: "pending" | "success" | "failure" | "neutral") => ({ name: state, state, url: null, summary: null });
+    expect(checksState([])).toBe("none");
+    expect(checksState([run("success"), run("neutral")])).toBe("success");
+    expect(checksState([run("success"), run("pending")])).toBe("pending");
+    expect(checksState([run("pending"), run("failure")])).toBe("failure");
   });
 });

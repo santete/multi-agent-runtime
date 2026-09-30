@@ -55,7 +55,11 @@ const createProjectBody = z.object({
   reviewAgents: z.array(z.string().min(1)).max(10).optional(),
   autoApproveOnAgentReview: z.boolean().optional(),
   routingPolicy: z.enum(["balanced", "reliability", "cost"]).optional(),
+  revalidateOnBaseChange: z.boolean().optional(),
+  waitForChecks: z.boolean().optional(),
 });
+
+const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
 
 const reviewPolicyBody = z.object({
   reviewAgents: z.array(z.string().min(1)).max(10),
@@ -172,6 +176,7 @@ const completeExecutionBody = z.object({
     }),
     z.looseObject({ kind: z.literal("failed"), reason: z.string(), sessionId: z.string().optional() }),
   ]),
+  revalidation: z.boolean().optional(),
 });
 
 const toolCheckBody = z.object({ tool: z.string().min(1), input: z.unknown() });
@@ -247,6 +252,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
   app.put("/projects/:id/review", role("owner"), (req) =>
     store.setReviewPolicy(idParams.parse(req.params).id, reviewPolicyBody.parse(req.body)),
+  );
+  app.put("/projects/:id/merge-policy", role("owner"), (req) =>
+    store.setMergePolicy(idParams.parse(req.params).id, mergePolicyBody.parse(req.body)),
   );
   app.put("/projects/:id/validation", role("owner"), (req) =>
     store.setValidation(idParams.parse(req.params).id, validationSteps.parse(req.body)),

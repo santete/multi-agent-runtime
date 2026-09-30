@@ -9,6 +9,7 @@ import {
   type KnowledgeDto,
   type KnowledgeNote,
   type KnowledgeStatus,
+  type MergePolicy,
   type UpdateKnowledgeRequest,
   type PlanDto,
   type PlanningContext,
@@ -19,6 +20,7 @@ import {
   type ApprovalDto,
   type ArtifactDto,
   type ArtifactType,
+  type CheckRun,
   type ClaimResponse,
   type CompleteExecutionRequest,
   type CreateProjectRequest,
@@ -63,7 +65,7 @@ import {
 } from "@mar/core";
 import { type Actor, hasRole } from "./auth.js";
 import type { Db, Queryable } from "./db.js";
-import type { GitProvider, MergeResult } from "./git-provider.js";
+import type { GitProvider, MergeResult, PullRequestStatus } from "./git-provider.js";
 import { pullRequestBody } from "./pull-request.js";
 
 export class NotFoundError extends Error {
@@ -101,6 +103,11 @@ export interface StoreOptions {
   runnerOnlineSeconds?: number;
   /** Opens pull requests for delivered tasks; without one, delivery stops at the pushed branch. */
   gitProvider?: GitProvider | undefined;
+  /**
+   * With waitForChecks, how long the merge queue waits for a pull request to
+   * report any CI check before it merges without CI.
+   */
+  ciGraceSeconds?: number;
 }
 
 type Row = Record<string, any>;
@@ -126,6 +133,8 @@ const toProject = (r: Row): ProjectDto => ({
   reviewAgents: r.review_agents ?? [],
   autoApproveOnAgentReview: Boolean(r.auto_approve_on_agent_review),
   routingPolicy: r.routing_policy ?? "balanced",
+  revalidateOnBaseChange: r.revalidate_on_base_change ?? true,
+  waitForChecks: Boolean(r.wait_for_checks),
   createdAt: iso(r.created_at),
 });
 
@@ -305,6 +314,12 @@ export interface MergeQueueResult {
   merged: number;
   conflicts: number;
   failed: number;
+  /** Sent back to re-validate on the moved base branch. */
+  revalidating: number;
+  /** Waiting for CI checks. */
+  waiting: number;
+  /** Sent back to rework because CI failed. */
+  ciFailed: number;
 }
 
 /** Merge attempts that fail for reasons other than a conflict before the task is BLOCKED. */
@@ -320,6 +335,7 @@ export class Store {
   private readonly leaseSeconds: number;
   private readonly runnerOnlineSeconds: number;
   private readonly gitProvider: GitProvider | undefined;
+  private readonly ciGraceSeconds: number;
 
   constructor(
     private readonly db: Db,
@@ -328,6 +344,7 @@ export class Store {
     this.leaseSeconds = options.leaseSeconds ?? 60;
     this.runnerOnlineSeconds = options.runnerOnlineSeconds ?? 30;
     this.gitProvider = options.gitProvider;
+    this.ciGraceSeconds = options.ciGraceSeconds ?? 120;
   }
 
   // ---- projects -----------------------------------------------------------
@@ -338,8 +355,8 @@ export class Store {
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
-           review_agents, auto_approve_on_agent_review, routing_policy)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
+           review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
         [
           randomUUID(),
           req.key,
@@ -351,6 +368,8 @@ export class Store {
           JSON.stringify(req.reviewAgents ?? []),
           req.autoApproveOnAgentReview ?? false,
           req.routingPolicy ?? "balanced",
+          req.revalidateOnBaseChange ?? true,
+          req.waitForChecks ?? false,
         ],
       );
       const project = toProject(row!);
@@ -379,6 +398,22 @@ export class Store {
         id,
       );
       await appendEvent(q, { type: "ProjectReviewPolicyChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
+  }
+
+  async setMergePolicy(id: string, policy: MergePolicy): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query(
+          "update projects set revalidate_on_base_change = $2, wait_for_checks = $3 where id = $1 returning *",
+          [id, policy.revalidateOnBaseChange, policy.waitForChecks],
+        ),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectMergePolicyChanged", projectId: id, payload: { ...policy } });
       return project;
     });
   }
@@ -1018,7 +1053,7 @@ export class Store {
   ): Promise<ReworkContext | undefined> {
     const [row] = await q.query<{ type: ArtifactType; content: any }>(
       `select type, content from artifacts
-       where execution_id = $1 and type in ('validation_result', 'review_result', 'merge_result')
+       where execution_id = $1 and type in ('validation_result', 'review_result', 'merge_result', 'ci_result')
        order by created_at desc limit 1`,
       [executionId],
     );
@@ -1035,6 +1070,18 @@ export class Store {
         reason: "the reviewer rejected the change",
         ...(row.content.comment && { comment: row.content.comment }),
       };
+    }
+    if (row.type === "merge_result" && row.content.status === "base_changed") {
+      return {
+        kind: "base_changed",
+        attempt,
+        reason: `${project.defaultBranch} moved after the change was validated`,
+        baseBranch: project.defaultBranch,
+      };
+    }
+    if (row.type === "ci_result" && row.content.state === "failure") {
+      const checks = (row.content.runs as CheckRun[]).filter((r) => r.state === "failure");
+      return { kind: "ci", attempt, reason: `CI checks failed: ${checks.map((c) => c.name).join(", ")}`, checks };
     }
     if (row.type === "merge_result" && row.content.status === "conflict") {
       return {
@@ -1254,6 +1301,7 @@ export class Store {
            session_id = coalesce($5, session_id) where id = $1 returning *`,
         [id, status, req.exitCode, JSON.stringify(t), t.sessionId || null, stillActive, this.leaseSeconds],
       );
+      if (req.revalidation) await q.query("update executions set revalidation = true where id = $1", [id]);
       await appendEvent(q, {
         type: "AgentFinished",
         projectId: task.projectId,
@@ -1502,10 +1550,22 @@ export class Store {
    */
   async recordDelivery(id: string, req: DeliveryRequest): Promise<DeliveryResponse> {
     const response = await this.deliver(id, req);
-    // The pushed branch is what gets reviewed (with or without a pull request).
-    if (req.commitSha && !req.error) {
-      const [execution] = await this.db.query<{ task_id: string }>("select task_id from executions where id = $1", [id]);
-      if (execution) await this.requestAgentReview(execution.task_id);
+    const [execution] = await this.db.query<{ task_id: string; revalidation: boolean }>(
+      "select task_id, revalidation from executions where id = $1",
+      [id],
+    );
+    if (!execution || req.error) return response;
+    if (execution.revalidation) {
+      // Only the base was merged in and it validated: the approval still stands.
+      await this.db.tx(async (q) => {
+        const task = await this.getTask(execution.task_id, q);
+        if (task.state === "REVIEW") {
+          await changeTaskState(q, task, "review_approved", { actor: "platform", comment: "re-validated on the latest base" });
+        }
+      });
+    } else if (req.commitSha) {
+      // The pushed branch is what gets reviewed (with or without a pull request).
+      await this.requestAgentReview(execution.task_id);
     }
     return response;
   }
@@ -1753,7 +1813,7 @@ export class Store {
    * A completed task unlocks the tasks that depend on it.
    */
   async processMergeQueue(): Promise<MergeQueueResult> {
-    const result: MergeQueueResult = { merged: 0, conflicts: 0, failed: 0 };
+    const result: MergeQueueResult = { merged: 0, conflicts: 0, failed: 0, revalidating: 0, waiting: 0, ciFailed: 0 };
     // An in-flight MERGING task of a project goes first; otherwise its oldest APPROVED task.
     const next = await this.db.query(
       `select distinct on (project_id) * from tasks where state in ('MERGING', 'APPROVED')
@@ -1782,6 +1842,36 @@ export class Store {
       }
 
       const project = await this.getProject(task.projectId);
+      if (this.gitProvider.pullRequestStatus && (project.revalidateOnBaseChange || project.waitForChecks)) {
+        let status: PullRequestStatus;
+        try {
+          status = await this.gitProvider.pullRequestStatus({ repoUrl: project.repoUrl, number: task.pullRequestNumber });
+        } catch (err) {
+          result.failed++;
+          await this.recordMergeFailure(task, String(err));
+          continue;
+        }
+        // Spec §27: what was validated is not what would be merged. Validate the combination first.
+        if (project.revalidateOnBaseChange && status.behindBase) {
+          await this.leaveMergeQueue(task, last?.id ?? null, "base_changed", "merge_result", {
+            status: "base_changed",
+            headSha: status.headSha,
+          });
+          result.revalidating++;
+          continue;
+        }
+        if (project.waitForChecks) {
+          const gate = await this.checksGate(task, last?.id ?? null, status);
+          if (gate === "wait") {
+            result.waiting++;
+            continue;
+          }
+          if (gate === "failed") {
+            result.ciFailed++;
+            continue;
+          }
+        }
+      }
       let merge: MergeResult;
       try {
         merge = await this.gitProvider.mergePullRequest({
@@ -1829,6 +1919,61 @@ export class Store {
       } else {
         await changeTaskState(q, current, "merge_conflict", { message: merge.message });
       }
+    });
+  }
+
+  /**
+   * CI gate (spec §34): failed checks send the task back to its agent with
+   * the failures; pending checks hold the project's queue. A pull request that
+   * reports no check at all within the grace period is merged without CI.
+   */
+  private async checksGate(task: TaskDto, executionId: string | null, status: PullRequestStatus): Promise<"ok" | "wait" | "failed"> {
+    const { state, runs } = status.checks;
+    const once = async (type: string, payload: Record<string, unknown>) => {
+      const [seen] = await this.db.query(
+        "select 1 from events where task_id = $1 and type = $2 and payload->>'headSha' = $3 limit 1",
+        [task.id, type, status.headSha],
+      );
+      if (!seen) await appendEvent(this.db, { type, projectId: task.projectId, taskId: task.id, payload: { headSha: status.headSha, ...payload } });
+    };
+    if (state === "failure") {
+      await this.leaveMergeQueue(task, executionId, "ci_failed", "ci_result", { state, runs, headSha: status.headSha });
+      return "failed";
+    }
+    if (state === "success") {
+      await once("CiPassed", { checks: runs.map((r) => r.name) });
+      return "ok";
+    }
+    if (state === "none" && Date.now() - Date.parse(task.updatedAt) > this.ciGraceSeconds * 1000) {
+      await once("CiSkipped", { reason: `no CI check reported within ${this.ciGraceSeconds}s` });
+      return "ok";
+    }
+    await once("CiPending", { checks: runs.filter((r) => r.state === "pending").map((r) => r.name) });
+    return "wait";
+  }
+
+  /** Takes a MERGING task out of the queue and back to rework, with what the queue found. */
+  private async leaveMergeQueue(
+    task: TaskDto,
+    executionId: string | null,
+    trigger: "base_changed" | "ci_failed",
+    artifact: "merge_result" | "ci_result",
+    content: Record<string, unknown>,
+  ): Promise<void> {
+    await this.db.tx(async (q) => {
+      const current = await this.getTask(task.id, q);
+      if (current.state !== "MERGING") return;
+      await this.addArtifact(q, current, executionId, artifact, content);
+      await appendEvent(q, {
+        type: trigger === "base_changed" ? "BaseChanged" : "CiFailed",
+        projectId: task.projectId,
+        taskId: task.id,
+        payload:
+          trigger === "base_changed"
+            ? { headSha: content.headSha }
+            : { headSha: content.headSha, checks: (content.runs as CheckRun[]).filter((r) => r.state === "failure").map((r) => r.name) },
+      });
+      await changeTaskState(q, current, trigger);
     });
   }
 
@@ -1895,7 +2040,7 @@ export class Store {
       // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
       // queue until maxAttempts is used up.
       const retrying = await q.query(
-        `select t.*, (select count(*) from executions e where e.task_id = t.id)::int as attempts
+        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation)::int as attempts
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {

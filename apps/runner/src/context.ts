@@ -98,6 +98,21 @@ function reworkBrief(rework: NonNullable<ClaimResponse["rework"]>, extras: Conte
         "Address the feedback, keep the rest of the work, and make sure the validation still passes.",
         "",
       ].join("\n");
+    case "ci": {
+      const checks = rework.checks ?? [];
+      return [
+        ...header,
+        "The pull request's CI checks failed. Reproduce the failures locally, fix their cause, and make sure the validation still passes.",
+        "",
+        ...checks.flatMap((c) => [
+          `## ${c.name}${c.url ? ` — ${c.url}` : ""}`,
+          "",
+          c.summary ? c.summary.split("\n").map((l) => `> ${l}`).join("\n") : "> _The check gave no details; see its page._",
+          "",
+        ]),
+      ].join("\n");
+    }
+    case "base_changed":
     case "merge_conflict": {
       const conflicts = extras.conflicts ?? [];
       return [
