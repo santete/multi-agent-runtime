@@ -6,12 +6,19 @@ import { POLICY_HOOK_SCRIPT } from "../src/runner.js";
 
 let server: Server;
 let baseUrl: string;
+/** Number of upcoming requests answered with 503. */
+let failNext = 0;
 const received: Array<{ url: string | undefined; token: string | string[] | undefined; body: unknown }> = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
     let raw = "";
     req.on("data", (d) => (raw += d)).on("end", () => {
+      if (failNext > 0) {
+        failNext--;
+        res.writeHead(503);
+        return res.end();
+      }
       const body = JSON.parse(raw);
       received.push({ url: req.url, token: req.headers["x-mar-execution-token"], body });
       const deny = JSON.stringify(body).includes("push");
@@ -76,10 +83,17 @@ describe("mar-policy-hook", () => {
     const out = await runHook(
       "agy",
       { toolCall: { name: "run_command", args: {} } },
-      { MAR_CONTROL_PLANE_URL: "http://127.0.0.1:1" },
+      { MAR_CONTROL_PLANE_URL: "http://127.0.0.1:1", MAR_POLICY_HOOK_BUDGET_MS: "300" },
     );
     expect(out.decision).toBe("deny");
-    expect(out.reason).toMatch(/policy hook error/);
+    expect(out.reason).toMatch(/policy service unavailable/);
+  });
+
+  it("retries through a temporary 5xx before deciding", async () => {
+    failNext = 2;
+    const out = await runHook("agy", { toolCall: { name: "view_file", args: {} } });
+    expect(out).toEqual({ decision: "allow", reason: "[LOW] fine" });
+    expect(failNext).toBe(0);
   });
 
   it("fails closed without its environment or with an unknown dialect", async () => {

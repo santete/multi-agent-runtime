@@ -1,6 +1,7 @@
 import {
   exitWithoutResult,
   hookCommandLine,
+  POLICY_HOOK_TIMEOUT_SECONDS,
   type AdapterCapabilities,
   type AgentAdapter,
   type AgentEvent,
@@ -96,7 +97,7 @@ export class AntigravityAdapter implements AgentAdapter {
         mergeJson: true,
         content: {
           [AGY_HOOK_NAME]: {
-            PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }],
+            PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: POLICY_HOOK_TIMEOUT_SECONDS }] }],
           },
         },
       },

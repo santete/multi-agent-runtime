@@ -85,6 +85,8 @@ export interface EventDto {
   type: string;
   projectId: string | null;
   taskId: string | null;
+  /** Key of the task (e.g. PAY-3), for display. */
+  taskKey: string | null;
   executionId: string | null;
   payload: Record<string, unknown>;
   createdAt: string;
@@ -121,6 +123,8 @@ export interface ApprovalDto {
   reason: string;
   status: ApprovalStatus;
   comment: string | null;
+  /** Name of the human who decided (audit). */
+  decidedBy: string | null;
   createdAt: string;
   decidedAt: string | null;
 }
@@ -220,6 +224,20 @@ export interface RunnerDto {
   online: boolean;
   registeredAt: string;
   lastSeenAt: string;
+  /** What the runner is working on right now (spec §42 agent overview). */
+  activeExecutions: Array<{
+    executionId: string;
+    taskId: string;
+    taskKey: string;
+    agent: string;
+    status: ExecutionStatus;
+    attempt: number;
+  }>;
+}
+
+export interface ActorDto {
+  name: string;
+  role: "viewer" | "member" | "senior" | "owner" | "runner";
 }
 
 export interface ClaimResponse {

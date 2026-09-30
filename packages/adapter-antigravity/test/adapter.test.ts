@@ -41,7 +41,7 @@ describe("AntigravityAdapter.buildCommand", () => {
       {
         path: ".agents/hooks.json",
         mergeJson: true,
-        content: { "mar-policy": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] } },
+        content: { "mar-policy": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 120 }] }] } },
       },
     ];
 

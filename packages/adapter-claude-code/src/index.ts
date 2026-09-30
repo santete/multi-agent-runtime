@@ -1,6 +1,7 @@
 import {
   exitWithoutResult,
   hookCommandLine,
+  POLICY_HOOK_TIMEOUT_SECONDS,
   type AdapterCapabilities,
   type AgentAdapter,
   type AgentEvent,
@@ -71,7 +72,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.policyHook) {
       // A hook "allow" also lets headless runs execute shell commands, which
       // plain -p mode would deny; the policy decides instead.
-      const hook = { type: "command", command: hookCommandLine(request.policyHook, "claude"), timeout: 30 };
+      const hook = { type: "command", command: hookCommandLine(request.policyHook, "claude"), timeout: POLICY_HOOK_TIMEOUT_SECONDS };
       base.hooks = {
         ...base.hooks,
         PreToolUse: [...(base.hooks?.PreToolUse ?? []), { matcher: "*", hooks: [hook] }],

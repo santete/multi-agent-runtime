@@ -38,6 +38,7 @@ import {
   toHandoff,
   transition,
 } from "@mar/core";
+import { type Actor, hasRole } from "./auth.js";
 import type { Db, Queryable } from "./db.js";
 import type { GitProvider, MergeResult } from "./git-provider.js";
 import { pullRequestBody } from "./pull-request.js";
@@ -53,6 +54,13 @@ export class ConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConflictError";
+  }
+}
+
+export class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ForbiddenError";
   }
 }
 
@@ -113,6 +121,7 @@ const toApproval = (r: Row): ApprovalDto => ({
   reason: r.reason,
   status: r.status,
   comment: r.comment ?? null,
+  decidedBy: r.decided_by ?? null,
   createdAt: iso(r.created_at),
   decidedAt: isoOrNull(r.decided_at),
 });
@@ -157,6 +166,7 @@ const toEvent = (r: Row): EventDto => ({
   type: r.type,
   projectId: r.project_id,
   taskId: r.task_id,
+  taskKey: r.task_key ?? null,
   executionId: r.execution_id,
   payload: r.payload,
   createdAt: iso(r.created_at),
@@ -289,7 +299,7 @@ export class Store {
 
   // ---- tasks --------------------------------------------------------------
 
-  async createTask(projectId: string, req: CreateTaskRequest): Promise<TaskDto> {
+  async createTask(projectId: string, req: CreateTaskRequest, actor?: string): Promise<TaskDto> {
     return this.db.tx(async (q) => {
       const [p] = await q.query<{ key: string; task_seq: number }>(
         "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
@@ -308,7 +318,7 @@ export class Store {
         type: "TaskCreated",
         projectId,
         taskId: task.id,
-        payload: { key, title: task.title, agent: task.agent, dependsOn: deps.map((d) => d.key) },
+        payload: { key, title: task.title, agent: task.agent, dependsOn: deps.map((d) => d.key), actor: actor ?? null },
       });
       if (deps.every((d) => d.state === "COMPLETED")) return changeTaskState(q, task, "dependencies_satisfied");
       return task; // stays CREATED (waiting for dependencies) until they are merged
@@ -359,7 +369,7 @@ export class Store {
   }
 
   /** Cancels the task; a running execution is told to stop on its next heartbeat. */
-  async cancelTask(id: string): Promise<TaskDto> {
+  async cancelTask(id: string, actor?: string): Promise<TaskDto> {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
       if (isTerminal(task.state)) throw new ConflictError(`task ${task.key} is already ${task.state}`);
@@ -367,7 +377,7 @@ export class Store {
         "update executions set cancel_requested = true where task_id = $1 and status = any($2::text[])",
         [id, ACTIVE],
       );
-      return changeTaskState(q, task, "cancelled");
+      return changeTaskState(q, task, "cancelled", { actor: actor ?? null });
     });
   }
 
@@ -405,6 +415,11 @@ export class Store {
       `select *, last_seen_at > now() - make_interval(secs => $1) as online from runners order by name`,
       [this.runnerOnlineSeconds],
     );
+    const active = await this.db.query(
+      `select e.id, e.runner_id, e.status, e.attempt, t.id as task_id, t.key, t.agent from executions e
+       join tasks t on t.id = e.task_id where e.status = any($1::text[]) order by e.created_at`,
+      [ACTIVE],
+    );
     return rows.map((r) => ({
       id: r.id as string,
       name: r.name as string,
@@ -412,6 +427,9 @@ export class Store {
       online: Boolean(r.online),
       registeredAt: iso(r.registered_at),
       lastSeenAt: iso(r.last_seen_at),
+      activeExecutions: active
+        .filter((e) => e.runner_id === r.id)
+        .map((e) => ({ executionId: e.id, taskId: e.task_id, taskKey: e.key, agent: e.agent, status: e.status, attempt: e.attempt })),
     }));
   }
 
@@ -911,21 +929,29 @@ export class Store {
    * the task goes back to the queue; the next attempt resumes the session and
    * is told what was approved or rejected.
    */
-  async decideApproval(id: string, status: "approved" | "rejected", comment?: string): Promise<ApprovalDto> {
+  async decideApproval(
+    id: string,
+    status: "approved" | "rejected",
+    comment?: string,
+    actor: Actor = { name: "local", role: "owner" },
+  ): Promise<ApprovalDto> {
     return this.db.tx(async (q) => {
       const row = (await q.query("select * from approvals where id = $1 for update", [id]))[0];
       if (!row) throw new NotFoundError("approval", id);
       if (row.status !== "pending") throw new ConflictError(`approval ${id} is already ${row.status}`);
+      // Spec §32: HIGH risk needs a senior developer (owners can always decide).
+      const needed = row.risk === "HIGH" ? "senior" : "member";
+      if (!hasRole(actor, needed)) throw new ForbiddenError(`${row.risk} risk approvals require role ${needed}`);
       const [updated] = await q.query(
-        "update approvals set status = $2, comment = $3, decided_at = now() where id = $1 returning *",
-        [id, status, comment ?? null],
+        "update approvals set status = $2, comment = $3, decided_by = $4, decided_at = now() where id = $1 returning *",
+        [id, status, comment ?? null, actor.name],
       );
       await appendEvent(q, {
         type: status === "approved" ? "ApprovalGranted" : "ApprovalRejected",
         projectId: row.project_id,
         taskId: row.task_id,
         executionId: row.execution_id,
-        payload: { approvalId: id, summary: row.summary, comment: comment ?? null },
+        payload: { approvalId: id, summary: row.summary, comment: comment ?? null, actor: actor.name },
       });
       await this.requeueIfApprovalsDecided(q, await this.getTask(row.task_id, q));
       return toApproval(updated!);
@@ -947,17 +973,18 @@ export class Store {
   }
 
   /** A human sends a WAITING_FOR_HUMAN or BLOCKED task back to the queue. */
-  async retryTask(id: string): Promise<TaskDto> {
+  async retryTask(id: string, actor?: string): Promise<TaskDto> {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
-      if (task.state === "WAITING_FOR_HUMAN") return changeTaskState(q, task, "unassigned", { reason: "retried by a human" });
-      if (task.state === "BLOCKED") return changeTaskState(q, task, "unblocked", { reason: "retried by a human" });
+      const payload = { reason: "retried by a human", actor: actor ?? null };
+      if (task.state === "WAITING_FOR_HUMAN") return changeTaskState(q, task, "unassigned", payload);
+      if (task.state === "BLOCKED") return changeTaskState(q, task, "unblocked", payload);
       throw new ConflictError(`task ${task.key} is ${task.state}; only WAITING_FOR_HUMAN or BLOCKED tasks can be retried`);
     });
   }
 
   /** Human review of a delivered task (spec §30): approve queues the merge, reject sends it to rework. */
-  async reviewTask(id: string, req: ReviewRequest): Promise<TaskDto> {
+  async reviewTask(id: string, req: ReviewRequest, actor?: string): Promise<TaskDto> {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
       if (task.state !== "REVIEW") throw new ConflictError(`task ${task.key} is ${task.state}, not REVIEW`);
@@ -968,9 +995,11 @@ export class Store {
       await this.addArtifact(q, task, last?.id ?? null, "review_result", {
         decision: req.decision,
         comment: req.comment ?? null,
+        reviewer: actor ?? null,
       });
       return changeTaskState(q, task, req.decision === "approve" ? "review_approved" : "review_rejected", {
         comment: req.comment ?? null,
+        actor: actor ?? null,
       });
     });
   }
@@ -1143,6 +1172,7 @@ export class Store {
   // ---- events -------------------------------------------------------------
 
   async listEvents(
+    /** Empty filter = all events. */
     filter: { projectId?: string; taskId?: string; executionId?: string },
     after = 0,
     limit = 200,
@@ -1151,12 +1181,50 @@ export class Store {
       ? ["execution_id", filter.executionId]
       : filter.taskId
         ? ["task_id", filter.taskId]
-        : ["project_id", filter.projectId];
-    const rows = await this.db.query(
-      `select * from events where ${column} = $1 and seq > $2 order by seq limit $3`,
-      [value, after, limit],
-    );
+        : filter.projectId
+          ? ["project_id", filter.projectId]
+          : [undefined, undefined];
+    const rows = column
+      ? await this.db.query(`select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.${column} = $1 and e.seq > $2 order by e.seq limit $3`, [value, after, limit])
+      : await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.seq > $1 order by e.seq limit $2", [after, limit]);
     return rows.map(toEvent);
+  }
+
+  /** Most recent events, newest first (activity feeds). */
+  async recentEvents(limit: number, projectId?: string): Promise<EventDto[]> {
+    const rows = projectId
+      ? await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.project_id = $1 order by e.seq desc limit $2", [projectId, limit])
+      : await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id order by e.seq desc limit $1", [limit]);
+    return rows.map(toEvent);
+  }
+
+  async latestEventSeq(): Promise<number> {
+    const [row] = await this.db.query<{ seq: string | number | null }>("select max(seq) as seq from events");
+    return Number(row?.seq ?? 0);
+  }
+
+  /** Of the given task keys, those whose task is finished (worktree no longer needed). */
+  async finishedTaskKeys(keys: string[]): Promise<string[]> {
+    if (!keys.length) return [];
+    const rows = await this.db.query<{ key: string }>(
+      "select key from tasks where key = any($1::text[]) and state in ('COMPLETED', 'CANCELLED')",
+      [keys],
+    );
+    return rows.map((r) => r.key);
+  }
+
+  /**
+   * On control plane start: runners could not heartbeat while it was down, so
+   * give every active execution a fresh lease instead of declaring them lost.
+   */
+  async extendActiveLeases(): Promise<number> {
+    const rows = await this.db.query(
+      `update executions set lease_expires_at = now() + make_interval(secs => $2)
+       where status = any($1::text[]) returning id`,
+      [ACTIVE, this.leaseSeconds],
+    );
+    if (rows.length) await appendEvent(this.db, { type: "LeasesExtendedOnStartup", payload: { executions: rows.length } });
+    return rows.length;
   }
 }
 

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { WorkspaceFile } from "@mar/core";
 
@@ -156,7 +156,7 @@ export class WorktreeManager {
   constructor(private readonly home: string) {}
 
   repoPath(project: WorkspaceProject): string {
-    return join(this.home, "repos", project.key);
+    return resolve(this.home, "repos", project.key);
   }
 
   worktreePath(taskKey: string): string {
@@ -168,7 +168,7 @@ export class WorktreeManager {
   }
 
   async prepare(project: WorkspaceProject, taskKey: string): Promise<Workspace> {
-    return this.withLock(project.key, async () => {
+    return this.withLock(this.repoPath(project), async () => {
       const repo = await this.ensureRepo(project);
       const path = this.worktreePath(taskKey);
       const branch = WorktreeManager.branchFor(taskKey);
@@ -218,8 +218,31 @@ export class WorktreeManager {
     return { modifiedTracked };
   }
 
+  /** Task keys that currently have a worktree on this machine. */
+  async listTaskKeys(): Promise<string[]> {
+    const dir = join(this.home, "worktrees");
+    if (!existsSync(dir)) return [];
+    return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  }
+
+  /**
+   * Removes a finished task's worktree and its local branch. The owning
+   * repository is found from the worktree itself.
+   */
+  async removeByTaskKey(taskKey: string): Promise<void> {
+    const path = this.worktreePath(taskKey);
+    if (!existsSync(path)) return;
+    const commonDir = await git(path, "rev-parse", "--git-common-dir");
+    // resolve() normalizes separators so the lock key matches repoPath().
+    const repo = resolve(dirname(isAbsolute(commonDir) ? commonDir : join(path, commonDir)));
+    await this.withLock(repo, async () => {
+      await git(repo, "worktree", "remove", "--force", path);
+      await git(repo, "branch", "-D", WorktreeManager.branchFor(taskKey)).catch(() => undefined);
+    });
+  }
+
   async remove(project: WorkspaceProject, taskKey: string): Promise<void> {
-    await this.withLock(project.key, async () => {
+    await this.withLock(this.repoPath(project), async () => {
       const path = this.worktreePath(taskKey);
       if (existsSync(path)) await git(this.repoPath(project), "worktree", "remove", "--force", path);
     });

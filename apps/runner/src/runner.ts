@@ -76,6 +76,8 @@ export class Runner {
   private readonly adapters = new Map<string, AgentAdapter>();
   private runnerId: string | undefined;
   private readonly active = new Set<Promise<void>>();
+  /** Keys of tasks currently executing on this runner (their worktrees are in use). */
+  private readonly working = new Set<string>();
   private stopping = false;
   private wake: (() => void) | undefined;
 
@@ -113,9 +115,37 @@ export class Runner {
   }
 
   /** Poll loop honouring maxConcurrent. Resolves after stop() once active work drains. */
+  /**
+   * Removes worktrees (and local branches) of tasks the control plane reports
+   * as finished. Worktrees of tasks being worked on here are never touched.
+   * Returns the removed task keys.
+   */
+  async collectGarbage(): Promise<string[]> {
+    if (!this.runnerId) throw new Error("runner is not registered");
+    const keys = (await this.worktrees.listTaskKeys()).filter((k) => !this.working.has(k));
+    if (!keys.length) return [];
+    const finished = await this.client.finishedTasks(this.runnerId, keys);
+    const removed: string[] = [];
+    for (const key of finished) {
+      try {
+        await this.worktrees.removeByTaskKey(key);
+        removed.push(key);
+      } catch (err) {
+        this.log.error("worktree cleanup failed", { task: key, error: String(err) });
+      }
+    }
+    if (removed.length) this.log.info("removed worktrees of finished tasks", { tasks: removed });
+    return removed;
+  }
+
   async start(): Promise<void> {
     if (!this.runnerId) await this.register();
+    let lastGc = 0;
     while (!this.stopping) {
+      if (Date.now() - lastGc >= this.config.gcIntervalMs) {
+        lastGc = Date.now();
+        await this.collectGarbage().catch((err) => this.log.error("garbage collection failed", { error: String(err) }));
+      }
       if (this.active.size < this.config.maxConcurrent) {
         let claim: ClaimResponse | undefined;
         try {
@@ -161,6 +191,15 @@ export class Runner {
 
 
   private async execute(claim: ClaimResponse): Promise<void> {
+    this.working.add(claim.task.key);
+    try {
+      await this.executeClaim(claim);
+    } finally {
+      this.working.delete(claim.task.key);
+    }
+  }
+
+  private async executeClaim(claim: ClaimResponse): Promise<void> {
     const { execution, task, project } = claim;
     const log = { task: task.key, execution: execution.id, attempt: execution.attempt };
     const adapter = this.adapters.get(task.agent);

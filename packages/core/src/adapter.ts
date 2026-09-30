@@ -69,6 +69,12 @@ export interface WorkspaceFile {
   mergeJson: boolean;
 }
 
+/**
+ * How long an agent waits for the policy hook. Longer than the hook's own
+ * retry budget (90 s), so a control plane restart does not deny tool calls.
+ */
+export const POLICY_HOOK_TIMEOUT_SECONDS = 120;
+
 /** Quotes a hook command for `sh -c` / `cmd /c`, which is how CLIs run hooks. */
 export function hookCommandLine(hook: PolicyHookSpec, dialect: string): string {
   return [hook.command, ...hook.args, dialect].map((p) => `"${p.replace(/"/g, '\\"')}"`).join(" ");

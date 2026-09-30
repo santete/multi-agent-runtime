@@ -150,5 +150,11 @@ describe("M4: DAG, merge queue and conflict rework", () => {
     const executions = await api<ExecutionDto[]>(`/tasks/${t2.id}/executions`);
     expect(executions.map((e) => e.status)).toEqual(["succeeded", "succeeded"]);
     expect(prs.get("task/M4-2")).toBe(2); // the rework updated the same pull request
+
+    // All three tasks are merged: their worktrees and local branches are cleaned up.
+    expect((await runner.collectGarbage()).sort()).toEqual(["M4-1", "M4-2", "M4-3"]);
+    expect(await runner.worktrees.listTaskKeys()).toEqual([]);
+    const repo = runner.worktrees.repoPath({ key: "M4", repoUrl: origin.path, defaultBranch: "main" });
+    expect(await git(repo, "branch", "--list", "task/*")).toBe("");
   }, 120_000); // many git operations; slow when the whole suite runs in parallel
 });
