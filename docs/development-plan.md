@@ -34,8 +34,8 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - [x] ADR 0001–0005
 - [x] Adapter contract + parser cho Claude Code và agy, test bằng fixture thật
 - [x] Task state machine chuẩn hóa + test
-- [ ] Spike Claude PreToolUse hook qua `--settings` ở headless (chuyển sang M2)
-- [ ] Spike agy `--sandbox` + cách ly config theo runner (chuyển sang M2)
+- [x] Spike Claude PreToolUse hook qua `--settings` ở headless (làm ở M2: allow mở được shell, deny được báo trong `permission_denials`)
+- [ ] Spike agy `--sandbox` + cách ly config theo runner (chuyển sang M3)
 
 ## Phase 1 — MVP
 
@@ -49,6 +49,24 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - [x] `packages/adapter-generic-cli`
 - [x] E2E test: task tạo qua API → runner chạy trong worktree riêng → log và timeline xem được qua API
 - Chưa làm (chuyển sang M2): auth API, cancel một execution đang chạy từ control plane, heartbeat/lease cho runner bị mất, retry tự động từ `RETRYING`
+
+### M2 Adapter thật — trạng thái ✅
+
+- [x] Policy engine (`packages/core/src/policy.ts`): shell (Bash/PowerShell/run_command) và file tools, mức rủi ro LOW → CRITICAL, ghi ra ngoài workspace, `.git`, secrets
+- [x] Policy hook chung `apps/runner/hook/mar-policy-hook.mjs` (dialect claude/agy, fail-closed) → `POST /executions/:id/tool-check` bằng execution token; mọi quyết định ghi `ToolCallChecked` (ADR-0004)
+- [x] Inject hook: Claude qua `--settings`; agy qua `.agents/hooks.json` + `%MAR_POLICY_HOOK%` trên Windows
+- [x] Agent registry: runner đăng ký agent kèm capability, upsert theo tên máy, `GET /runners` (online/offline)
+- [x] Lease + heartbeat + cancel (kill cả cây process), sweep: `lost` → `RETRYING` → `READY`/`BLOCKED` theo `maxAttempts` (ADR-0006)
+- [x] Resume session của chính runner đó sau khi bị gián đoạn
+- [x] Tìm binary thật của npm shim trên Windows (`claude.cmd` → `claude.exe`)
+- [x] API token (`MAR_API_TOKEN`); control plane từ chối chạy trên địa chỉ không phải loopback nếu thiếu token
+- [x] E2E (fake Claude): hook allow/deny, cancel, runner mất → resume
+- [x] **Chạy thật** (2026-09-30): cùng một task
+  - Claude Code: `Write` + `PowerShell` được policy cho phép và audit, xong → `VALIDATING` ($0.07)
+  - agy: `write_to_file` + `run_command` được policy cho phép và audit, file được tạo; `run_command` vẫn bị tầng quyền của agy chặn (#548) → `WAITING_FOR_HUMAN`
+  - Kill cây process runner giữa task Claude → lease hết hạn → `READY` → runner restart resume đúng session, hoàn thành task
+- Phát hiện khi chạy thật và đã sửa: hook agy trên Windows không chạy được vì `cmd /c` làm hỏng dấu nháy; agy báo `SUCCESS` dù mọi tool fail → control plane dùng audit của chính nó làm nguồn sự thật
+- Chưa làm: agy `unattendedShell` (sandbox), cách ly config của agy theo runner, dọn worktree khi task kết thúc
 
 | Milestone | Nội dung | Tiêu chí xong |
 |---|---|---|

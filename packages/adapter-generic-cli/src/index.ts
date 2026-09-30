@@ -40,11 +40,12 @@ export class GenericCliAdapter implements AgentAdapter {
     const args = (this.options.args ?? [PROMPT_PLACEHOLDER]).map((a) =>
       a.split(PROMPT_PLACEHOLDER).join(request.prompt),
     );
+    const env = { ...request.env, ...this.options.env };
     return {
       command: this.options.command,
       args,
       cwd: request.workspace,
-      ...(this.options.env && { env: this.options.env }),
+      ...(Object.keys(env).length > 0 && { env }),
       ...(this.options.promptViaStdin && { stdin: request.prompt }),
     };
   }

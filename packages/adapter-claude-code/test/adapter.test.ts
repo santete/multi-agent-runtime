@@ -32,6 +32,31 @@ describe("ClaudeCodeAdapter.buildCommand", () => {
     expect(joined).toContain('--settings {"hooks":{}}');
   });
 
+  it("injects the policy hook through --settings, merged with configured settings", () => {
+    const cmd = new ClaudeCodeAdapter({ settings: { model: "x" } }).buildCommand({
+      workspace: "/ws",
+      prompt: "x",
+      permissionProfile: "edit",
+      env: { MAR_EXECUTION_ID: "e1" },
+      policyHook: { command: "node", args: ["/hook.mjs"] },
+    });
+    const settings = JSON.parse(cmd.args[cmd.args.indexOf("--settings") + 1]!);
+    expect(settings).toEqual({
+      model: "x",
+      hooks: {
+        PreToolUse: [
+          { matcher: "*", hooks: [{ type: "command", command: '"node" "/hook.mjs" "claude"', timeout: 30 }] },
+        ],
+      },
+    });
+    expect(cmd.env).toEqual({ MAR_EXECUTION_ID: "e1" });
+  });
+
+  it("omits --settings when there is nothing to inject", () => {
+    const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", permissionProfile: "edit" });
+    expect(cmd.args).not.toContain("--settings");
+  });
+
   it("uses plan mode for read-only runs", () => {
     const cmd = new ClaudeCodeAdapter().buildCommand({ workspace: "/ws", prompt: "x", permissionProfile: "read-only" });
     expect(cmd.args[cmd.args.indexOf("--permission-mode") + 1]).toBe("plan");

@@ -42,6 +42,33 @@ export interface AgentRunRequest {
   /** JSON schema the final answer must follow (structured artifact). */
   outputSchema?: object;
   timeoutSeconds?: number;
+  /** Extra environment for the agent process (inherited by its hooks). */
+  env?: Record<string, string>;
+  /**
+   * Platform PreToolUse hook. The adapter wires it into the agent and appends
+   * its dialect name (e.g. `claude`, `agy`) as the last argument.
+   */
+  policyHook?: PolicyHookSpec;
+}
+
+export interface PolicyHookSpec {
+  command: string;
+  args: string[];
+}
+
+/** A file the runner must place in the workspace before starting the agent. */
+export interface WorkspaceFile {
+  /** Path relative to the workspace root, with forward slashes. */
+  path: string;
+  /** Written as JSON. */
+  content: object;
+  /** Merge top-level keys into an existing JSON file instead of replacing it. */
+  mergeJson: boolean;
+}
+
+/** Quotes a hook command for `sh -c` / `cmd /c`, which is how CLIs run hooks. */
+export function hookCommandLine(hook: PolicyHookSpec, dialect: string): string {
+  return [hook.command, ...hook.args, dialect].map((p) => `"${p.replace(/"/g, '\\"')}"`).join(" ");
 }
 
 export interface CommandSpec {
@@ -89,6 +116,8 @@ export interface AgentAdapter {
   readonly id: string;
   readonly capabilities: AdapterCapabilities;
   buildCommand(request: AgentRunRequest): CommandSpec;
+  /** Files (e.g. hook config) to write into the workspace before the run. */
+  workspaceFiles?(request: AgentRunRequest): WorkspaceFile[];
   /** Stateful per-run parser: one instance per process. */
   createParser(): AgentOutputParser;
 }

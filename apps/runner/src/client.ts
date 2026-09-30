@@ -1,8 +1,10 @@
 import type {
+  AgentDescriptor,
   AgentEvent,
   ClaimResponse,
   CompleteExecutionRequest,
   ExecutionDto,
+  HeartbeatResponse,
   RegisterRunnerResponse,
 } from "@mar/core";
 
@@ -18,9 +20,12 @@ export class ControlPlaneError extends Error {
 }
 
 export class ControlPlaneClient {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    readonly baseUrl: string,
+    private readonly apiToken?: string,
+  ) {}
 
-  async register(name: string, agents: string[]): Promise<string> {
+  async register(name: string, agents: AgentDescriptor[]): Promise<string> {
     const res = await this.post<RegisterRunnerResponse>("/runners/register", { name, agents });
     return res!.runnerId;
   }
@@ -33,6 +38,10 @@ export class ControlPlaneClient {
     return (await this.post<ExecutionDto>(`/executions/${executionId}/start`, { workspace, branch }))!;
   }
 
+  async heartbeat(executionId: string): Promise<HeartbeatResponse> {
+    return (await this.post<HeartbeatResponse>(`/executions/${executionId}/heartbeat`))!;
+  }
+
   async appendEvents(executionId: string, events: AgentEvent[]): Promise<void> {
     await this.post(`/executions/${executionId}/events`, { events });
   }
@@ -43,9 +52,13 @@ export class ControlPlaneClient {
 
   /** Returns undefined for 204 No Content. */
   private async post<T>(path: string, body?: unknown): Promise<T | undefined> {
+    const headers: Record<string, string> = {};
+    if (this.apiToken) headers.authorization = `Bearer ${this.apiToken}`;
+    if (body !== undefined) headers["content-type"] = "application/json";
     const res = await fetch(this.baseUrl + path, {
       method: "POST",
-      ...(body !== undefined && { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      headers,
+      ...(body !== undefined && { body: JSON.stringify(body) }),
     });
     if (res.status === 204) return undefined;
     if (!res.ok) throw new ControlPlaneError(res.status, await res.text(), path);

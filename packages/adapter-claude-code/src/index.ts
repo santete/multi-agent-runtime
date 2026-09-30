@@ -1,5 +1,6 @@
 import {
   exitWithoutResult,
+  hookCommandLine,
   type AdapterCapabilities,
   type AgentAdapter,
   type AgentEvent,
@@ -53,14 +54,30 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.resumeSessionId) args.push("--resume", request.resumeSessionId);
     if (request.model) args.push("--model", request.model);
     if (request.outputSchema) args.push("--json-schema", JSON.stringify(request.outputSchema));
-    if (this.options.settings) args.push("--settings", JSON.stringify(this.options.settings));
+    const settings = this.settingsFor(request);
+    if (settings) args.push("--settings", JSON.stringify(settings));
 
     return {
       command: this.options.executable ?? "claude",
       args,
       cwd: request.workspace,
       stdin: request.prompt,
+      ...(request.env && { env: request.env }),
     };
+  }
+
+  private settingsFor(request: AgentRunRequest): Record<string, any> | undefined {
+    const base: Record<string, any> = { ...this.options.settings };
+    if (request.policyHook) {
+      // A hook "allow" also lets headless runs execute shell commands, which
+      // plain -p mode would deny; the policy decides instead.
+      const hook = { type: "command", command: hookCommandLine(request.policyHook, "claude"), timeout: 30 };
+      base.hooks = {
+        ...base.hooks,
+        PreToolUse: [...(base.hooks?.PreToolUse ?? []), { matcher: "*", hooks: [hook] }],
+      };
+    }
+    return Object.keys(base).length ? base : undefined;
   }
 
   createParser(): AgentOutputParser {

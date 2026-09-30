@@ -28,6 +28,69 @@ describe("AntigravityAdapter.buildCommand", () => {
     expect(joined).toContain("--conversation conv-1");
     expect(joined).toContain("--model gemini-3.8-flash-high");
   });
+
+  it("installs the policy hook as a merged workspace hooks.json and passes env", () => {
+    const request = {
+      workspace: "/ws",
+      prompt: "x",
+      permissionProfile: "edit" as const,
+      env: { MAR_EXECUTION_ID: "e1" },
+      policyHook: { command: "C:\\Program Files\\node.exe", args: ["C:\\hook.mjs"] },
+    };
+    const hooksJson = (command: string) => [
+      {
+        path: ".agents/hooks.json",
+        mergeJson: true,
+        content: { "mar-policy": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] }] } },
+      },
+    ];
+
+    // Windows: quote-free env var reference; agy mangles quoted hook commands there.
+    const windows = new AntigravityAdapter({ platform: "win32" });
+    expect(windows.workspaceFiles(request)).toEqual(hooksJson("%MAR_POLICY_HOOK%"));
+    expect(windows.buildCommand(request).env).toEqual({
+      MAR_EXECUTION_ID: "e1",
+      MAR_POLICY_HOOK: '"C:\\Program Files\\node.exe" "C:\\hook.mjs" "agy"',
+    });
+
+    const linux = new AntigravityAdapter({ platform: "linux" });
+    expect(linux.workspaceFiles(request)).toEqual(hooksJson('"C:\\Program Files\\node.exe" "C:\\hook.mjs" "agy"'));
+    expect(linux.buildCommand(request).env).toEqual({ MAR_EXECUTION_ID: "e1" });
+
+    expect(windows.workspaceFiles({ ...request, policyHook: undefined as never })).toEqual([]);
+  });
+});
+
+describe("AntigravityStreamParser: tools blocked by the policy hook", () => {
+  const step = (state: string, extra: object = {}) =>
+    JSON.stringify({
+      event: "step_update",
+      step_update: { step_index: 2, state, step_type: "tool", tool_name: "run_command", ...extra },
+    });
+
+  it("counts hook denials as denied actions even though agy reports SUCCESS", () => {
+    const parser = new AntigravityAdapter().createParser();
+    parser.push(step("ACTIVE", { tool_info: { name: "run_command", parameters: { CommandLine: "git push" } } }));
+    const blocked = parser.push(
+      step("ERROR", {
+        tool_info: { error: { type: "TOOL_ERROR", message: "tool call denied by pre-tool hook: [CRITICAL] no pushing" } },
+      }),
+    );
+    expect(blocked).toEqual([
+      { kind: "tool_result", callId: "2", tool: "run_command", ok: false, output: expect.stringContaining("pre-tool hook") },
+      { kind: "permission_denied", tool: "run_command", detail: expect.stringContaining("no pushing") },
+    ]);
+    const done = parser.push(JSON.stringify({ event: "result", result: { conversation_id: "c", status: "SUCCESS" } }));
+    expect(done.at(-1)).toMatchObject({ kind: "completed", success: false, deniedActions: ["run_command"] });
+  });
+
+  it("keeps ordinary tool errors as plain failures", () => {
+    const parser = new AntigravityAdapter().createParser();
+    const out = parser.push(step("ERROR", { tool_info: { error: { message: "file not found: x.ts" } } }));
+    expect(out).toEqual([{ kind: "tool_result", callId: "2", tool: "run_command", ok: false, output: "file not found: x.ts" }]);
+    const done = parser.push(JSON.stringify({ event: "result", result: { conversation_id: "c", status: "SUCCESS" } }));
+    expect(done.at(-1)).toMatchObject({ success: true });
+  });
 });
 
 describe("AntigravityStreamParser (recorded agy 1.2.13 runs)", () => {

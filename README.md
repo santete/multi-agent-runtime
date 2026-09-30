@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **M1 walking skeleton** — control plane API with event store, runner that claims tasks and executes them in per-task git worktrees. Next: M2 (real Claude Code / Antigravity runs, cancel/resume, policy hook).
+> Status: **M2** — real Claude Code and Antigravity runs in per-task git worktrees, every tool call checked by a platform policy hook and audited, cancel via heartbeat, lost-runner detection with automatic retry and session resume. Next: M3 (context, validation, commit/push/PR).
 
 ## Layout
 
@@ -55,18 +55,33 @@ curl -s localhost:7700/tasks/<taskId>
 curl -s localhost:7700/tasks/<taskId>/events
 ```
 
-## API (M1)
+## API
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
-| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`) → `READY` |
+| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`) → `READY` |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
-| POST | `/tasks/:id/cancel` | cancel a task |
+| POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
 | GET | `/tasks/:id/executions` | execution attempts |
-| GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`) |
+| GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
+| GET | `/runners` | agent registry: runners, their agents and capabilities, online status |
 | POST | `/runners/register`, `/runners/:id/claim` | runner protocol |
-| POST | `/executions/:id/start`, `/events`, `/complete` | runner protocol |
+| POST | `/executions/:id/start`, `/heartbeat`, `/events`, `/complete` | runner protocol |
+| POST | `/executions/:id/tool-check` | policy check for the agent's PreToolUse hook (execution token) |
 
-The API has **no authentication yet** and binds to `127.0.0.1` by default.
+### Security
+
+- `MAR_API_TOKEN`: when set, every route except `/health` and `tool-check` requires `Authorization: Bearer <token>` (runner: `apiToken` in its config or the same env var). Without it the control plane refuses to listen on a non-loopback address.
+- Agents never receive the API token. Their policy hook uses a per-execution token that only authorizes `tool-check`.
+- Policy (`packages/core/src/policy.ts`) denies HIGH/CRITICAL actions (push, remote/credential changes, publishing, infra changes, secrets, network, writes outside the worktree or into `.git`); a denied call parks the task in `WAITING_FOR_HUMAN`. See [ADR-0004](docs/adr/0004-policy-enforcement.md).
+
+### Control plane settings
+
+| Env | Default | |
+|---|---|---|
+| `DATABASE_URL` | – | Postgres; unset = embedded PGlite in `PGLITE_DIR` (`./.data/pglite`) |
+| `HOST` / `PORT` | `127.0.0.1` / `7700` | |
+| `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
+| `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING → READY/BLOCKED |

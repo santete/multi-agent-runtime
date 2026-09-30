@@ -15,8 +15,12 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 | Cost / usage | `total_cost_usd`, `usage`, `rate_limit_event` (quota 5h/7d) | `usage` theo từng step (token, không có USD) | |
 | Báo action bị từ chối | `permission_denials[]` trong `result` | `denied_actions[]` trong `result` (**status vẫn là `SUCCESS`**) | |
 | Pre-tool policy hook | ✅ PreToolUse hook, inject theo từng run qua `--settings <json>` | ✅ PreToolUse trong `<workspace>/.agents/hooks.json` (stdin JSON → `{decision: allow\|deny\|ask}`) | |
-| Hook `deny` ở headless | ✅ | ✅ Chặn cứng, agent nhận `reason` | |
-| Hook `allow` ở headless | ✅ | ❌ Không mở được lệnh shell (bug upstream [#548](https://github.com/google-antigravity/antigravity-cli/issues/548), [#619](https://github.com/google-antigravity/antigravity-cli/issues/619)) | |
+| Hook `deny` ở headless | ✅ Lệnh bị chặn xuất hiện trong `permission_denials` | ✅ Chặn cứng, agent nhận `reason`; tool error `tool call denied by pre-tool hook: …` (**không** nằm trong `denied_actions`) | |
+| Hook `allow` ở headless | ✅ Mở được cả lệnh shell | ❌ Không mở được lệnh shell (bug upstream [#548](https://github.com/google-antigravity/antigravity-cli/issues/548), [#619](https://github.com/google-antigravity/antigravity-cli/issues/619)) | |
+| Hook nhận env của agent | ✅ | ✅ | |
+| Cách chạy lệnh hook (Windows) | Giữ nguyên dấu nháy | `cmd /c` với nháy bị escape thành `\"`, nên đường dẫn có nháy hỏng. Dùng lệnh `%MAR_POLICY_HOOK%` (biến env) | |
+| Tên tool shell (Windows) | `PowerShell` (đôi khi `Bash`) | `run_command` | |
+| Binary trên Windows | `claude.cmd` (npm shim) → `bin\claude.exe` | `%LOCALAPPDATA%\agy\bin\agy.exe` (không có trên PATH) | |
 | Allow-rule tĩnh | `permissions.allow` qua `--settings` | `permissions.allow` trong `~/.gemini/antigravity-cli/settings.json` → **bị bỏ qua** ở headless trên Windows (cùng bug) | |
 | Cách ly config của user | `--setting-sources project,local --strict-mcp-config` | Chưa có flag tương đương, config dùng chung `~/.gemini/` | |
 | Auth | Subscription (OAuth) hoặc API key | Tài khoản Google (keyring) hoặc `GEMINI_API_KEY` | |
@@ -35,4 +39,4 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 - agy: `--json-schema` với lượt chạy thành công (lượt thử bị chặn vì cần lệnh shell).
 - agy: `--sandbox` kết hợp `--dangerously-skip-permissions` (cần owner cho phép chạy).
 - agy: cách ly config riêng cho từng runner (thử override `USERPROFILE`/`HOME` và giữ auth).
-- Claude: hook PreToolUse inject qua `--settings` chạy ở headless (dự kiến spike ở M2).
+- ~~Claude: hook PreToolUse inject qua `--settings` chạy ở headless~~ → đã kiểm chứng ở M2.
