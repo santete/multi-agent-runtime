@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
-import { InvalidTransitionError } from "@mar/core";
+import { InvalidTransitionError, KNOWLEDGE_KINDS } from "@mar/core";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { type Actor, Authenticator, type Role, type UserConfig, hasRole } from "./auth.js";
@@ -113,6 +113,20 @@ const approvePlanBody = z
   .object({ tasks: z.array(plannedTask).min(1).max(20).optional(), comment: z.string().max(10_000).optional() })
   .default({});
 const revisePlanBody = z.object({ feedback: z.string().min(1).max(10_000) });
+
+const knowledgeKind = z.enum(KNOWLEDGE_KINDS);
+const createKnowledgeBody = z.object({
+  kind: knowledgeKind,
+  title: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(4000),
+});
+const updateKnowledgeBody = z.object({
+  kind: knowledgeKind.optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  body: z.string().trim().min(1).max(4000).optional(),
+  status: z.enum(["proposed", "accepted", "archived"]).optional(),
+});
+const knowledgeQuery = z.object({ status: z.enum(["proposed", "accepted", "archived"]).optional() });
 
 const reviewBody = z.object({ decision: z.enum(["approve", "reject"]), comment: z.string().max(10_000).optional() });
 const decisionBody = z.object({ comment: z.string().max(10_000).optional() }).default({});
@@ -270,6 +284,20 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   });
   app.post("/plans/:id/reject", role("member"), (req) =>
     store.rejectPlan(idParams.parse(req.params).id, decisionBody.parse(req.body ?? {}).comment, req.actor.name),
+  );
+
+  // Shared knowledge base (spec §20, §35): agents propose, merges and people accept.
+  app.get("/projects/:id/knowledge", (req) =>
+    store.listKnowledge(idParams.parse(req.params).id, knowledgeQuery.parse(req.query).status),
+  );
+  app.post("/projects/:id/knowledge", role("member"), async (req, reply) => {
+    const entry = await store.createKnowledge(idParams.parse(req.params).id, createKnowledgeBody.parse(req.body), req.actor.name);
+    reply.status(201);
+    return entry;
+  });
+  app.get("/knowledge/:id", (req) => store.getKnowledge(idParams.parse(req.params).id));
+  app.put("/knowledge/:id", role("member"), (req) =>
+    store.updateKnowledge(idParams.parse(req.params).id, updateKnowledgeBody.parse(req.body), req.actor.name),
   );
 
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));

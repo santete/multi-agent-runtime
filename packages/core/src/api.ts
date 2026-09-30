@@ -1,5 +1,6 @@
 /** Wire types shared by the control plane HTTP API and its clients (runner, UI). */
 import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
+import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
 import type { PlannedTask, PlanProposal } from "./plan.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
@@ -136,6 +137,49 @@ export interface ReviewPolicy {
 }
 
 export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal";
+
+/** An entry of the project's shared knowledge base (spec §20, §35). */
+export interface KnowledgeDto {
+  id: string;
+  projectId: string;
+  kind: KnowledgeKind;
+  title: string;
+  body: string;
+  status: KnowledgeStatus;
+  /** The task whose agent reported it (null: written by a person). */
+  sourceTaskId: string | null;
+  sourceTaskKey: string | null;
+  sourceAgent: string | null;
+  createdBy: string | null;
+  /** Who accepted or archived it ("platform" when the task was merged). */
+  decidedBy: string | null;
+  /** The entry that replaced it. */
+  supersededBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateKnowledgeRequest {
+  kind: KnowledgeKind;
+  title: string;
+  body: string;
+}
+
+export interface UpdateKnowledgeRequest {
+  kind?: KnowledgeKind | undefined;
+  title?: string | undefined;
+  body?: string | undefined;
+  status?: KnowledgeStatus | undefined;
+}
+
+/** Accepted knowledge handed to an agent with its task. */
+export interface KnowledgeContext {
+  kind: KnowledgeKind;
+  title: string;
+  body: string;
+  /** Key of the task it came from. */
+  source: string | null;
+}
 
 export interface ReviewRequest {
   decision: "approve" | "reject";
@@ -302,6 +346,8 @@ export interface ClaimResponse {
   review?: ReviewTarget;
   /** For plan tasks: what to plan. */
   plan?: PlanningContext;
+  /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
+  knowledge?: KnowledgeContext[];
 }
 
 /**

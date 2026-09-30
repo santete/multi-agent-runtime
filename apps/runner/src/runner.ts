@@ -19,6 +19,7 @@ import {
   buildPrompt,
   buildReviewPrompt,
   contextFiles,
+  knowledgeFiles,
   planFiles,
   reviewFiles,
 } from "./context.js";
@@ -246,9 +247,9 @@ export class Runner {
     const request: AgentRunRequest = {
       workspace: workspace.path,
       prompt: claim.review
-        ? buildReviewPrompt(claim.review)
+        ? buildReviewPrompt(claim.review, claim)
         : claim.plan
-          ? buildPlanPrompt(claim.plan, adapter.capabilities.structuredOutput)
+          ? buildPlanPrompt(claim.plan, adapter.capabilities.structuredOutput, claim)
           : buildPrompt(claim, Boolean(resumeSessionId)),
       objective: task.objective,
       // Reviewers and planners only read: nothing of their worktree is ever delivered.
@@ -343,7 +344,7 @@ export class Runner {
         : claim.plan
           ? planFiles(claim.plan)
           : contextFiles(claim, extras);
-      const files = [...context, ...(adapter.workspaceFiles?.(request) ?? [])];
+      const files = [...context, ...knowledgeFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {
         shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });

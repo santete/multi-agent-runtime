@@ -1,6 +1,6 @@
 import type { ClaimResponse } from "@mar/core";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, contextFiles } from "../src/context.js";
+import { buildPrompt, contextFiles, knowledgeFiles } from "../src/context.js";
 
 const claim = (extra: Partial<ClaimResponse> = {}): ClaimResponse =>
   ({
@@ -82,5 +82,26 @@ describe("task context", () => {
       true,
     );
     expect(prompt).toMatch(/^A human has decided on the actions you were blocked from taking/);
+  });
+});
+
+describe("project knowledge", () => {
+  const knowledge: NonNullable<ClaimResponse["knowledge"]> = [
+    { kind: "convention", title: "ES modules only", body: "Use import/export.", source: null },
+    { kind: "business_rule", title: "Amounts are integer cents", body: "Never floats.", source: "PAY-1" },
+  ];
+
+  it("writes KNOWLEDGE.md grouped by kind and points the agent at it", () => {
+    const [file] = knowledgeFiles(claim({ knowledge }));
+    expect(file?.path).toBe(".orchestrator/context/KNOWLEDGE.md");
+    const text = String(file?.content);
+    expect(text.indexOf("## Business rules")).toBeLessThan(text.indexOf("## Conventions"));
+    expect(text).toContain("### Amounts are integer cents (from PAY-1)\n\nNever floats.");
+    expect(buildPrompt(claim({ knowledge }), false)).toContain("KNOWLEDGE.md");
+  });
+
+  it("writes nothing when the project has no knowledge yet", () => {
+    expect(knowledgeFiles(claim())).toEqual([]);
+    expect(buildPrompt(claim(), false)).not.toContain("KNOWLEDGE.md");
   });
 });

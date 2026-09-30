@@ -2,6 +2,7 @@ import { type ClaimResponse, type WorkspaceFile, toHandoff } from "@mar/core";
 
 /** Where the runner puts task context for the agent (git-excluded). */
 export const CONTEXT_DIR = ".orchestrator/context";
+export const KNOWLEDGE_FILE = `${CONTEXT_DIR}/KNOWLEDGE.md`;
 
 export interface ContextExtras {
   /** Files left conflicted after the runner merged the base branch in. */
@@ -37,6 +38,10 @@ function taskBrief({ task, project }: ClaimResponse): string {
     "## Handoff",
     "",
     "Finish with a handoff: a short summary, the concrete changes, decisions you made (and why), known issues, and remaining work.",
+    "",
+    "Also report in `knowledge` any durable fact about the project you had to work out and the next agent should not have to rediscover",
+    "(architecture, business rules, API contracts, data model, conventions, decisions, known issues). Not a description of your change;",
+    `leave it empty when ${KNOWLEDGE_FILE} already covers it. Facts are shared with later tasks once your work is merged.`,
     "",
   ].join("\n");
 }
@@ -170,10 +175,11 @@ export function reviewFiles(target: NonNullable<ClaimResponse["review"]>, diff: 
   ];
 }
 
-export function buildReviewPrompt(target: NonNullable<ClaimResponse["review"]>): string {
+export function buildReviewPrompt(target: NonNullable<ClaimResponse["review"]>, claim?: ClaimResponse): string {
   return [
     `You are reviewing another agent's change for ${target.taskKey} ("${target.title}").`,
-    `Read ${CONTEXT_DIR}/REVIEW.md and the diff in ${CONTEXT_DIR}/DIFF.patch, inspect the code as needed, and do not modify any file.`,
+    `Read ${CONTEXT_DIR}/REVIEW.md and the diff in ${CONTEXT_DIR}/DIFF.patch, inspect the code as needed, and do not modify any file.` +
+      (claim ? knowledgeHint(claim) : ""),
     "Answer with your verdict (approve or request_changes), a short summary and your findings.",
   ].join("\n\n");
 }
@@ -229,16 +235,55 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
   ].join("\n");
 }
 
+const KIND_TITLES: Record<string, string> = {
+  architecture: "Architecture",
+  business_rule: "Business rules",
+  api_contract: "API contracts",
+  data_model: "Data model",
+  convention: "Conventions",
+  decision: "Decisions",
+  known_issue: "Known issues",
+};
+
+/** The project's accepted knowledge, grouped by kind (spec §20). */
+export function knowledgeBrief(knowledge: NonNullable<ClaimResponse["knowledge"]>): string {
+  const lines = [
+    "# Project knowledge",
+    "",
+    "Facts about this project that the team (agents and people) has established. Rely on them instead of re-analysing the project;",
+    "if you find one is wrong or outdated, say so in your handoff's `knowledge` with the corrected fact.",
+    "",
+  ];
+  for (const kind of Object.keys(KIND_TITLES)) {
+    const entries = knowledge.filter((k) => k.kind === kind);
+    if (!entries.length) continue;
+    lines.push(`## ${KIND_TITLES[kind]}`, "");
+    for (const k of entries) lines.push(`### ${k.title}${k.source ? ` (from ${k.source})` : ""}`, "", k.body, "");
+  }
+  return lines.join("\n");
+}
+
+/** KNOWLEDGE.md for any task kind, when the project has accepted knowledge. */
+export function knowledgeFiles(claim: ClaimResponse): WorkspaceFile[] {
+  return claim.knowledge?.length ? [{ path: KNOWLEDGE_FILE, content: knowledgeBrief(claim.knowledge), mergeJson: false }] : [];
+}
+
+/** The sentence pointing the agent at the knowledge file. */
+function knowledgeHint(claim: ClaimResponse): string {
+  return claim.knowledge?.length ? ` What the team already knows about the project is in ${KNOWLEDGE_FILE}.` : "";
+}
+
 /** Context file for a plan task. */
 export function planFiles(plan: NonNullable<ClaimResponse["plan"]>): WorkspaceFile[] {
   return [{ path: `${CONTEXT_DIR}/PLAN.md`, content: planBrief(plan), mergeJson: false }];
 }
 
-export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, structured: boolean): string {
+export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, structured: boolean, claim?: ClaimResponse): string {
   return [
-    `You are planning work for a team of coding agents. Read ${CONTEXT_DIR}/PLAN.md, inspect the repository as needed, and do not modify any file.`,
-    "Answer with a summary and the list of tasks (ref, title, objective, agent, requires, dependsOn).",
-    ...(structured ? [] : ["Reply with only that JSON object: {\"summary\": ..., \"tasks\": [...]}."]),
+    `You are planning work for a team of coding agents. Read ${CONTEXT_DIR}/PLAN.md, inspect the repository as needed, and do not modify any file.` +
+      (claim ? knowledgeHint(claim) : ""),
+    "Answer with a summary, the list of tasks (ref, title, objective, agent, requires, dependsOn) and any durable project facts you established (knowledge).",
+    ...(structured ? [] : ['Reply with only that JSON object: {"summary": ..., "tasks": [...], "knowledge": [...]}.']),
   ].join("\n\n");
 }
 
@@ -274,7 +319,7 @@ export function buildPrompt(claim: ClaimResponse, resuming: boolean): string {
   parts.push(claim.task.objective);
   const extra = claim.dependencies?.length ? ` Tasks it builds on are summarized in ${CONTEXT_DIR}/DEPENDENCIES.md.` : "";
   parts.push(
-    `The full task brief, rules and the validation that will be run are in ${CONTEXT_DIR}/TASK.md; read it first.${extra} ` +
+    `The full task brief, rules and the validation that will be run are in ${CONTEXT_DIR}/TASK.md; read it first.${extra}${knowledgeHint(claim)} ` +
       "Do not commit or push. End with the handoff (summary, changes, decisions, known issues, remaining work).",
   );
   return parts.join("\n\n");

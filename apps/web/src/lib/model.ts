@@ -124,6 +124,12 @@ export function describeEvent(e: EventDto): string {
       return `plan rejected${p.comment ? ` — “${p.comment}”` : ""}${by}`;
     case "PlanRevisionRequested":
       return `plan sent back to the planner — “${p.comment}”${by}`;
+    case "KnowledgeProposed":
+      return `${p.agent} proposed knowledge: ${(p.titles ?? []).join("; ")}`;
+    case "KnowledgeAccepted":
+      return `knowledge accepted: ${p.title}${p.actor && p.actor !== "platform" ? ` by ${p.actor}` : ""}`;
+    case "KnowledgeUpdated":
+      return `knowledge ${p.status}: ${p.title}${by}`;
     case "AgentSelected":
       return `routed to ${p.agent} — ${p.reason}`;
     case "TaskReassigned":

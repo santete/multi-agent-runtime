@@ -30,7 +30,7 @@ describe("checkPlan", () => {
     // A planner may find nothing to do.
     expect(checkPlan({ summary: "done already", tasks: [] }, { allowEmpty: true })).toEqual({
       ok: true,
-      plan: { summary: "done already", tasks: [] },
+      plan: { summary: "done already", tasks: [], knowledge: [] },
     });
     expect(checkPlan({ tasks: Array.from({ length: MAX_PLAN_TASKS + 1 }, (_, i) => task(`T${i}`)) })).toMatchObject({ ok: false });
     expect(checkPlan({ tasks: [task("A", [], { objective: " " })] })).toMatchObject({ ok: false });
@@ -41,7 +41,7 @@ describe("checkPlan", () => {
     const check = checkPlan({ tasks: [{ title: " T ", objective: "O", agent: "", requires: ["ts", 3, " "], dependsOn: "x" }] });
     expect(check).toEqual({
       ok: true,
-      plan: { summary: "", tasks: [{ ref: "T1", title: "T", objective: "O", agent: null, requires: ["ts"], dependsOn: [] }] },
+      plan: { summary: "", tasks: [{ ref: "T1", title: "T", objective: "O", agent: null, requires: ["ts"], dependsOn: [] }], knowledge: [] },
     });
   });
 

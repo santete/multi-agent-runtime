@@ -3,6 +3,9 @@ import type {
   AgentStats,
   ApprovalDto,
   ArtifactDto,
+  KnowledgeDto,
+  KnowledgeKind,
+  KnowledgeStatus,
   PlanDto,
   PlannedTask,
   EventDto,
@@ -69,6 +72,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(path: string) => request<T>("GET", path);
 const post = <T>(path: string, body: unknown = {}) => request<T>("POST", path, body);
+const put = <T>(path: string, body: unknown) => request<T>("PUT", path, body);
 
 export const api = {
   me: () => get<ActorDto>("/me"),
@@ -90,6 +94,12 @@ export const api = {
   approvePlan: (id: string, body: { tasks?: PlannedTask[]; comment?: string }) => post<PlanDto>(`/plans/${id}/approve`, body),
   revisePlan: (id: string, feedback: string) => post<PlanDto>(`/plans/${id}/revise`, { feedback }),
   rejectPlan: (id: string, comment?: string) => post<PlanDto>(`/plans/${id}/reject`, comment ? { comment } : {}),
+
+  knowledge: (projectId: string) => get<KnowledgeDto[]>(`/projects/${projectId}/knowledge`),
+  createKnowledge: (projectId: string, body: { kind: KnowledgeKind; title: string; body: string }) =>
+    post<KnowledgeDto>(`/projects/${projectId}/knowledge`, body),
+  updateKnowledge: (id: string, body: { kind?: KnowledgeKind; title?: string; body?: string; status?: KnowledgeStatus }) =>
+    put<KnowledgeDto>(`/knowledge/${id}`, body),
 
   task: (id: string) => get<TaskDto>(`/tasks/${id}`),
   taskEvents: (id: string) => get<EventsPage>(`/tasks/${id}/events?limit=1000`),

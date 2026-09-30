@@ -1,4 +1,4 @@
-import type { TaskDto } from "@mar/core";
+import type { ActorDto, TaskDto } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
@@ -6,11 +6,12 @@ import { COLUMNS, groupByColumn } from "../lib/model.js";
 import { href, type ProjectTab } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { Graph } from "./Graph.js";
+import { KnowledgeTab } from "./KnowledgeTab.js";
 import { NewTaskDialog } from "./NewTaskDialog.js";
 import { NewPlanDialog, PlansList } from "./PlansPage.js";
 import { Empty, ErrorBox, Loading, StateBadge } from "./ui.js";
 
-export function ProjectPage({ id, tab }: { id: string; tab: ProjectTab }) {
+export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; actor: ActorDto }) {
   const [project, projectError] = useLiveQuery(() => api.project(id), [id], () => false);
   const [tasks, tasksError] = useLiveQuery(
     () => api.tasks(id),
@@ -53,6 +54,9 @@ export function ProjectPage({ id, tab }: { id: string; tab: ProjectTab }) {
         <a className={tab === "plans" ? "active" : ""} href={href.project(id, "plans")}>
           Plans
         </a>
+        <a className={tab === "knowledge" ? "active" : ""} href={href.project(id, "knowledge")}>
+          Knowledge
+        </a>
         <a className={tab === "activity" ? "active" : ""} href={href.project(id, "activity")}>
           Activity
         </a>
@@ -67,6 +71,8 @@ export function ProjectPage({ id, tab }: { id: string; tab: ProjectTab }) {
         tasks.length ? <Graph tasks={tasks} /> : <Empty>No tasks yet.</Empty>
       ) : tab === "plans" ? (
         <PlansList projectId={id} />
+      ) : tab === "knowledge" ? (
+        <KnowledgeTab projectId={id} actor={actor} />
       ) : (
         <ActivityFeed projectId={id} limit={100} />
       )}

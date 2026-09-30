@@ -986,3 +986,47 @@ button.link:disabled {
   color: var(--muted);
   cursor: default;
 }
+
+.knowledge section {
+  margin-bottom: 20px;
+}
+.knowledge h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+.knowledge-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.knowledge-entry {
+  margin-bottom: 8px;
+}
+.knowledge-entry .card-head {
+  gap: 8px;
+}
+.knowledge-entry.status-proposed {
+  border-left: 3px solid var(--attention-fg);
+}
+.knowledge-entry.status-archived {
+  opacity: 0.65;
+}
+.knowledge-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+.knowledge-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 12px;
+}
+.knowledge-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type ProjectTab = "board" | "graph" | "plans" | "activity";
+export type ProjectTab = "board" | "graph" | "plans" | "knowledge" | "activity";
 
 /** Hash routes (#/projects/<id>) so the UI never collides with API paths. */
 export type Route =
@@ -14,7 +14,8 @@ export type Route =
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (parts[0] === "projects" && parts[1]) {
-    const tab = parts[2] === "graph" || parts[2] === "plans" || parts[2] === "activity" ? parts[2] : "board";
+    const tabs: ProjectTab[] = ["graph", "plans", "knowledge", "activity"];
+    const tab = tabs.find((t) => t === parts[2]) ?? "board";
     return { page: "project", id: parts[1], tab };
   }
   if (parts[0] === "tasks" && parts[1]) return { page: "task", id: parts[1] };

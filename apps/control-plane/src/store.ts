@@ -4,6 +4,12 @@ import {
   type AgentStats,
   type ApprovePlanRequest,
   type CreatePlanRequest,
+  type CreateKnowledgeRequest,
+  type KnowledgeContext,
+  type KnowledgeDto,
+  type KnowledgeNote,
+  type KnowledgeStatus,
+  type UpdateKnowledgeRequest,
   type PlanDto,
   type PlanningContext,
   type PlanProposal,
@@ -44,6 +50,8 @@ import {
   ACTIVE_EXECUTION_STATUSES,
   approvalKey,
   checkPlan,
+  KNOWLEDGE_KINDS,
+  sameKnowledge,
   chooseAgent,
   isAgentUnavailable,
   evaluateToolCall,
@@ -98,6 +106,8 @@ export interface StoreOptions {
 type Row = Record<string, any>;
 
 const ACTIVE = [...ACTIVE_EXECUTION_STATUSES];
+/** How much accepted knowledge (characters) an agent gets with its task. */
+const KNOWLEDGE_CONTEXT_CHARS = 40_000;
 /** Agent value of a task the scheduler still has to route. */
 const AUTO = "auto";
 
@@ -166,6 +176,25 @@ const toTask = (r: Row): TaskDto => ({
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
   version: r.version,
+  createdAt: iso(r.created_at),
+  updatedAt: iso(r.updated_at),
+});
+
+const KNOWLEDGE_SELECT = `select k.*, t.key as source_task_key from knowledge k left join tasks t on t.id = k.source_task_id`;
+
+const toKnowledge = (r: Row): KnowledgeDto => ({
+  id: r.id,
+  projectId: r.project_id,
+  kind: r.kind,
+  title: r.title,
+  body: r.body,
+  status: r.status,
+  sourceTaskId: r.source_task_id ?? null,
+  sourceTaskKey: r.source_task_key ?? null,
+  sourceAgent: r.source_agent ?? null,
+  createdBy: r.created_by ?? null,
+  decidedBy: r.decided_by ?? null,
+  supersededBy: r.superseded_by ?? null,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
 });
@@ -537,6 +566,7 @@ export class Store {
         );
         created.push({ ref: t.ref, taskId: task.id, key: task.key });
       }
+      if (plan.plannerTaskId) await this.acceptTaskKnowledge(q, plan.plannerTaskId, actor ?? "platform");
       await q.query(
         `update plans set status = 'approved', proposal = $2, created_tasks = $3, decided_by = $4, comment = $5,
            decided_at = now() where id = $1`,
@@ -640,6 +670,7 @@ export class Store {
     const known = new Set((await this.onlineAgents(q)).map((a) => a.id));
     const plan = { ...proposal, tasks: proposal.tasks.map((t) => (t.agent && !known.has(t.agent) ? { ...t, agent: null } : t)) };
     const execution = await this.finishExecution(q, task, id, req, "succeeded", { tasks: plan.tasks.length });
+    await this.proposeKnowledge(q, task, plan.knowledge);
     await this.addArtifact(q, task, id, "plan_proposal", plan as unknown as Record<string, unknown>);
     if (!isTerminal(task.state)) await changeTaskState(q, task, "review_submitted", { tasks: plan.tasks.length });
     const [updated] = await q.query(
@@ -655,6 +686,131 @@ export class Store {
       });
     }
     return execution;
+  }
+
+  // ---- knowledge base (spec §20, §35) --------------------------------------
+
+  listKnowledge(projectId: string, status?: KnowledgeStatus): Promise<KnowledgeDto[]> {
+    return this.db
+      .query(
+        `${KNOWLEDGE_SELECT} where k.project_id = $1 and ($2::text is null or k.status = $2)
+         order by array_position($3::text[], k.kind), k.updated_at desc`,
+        [projectId, status ?? null, [...KNOWLEDGE_KINDS]],
+      )
+      .then((rows) => rows.map(toKnowledge));
+  }
+
+  getKnowledge(id: string, q: Queryable = this.db): Promise<KnowledgeDto> {
+    return one(q.query(`${KNOWLEDGE_SELECT} where k.id = $1`, [id]), toKnowledge, "knowledge", id);
+  }
+
+  /** A person writes knowledge down: trusted right away. */
+  async createKnowledge(projectId: string, req: CreateKnowledgeRequest, actor?: string): Promise<KnowledgeDto> {
+    return this.db.tx(async (q) => {
+      await this.getProject(projectId, q);
+      const id = randomUUID();
+      await q.query(
+        `insert into knowledge (id, project_id, kind, title, body, status, created_by, decided_by)
+         values ($1, $2, $3, $4, $5, 'proposed', $6, $6)`,
+        [id, projectId, req.kind, req.title.trim(), req.body.trim(), actor ?? null],
+      );
+      await this.acceptKnowledge(q, id, actor ?? null);
+      return this.getKnowledge(id, q);
+    });
+  }
+
+  async updateKnowledge(id: string, req: UpdateKnowledgeRequest, actor?: string): Promise<KnowledgeDto> {
+    return this.db.tx(async (q) => {
+      const entry = await one(q.query("select * from knowledge where id = $1 for update", [id]), toKnowledge, "knowledge", id);
+      await q.query(
+        "update knowledge set kind = $2, title = $3, body = $4, updated_at = now() where id = $1",
+        [id, req.kind ?? entry.kind, req.title?.trim() || entry.title, req.body?.trim() || entry.body],
+      );
+      if (req.status === "accepted" && entry.status !== "accepted") await this.acceptKnowledge(q, id, actor ?? null);
+      else if (req.status && req.status !== entry.status) {
+        await q.query("update knowledge set status = $2, decided_by = $3, updated_at = now() where id = $1", [id, req.status, actor ?? null]);
+      }
+      const updated = await this.getKnowledge(id, q);
+      await appendEvent(q, {
+        type: "KnowledgeUpdated",
+        projectId: entry.projectId,
+        payload: { knowledgeId: id, title: updated.title, status: updated.status, actor: actor ?? null },
+      });
+      return updated;
+    });
+  }
+
+  /**
+   * An agent reported what it learned. It stays "proposed" until its work is
+   * merged (or its plan approved); a later attempt replaces the earlier notes.
+   */
+  private async proposeKnowledge(q: Queryable, task: TaskDto, notes: KnowledgeNote[]): Promise<void> {
+    await q.query(
+      "update knowledge set status = 'archived', decided_by = 'platform', updated_at = now() where source_task_id = $1 and status = 'proposed'",
+      [task.id],
+    );
+    if (!notes.length) return;
+    for (const n of notes) {
+      await q.query(
+        `insert into knowledge (id, project_id, kind, title, body, status, source_task_id, source_agent)
+         values ($1, $2, $3, $4, $5, 'proposed', $6, $7)`,
+        [randomUUID(), task.projectId, n.kind, n.title, n.body, task.id, task.agent],
+      );
+    }
+    await appendEvent(q, {
+      type: "KnowledgeProposed",
+      projectId: task.projectId,
+      taskId: task.id,
+      payload: { agent: task.agent, titles: notes.map((n) => n.title) },
+    });
+  }
+
+  private async acceptTaskKnowledge(q: Queryable, taskId: string, actor: string): Promise<void> {
+    const rows = await q.query<{ id: string }>(
+      "select id from knowledge where source_task_id = $1 and status = 'proposed' order by created_at",
+      [taskId],
+    );
+    for (const r of rows) await this.acceptKnowledge(q, r.id, actor);
+  }
+
+  /** Accepts an entry; an accepted entry about the same fact is superseded. */
+  private async acceptKnowledge(q: Queryable, id: string, actor: string | null): Promise<void> {
+    const entry = await this.getKnowledge(id, q);
+    const accepted = await this.listKnowledgeTx(q, entry.projectId, "accepted");
+    for (const old of accepted.filter((k) => k.id !== id && sameKnowledge(k, entry))) {
+      await q.query(
+        "update knowledge set status = 'archived', superseded_by = $2, decided_by = $3, updated_at = now() where id = $1",
+        [old.id, id, actor],
+      );
+    }
+    await q.query("update knowledge set status = 'accepted', decided_by = $2, updated_at = now() where id = $1", [id, actor]);
+    await appendEvent(q, {
+      type: "KnowledgeAccepted",
+      projectId: entry.projectId,
+      ...(entry.sourceTaskId && { taskId: entry.sourceTaskId }),
+      payload: { knowledgeId: id, kind: entry.kind, title: entry.title, actor },
+    });
+  }
+
+  private async listKnowledgeTx(q: Queryable, projectId: string, status: KnowledgeStatus): Promise<KnowledgeDto[]> {
+    return (await q.query(`${KNOWLEDGE_SELECT} where k.project_id = $1 and k.status = $2`, [projectId, status])).map(toKnowledge);
+  }
+
+  /** The accepted knowledge an agent gets, newest first per kind, within a size budget. */
+  private async knowledgeContext(q: Queryable, projectId: string): Promise<KnowledgeContext[]> {
+    const rows = await q.query(
+      `${KNOWLEDGE_SELECT} where k.project_id = $1 and k.status = 'accepted'
+       order by array_position($2::text[], k.kind), k.updated_at desc limit 200`,
+      [projectId, [...KNOWLEDGE_KINDS]],
+    );
+    const context: KnowledgeContext[] = [];
+    let size = 0;
+    for (const r of rows) {
+      size += r.title.length + r.body.length;
+      if (size > KNOWLEDGE_CONTEXT_CHARS) break;
+      context.push({ kind: r.kind, title: r.title, body: r.body, source: r.source_task_key ?? null });
+    }
+    return context;
   }
 
   async graph(projectId: string): Promise<TaskGraph> {
@@ -807,6 +963,7 @@ export class Store {
       const dependencies = await this.dependencyContext(q, task);
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
+      const knowledge = await this.knowledgeContext(q, project.id);
       const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
@@ -844,6 +1001,7 @@ export class Store {
         ...(approvals.length > 0 && { approvals }),
         ...(review && { review }),
         ...(plan && { plan }),
+        ...(knowledge.length > 0 && { knowledge }),
       };
     });
   }
@@ -1104,7 +1262,9 @@ export class Store {
         payload: { status, exitCode: req.exitCode },
       });
       if (t.kind === "completed" && status !== "cancelled") {
-        await this.addArtifact(q, task, id, "handoff", toHandoff(t.result) as unknown as Record<string, unknown>);
+        const handoff = toHandoff(t.result);
+        await this.addArtifact(q, task, id, "handoff", handoff as unknown as Record<string, unknown>);
+        if (status === "validating") await this.proposeKnowledge(q, task, handoff.knowledge);
       }
 
       // A task cancelled while running keeps its terminal state.
@@ -1664,6 +1824,7 @@ export class Store {
           taskId: task.id,
           payload: { pullRequest: task.pullRequestUrl, sha: merge.sha },
         });
+        await this.acceptTaskKnowledge(q, completed.id, "platform");
         await this.unlockDependents(q, completed);
       } else {
         await changeTaskState(q, current, "merge_conflict", { message: merge.message });
