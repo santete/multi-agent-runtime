@@ -1,8 +1,8 @@
 # multi-agent-runtime
 
-Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
+Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code and Antigravity agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Next: Phase 2 (see the development plan).
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Next: Phase 2 (see the development plan).
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -30,6 +30,7 @@ packages/
   core/                    task state machine, adapter contract, API wire types
   adapter-claude-code/     Claude Code CLI (claude -p --output-format stream-json)
   adapter-antigravity/     Antigravity CLI (agy -p --output-format stream-json)
+  adapter-codex/           OpenAI Codex CLI (codex exec --json), sandboxed + audited
   adapter-generic-cli/     any command-line tool (stdout lines + exit code)
 apps/
   control-plane/           Fastify API, Postgres/PGlite, append-only event store

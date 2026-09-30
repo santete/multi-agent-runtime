@@ -30,6 +30,7 @@ export interface PolicyVerdict {
 
 const SHELL_TOOLS = new Set(["bash", "powershell", "run_command", "shell", "exec_command"]);
 const WRITE_TOOLS = new Set([
+  "apply_patch",
   "write",
   "edit",
   "multiedit",
@@ -79,11 +80,22 @@ function commandOf(input: unknown): string {
   return Array.isArray(cmd) ? cmd.join(" ") : String(cmd);
 }
 
+/** Files named in a Codex `apply_patch` body ("*** Update File: path", ...). */
+function patchPaths(patch: string): string[] {
+  return [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm)].map((m) =>
+    (m[1] ?? m[2]!).trim(),
+  );
+}
+
 function pathsOf(input: unknown): string[] {
   const i = asRecord(input);
-  return ["file_path", "path", "notebook_path", "TargetFile", "AbsolutePath", "target_file"]
+  const direct = ["file_path", "path", "notebook_path", "TargetFile", "AbsolutePath", "target_file"]
     .map((k) => i[k])
     .filter((v): v is string => typeof v === "string" && v.length > 0);
+  // Codex file changes: `paths` (runner events) or the patch text (hook payload).
+  const listed = Array.isArray(i.paths) ? i.paths.filter((p): p is string => typeof p === "string") : [];
+  const patch = [i.patch, i.input, i.command].find((v): v is string => typeof v === "string") ?? "";
+  return [...direct, ...listed, ...patchPaths(patch)];
 }
 
 function normalize(p: string): string {

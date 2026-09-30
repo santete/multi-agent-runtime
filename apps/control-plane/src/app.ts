@@ -91,7 +91,7 @@ const approvalsQuery = z.object({ status: z.enum(["pending", "approved", "reject
 const capabilities = z.object({
   pause: z.enum(["native", "checkpoint", "none"]),
   resume: z.boolean(),
-  approval: z.enum(["pre-tool-hook", "static-rules", "none"]),
+  approval: z.enum(["pre-tool-hook", "static-rules", "sandbox", "none"]),
   structuredOutput: z.boolean(),
   streaming: z.boolean(),
   costReporting: z.boolean(),

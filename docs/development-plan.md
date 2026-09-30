@@ -120,6 +120,15 @@ Toàn bộ M1–M5 đã xong. Việc tiếp theo thuộc Phase 2 (xem bên dư�
 
 ## Phase 2
 
+### Codex adapter — trạng thái ✅ ([ADR-0010](adr/0010-codex-adapter.md))
+
+- [x] `packages/adapter-codex`: `codex exec --json`, resume, output schema, sandbox `workspace-write` (không mạng), cách ly config (+ workaround sandbox Windows)
+- [x] Capability `approval: "sandbox"` + control plane audit sau khi chạy (`ToolCallChecked { audit: true }`); vi phạm → `WAITING_FOR_HUMAN`
+- [x] Policy hiểu `apply_patch` (đường dẫn trong patch)
+- [x] **Chạy thật**: DAG CDX-1 (Codex) → CDX-2 (Claude, dùng handoff của Codex) trên `mar-sandbox`, PR #10–#11 được merge, `main` đạt 47/47 test
+- Giới hạn: trên Windows không duyệt trước được tool call của Codex (upstream #24453), chỉ audit sau khi chạy
+
+
 Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · review agent chéo · shared knowledge base · scheduler theo capability, policy và cost · reassign khi agent lỗi · container sandbox · Slack/Telegram approval · OpenTelemetry · CI integration.
 
 ## Phase 3

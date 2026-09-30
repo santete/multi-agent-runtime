@@ -121,7 +121,8 @@ export function describeEvent(e: EventDto): string {
     case "AgentFinished":
       return `agent finished: ${p.status}`;
     case "ToolCallChecked":
-      return `${p.decision === "allow" ? "allowed" : "denied"} ${p.summary} [${p.risk}]`;
+      // audit: checked after the agent ran it (sandboxed agents without a working hook).
+      return `${p.audit ? "audited, " : ""}${p.decision === "allow" ? "allowed" : p.audit ? "violation" : "denied"} ${p.summary} [${p.risk}]`;
     case "ApprovalRequested":
       return `approval requested: ${p.summary}`;
     case "ApprovalGranted":

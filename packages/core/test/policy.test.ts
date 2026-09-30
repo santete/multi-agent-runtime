@@ -63,6 +63,20 @@ describe("policy: file tools", () => {
       .toMatchObject({ decision: "deny", risk: "HIGH" });
   });
 
+  it("checks every file of a Codex patch (hook payload) or file change (runner event)", () => {
+    const patch = (body: string) => ({ tool: "apply_patch", input: { command: body } });
+    const ok = "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** Add File: test/a.test.ts\n+t\n*** End Patch";
+    expect(evaluateToolCall(patch(ok), ctx)).toMatchObject({ decision: "allow", summary: "apply_patch: src/a.ts, test/a.test.ts" });
+    const escape = "*** Begin Patch\n*** Update File: src/a.ts\n*** Add File: ../other/x.ts\n*** End Patch";
+    expect(evaluateToolCall(patch(escape), ctx)).toMatchObject({ decision: "deny", risk: "HIGH" });
+    expect(evaluateToolCall(patch("*** Begin Patch\n*** Update File: .git/hooks/pre-commit\n*** End Patch"), ctx).risk).toBe(
+      "CRITICAL",
+    );
+    expect(
+      evaluateToolCall({ tool: "apply_patch", input: { paths: ["C:\\runner\\worktrees\\PAY-1\\src\\a.ts"] } }, ctx).decision,
+    ).toBe("allow");
+  });
+
   it("allows reads and unknown tools", () => {
     expect(evaluateToolCall({ tool: "Read", input: { file_path: "src/a.ts" } }, ctx).decision).toBe("allow");
     expect(evaluateToolCall({ tool: "Grep", input: { pattern: "x" } }, ctx).decision).toBe("allow");

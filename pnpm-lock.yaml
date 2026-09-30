@@ -54,6 +54,9 @@ importers:
       '@mar/adapter-claude-code':
         specifier: workspace:*
         version: link:../../packages/adapter-claude-code
+      '@mar/adapter-codex':
+        specifier: workspace:*
+        version: link:../../packages/adapter-codex
       '@mar/adapter-generic-cli':
         specifier: workspace:*
         version: link:../../packages/adapter-generic-cli
@@ -106,6 +109,12 @@ importers:
         version: link:../core
 
   packages/adapter-claude-code:
+    dependencies:
+      '@mar/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-codex:
     dependencies:
       '@mar/core':
         specifier: workspace:*

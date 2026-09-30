@@ -14,6 +14,12 @@ export type ApprovalSupport =
   | "pre-tool-hook"
   /** Only a static allow/deny list; denied calls are reported afterwards. */
   | "static-rules"
+  /**
+   * The agent's own sandbox confines it (e.g. no network, writes only in the
+   * workspace) but tool calls cannot be gated beforehand; the control plane
+   * audits every tool call after the fact.
+   */
+  | "sandbox"
   | "none";
 
 export interface AdapterCapabilities {
