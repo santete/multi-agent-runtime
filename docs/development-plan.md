@@ -10,7 +10,7 @@ Nguồn yêu cầu: [`product-spec.md`](product-spec.md). Quyết định kiến
 | D2 | Control Plane tập trung + Runner daemon | [0002](adr/0002-control-plane-and-runner.md) |
 | D3 | State machine tự viết trên Postgres (MVP), đánh giá Temporal ở Phase 2 | [0002](adr/0002-control-plane-and-runner.md), [0005](adr/0005-task-state-machine.md) |
 | D4 | GitHub trước, qua interface `GitProvider` | [0002](adr/0002-control-plane-and-runner.md) |
-| D5 | Approval qua Web UI (Slack/Telegram để Phase 2) | [0004](adr/0004-policy-enforcement.md) |
+| D5 | Approval qua Web UI; Phase 2 thêm thông báo qua webhook tương thích Slack ([ADR-0016](adr/0016-notifications.md)) | [0004](adr/0004-policy-enforcement.md) |
 | D6 | Thứ tự adapter: **Claude Code → Antigravity (agy) → Codex** | [0003](adr/0003-adapter-contract.md) |
 
 ## Kiến trúc MVP
@@ -171,6 +171,12 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] CI pending giữ hàng đợi; CI fail → rework `ci` với check và thông điệp lỗi; không có CI sau thời gian chờ → merge, ghi `CiSkipped`
 - [x] Sửa cấu hình CI cần approval (HIGH); không tự approve thay đổi chạm CI; PR có cảnh báo; không cho cancel khi đang `MERGING`
 - [x] **Chạy thật** trên `mar-sandbox` với GitHub Actions: re-validate LP-9 trên `main` mới mà không chạy agent; CI fail → rework `ci`; phát hiện agent nới lỏng CI để pass (đã chặn bằng policy) và lỗi cancel lúc đang merge (đã sửa)
+
+### Thông báo (webhook tương thích Slack) — trạng thái ✅ ([ADR-0016](adr/0016-notifications.md))
+
+- [x] Notifier đọc event log theo cursor lưu trong DB (`event_cursors`), không gửi lặp, không bỏ sót khi restart; lần đầu bắt đầu từ cuối log
+- [x] Báo approval HIGH, task cần review (kèm PR), plan chờ duyệt, task bị chặn; tùy chọn CI fail và merged; link về dashboard (`MAR_PUBLIC_URL`)
+- [x] Retry lỗi mạng/5xx/429; webhook hỏng không làm kẹt các event khác; log không chứa URL webhook
 
 ## Phase 3
 

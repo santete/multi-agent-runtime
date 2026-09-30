@@ -3,6 +3,7 @@ import { buildApp } from "./app.js";
 import { loadUsers } from "./auth.js";
 import { createPgDb, createPgliteDb, migrate } from "./db.js";
 import { GitHubProvider } from "./git-provider.js";
+import { Notifier, notifierOptionsFromEnv } from "./notifier.js";
 import { Store } from "./store.js";
 
 // DATABASE_URL=postgres://... for Postgres; unset = embedded PGlite under ./.data/pglite.
@@ -56,8 +57,28 @@ const sweeper = setInterval(async () => {
   }
 }, sweepEveryMs);
 
+// Slack-compatible notifications: MAR_NOTIFY_WEBHOOKS (comma separated), MAR_NOTIFY_EVENTS, MAR_PUBLIC_URL.
+const notifyOptions = notifierOptionsFromEnv(process.env, `http://${host}:${port}`);
+const notifier = notifyOptions ? new Notifier(store, { ...notifyOptions, log: app.log }) : undefined;
+let notifying = false;
+const notifyTimer = notifier
+  ? setInterval(async () => {
+      if (notifying) return;
+      notifying = true;
+      try {
+        await notifier.poll();
+      } catch (err) {
+        app.log.error(err, "notifications failed");
+      } finally {
+        notifying = false;
+      }
+    }, Number(process.env.MAR_NOTIFY_INTERVAL_MS ?? 3000))
+  : undefined;
+if (notifyOptions) app.log.info({ webhooks: notifyOptions.webhooks.length, kinds: notifyOptions.kinds ?? "default" }, "notifications on");
+
 const shutdown = async () => {
   clearInterval(sweeper);
+  if (notifyTimer) clearInterval(notifyTimer);
   await app.close();
   await db.close();
   process.exit(0);

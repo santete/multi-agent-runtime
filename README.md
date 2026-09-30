@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it), a shared knowledge base, and a merge queue that re-validates on a moved base and waits for CI are done; see the development plan.
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it), a shared knowledge base, a merge queue that re-validates on a moved base and waits for CI, and Slack-compatible notifications are done; see the development plan.
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -124,6 +124,9 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `HOST` / `PORT` | `127.0.0.1` / `7700` | |
 | `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
 | `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING/REWORK → READY/BLOCKED |
+| `MAR_NOTIFY_WEBHOOKS` | – | comma-separated Slack-compatible incoming webhook URLs (Slack, Mattermost, Rocket.Chat, Discord `/slack`); unset = no notifications ([ADR-0016](docs/adr/0016-notifications.md)) |
+| `MAR_NOTIFY_EVENTS` | `approval,review,plan,blocked` | also `ci`, `merged` |
+| `MAR_PUBLIC_URL` | `http://HOST:PORT` | dashboard base URL used in notification links |
 | `GITHUB_TOKEN` | – | opens pull requests for delivered tasks (e.g. `GITHUB_TOKEN=$(gh auth token)`); without it the branch is pushed and the PR is skipped |
 
 The runner pushes task branches with its machine's own git credentials; agents never can (the policy denies `git push`).
