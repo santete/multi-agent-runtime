@@ -45,32 +45,71 @@ export interface CommitResult {
   changedFiles: string[];
 }
 
+async function revParse(worktree: string, ref: string): Promise<string | null> {
+  try {
+    return await git(worktree, "rev-parse", "--verify", "--quiet", ref);
+  } catch {
+    return null;
+  }
+}
+
+const authorArgs = (author: { name: string; email: string }) => [
+  "-c",
+  `user.name=${author.name}`,
+  "-c",
+  `user.email=${author.email}`,
+];
+
 /**
- * Commits all task changes and pushes the task branch. Done by the runner
- * after validation, never by the agent (ADR-0004). Returns a null sha when
- * there is nothing to commit.
+ * Commits all task changes (concluding a merge of the base branch, if one is
+ * in progress) and pushes the task branch when it differs from the remote.
+ * Done by the runner after validation, never by the agent (ADR-0004).
+ * Returns a null sha when there is nothing to push.
  */
 export async function commitAndPush(worktree: string, opts: CommitOptions): Promise<CommitResult> {
   if (opts.restore.length) await git(worktree, "checkout", "--", ...opts.restore);
   const files = await changedFiles(worktree);
-  if (!files.length) return { commitSha: null, changedFiles: [] };
-
-  await git(worktree, "add", "-A");
-  await git(
-    worktree,
-    "-c",
-    `user.name=${opts.author.name}`,
-    "-c",
-    `user.email=${opts.author.email}`,
-    "commit",
-    "-q",
-    "--no-verify",
-    "-m",
-    opts.message,
-  );
-  const commitSha = await git(worktree, "rev-parse", "HEAD");
+  if (files.length || (await isMerging(worktree))) {
+    await git(worktree, "add", "-A");
+    await git(worktree, ...authorArgs(opts.author), "commit", "-q", "--no-verify", "-m", opts.message);
+  }
+  const head = await revParse(worktree, "HEAD");
+  const remote = await revParse(worktree, `refs/remotes/origin/${opts.branch}`);
+  const base = await revParse(worktree, "refs/remotes/origin/HEAD");
+  if (!head || head === remote || (!remote && head === base)) return { commitSha: null, changedFiles: files };
   await git(worktree, "push", "origin", `HEAD:refs/heads/${opts.branch}`);
-  return { commitSha, changedFiles: files };
+  await git(worktree, "fetch", "-q", "origin", `refs/heads/${opts.branch}:refs/remotes/origin/${opts.branch}`);
+  return { commitSha: head, changedFiles: files };
+}
+
+async function isMerging(worktree: string): Promise<boolean> {
+  return (await revParse(worktree, "MERGE_HEAD")) !== null;
+}
+
+/** Files left with unresolved conflicts by a merge. */
+export async function conflictedFiles(worktree: string): Promise<string[]> {
+  const out = await git(worktree, "diff", "--name-only", "--diff-filter=U");
+  return out.split(/\r?\n/).filter(Boolean);
+}
+
+/**
+ * Merges the latest base branch into the task branch (rework after a merge
+ * conflict). Conflicts are left in the worktree for the agent to resolve.
+ */
+export async function mergeBase(
+  worktree: string,
+  baseBranch: string,
+  author: { name: string; email: string },
+): Promise<{ conflicts: string[] }> {
+  await git(worktree, "fetch", "-q", "origin");
+  try {
+    await git(worktree, ...authorArgs(author), "merge", "--no-edit", "--no-verify", `origin/${baseBranch}`);
+    return { conflicts: [] };
+  } catch {
+    const conflicts = await conflictedFiles(worktree);
+    if (!conflicts.length) throw new Error(`merging origin/${baseBranch} failed without conflicts`);
+    return { conflicts };
+  }
 }
 
 async function isTracked(worktree: string, path: string): Promise<boolean> {
@@ -136,7 +175,11 @@ export class WorktreeManager {
       if (existsSync(path)) return { path, branch, created: false };
 
       await mkdir(join(this.home, "worktrees"), { recursive: true });
-      await git(repo, "worktree", "add", "-B", branch, path, `origin/${project.defaultBranch}`);
+      // Continue from the pushed task branch if an earlier attempt (maybe on
+      // another machine) delivered it; otherwise start from the base branch.
+      const remoteBranch = `origin/${branch}`;
+      const start = (await revParse(repo, `refs/remotes/${remoteBranch}`)) ? remoteBranch : `origin/${project.defaultBranch}`;
+      await git(repo, "worktree", "add", "-B", branch, path, start);
       return { path, branch, created: true };
     });
   }

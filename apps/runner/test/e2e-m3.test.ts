@@ -41,6 +41,9 @@ describe("M3: validation, rework and delivery", () => {
       opened.push(req);
       return { url: "https://github.com/o/r/pull/42", number: 42 };
     },
+    async mergePullRequest() {
+      return { status: "merged", sha: null };
+    },
   };
 
   beforeAll(async () => {

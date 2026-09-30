@@ -26,7 +26,7 @@ const store = new Store(db, {
 const app = buildApp(store, { apiToken, logger: { level: process.env.LOG_LEVEL ?? "info" } });
 if (applied.length) app.log.info({ applied }, "migrations applied");
 
-// Housekeeping: expire lost runners' leases and requeue/block RETRYING tasks.
+// Housekeeping: expire lost runners' leases, requeue/block RETRYING and REWORK tasks, run the merge queue.
 const sweepEveryMs = Number(process.env.MAR_SWEEP_INTERVAL_MS ?? 5000);
 let sweeping = false;
 const sweeper = setInterval(async () => {
@@ -35,6 +35,8 @@ const sweeper = setInterval(async () => {
   try {
     const r = await store.sweep();
     if (r.lost || r.requeued || r.blocked) app.log.info(r, "sweep");
+    const m = await store.processMergeQueue();
+    if (m.merged || m.conflicts || m.failed) app.log.info(m, "merge queue");
   } catch (err) {
     app.log.error(err, "sweep failed");
   } finally {

@@ -31,6 +31,7 @@ const createProjectBody = z.object({
   repoUrl: z.string().min(1),
   defaultBranch: z.string().min(1).optional(),
   validation: validationSteps.optional(),
+  maxParallel: z.number().int().min(1).max(100).optional(),
 });
 
 const validationReportBody = z.object({
@@ -60,7 +61,12 @@ const createTaskBody = z.object({
   objective: z.string().min(1),
   agent: z.string().min(1),
   maxAttempts: z.number().int().min(1).max(10).optional(),
+  dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
+
+const reviewBody = z.object({ decision: z.enum(["approve", "reject"]), comment: z.string().max(10_000).optional() });
+const decisionBody = z.object({ comment: z.string().max(10_000).optional() }).default({});
+const approvalsQuery = z.object({ status: z.enum(["pending", "approved", "rejected"]).optional() });
 
 const capabilities = z.object({
   pause: z.enum(["native", "checkpoint", "none"]),
@@ -154,6 +160,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     return store.createTask(id, body);
   });
   app.get("/projects/:id/tasks", (req) => store.listTasks(idParams.parse(req.params).id));
+  app.get("/projects/:id/graph", (req) => store.graph(idParams.parse(req.params).id));
   app.get("/projects/:id/events", async (req) => {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ projectId: idParams.parse(req.params).id }, after, limit), after);
@@ -161,6 +168,22 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", (req) => store.cancelTask(idParams.parse(req.params).id));
+  app.post("/tasks/:id/retry", (req) => store.retryTask(idParams.parse(req.params).id));
+  app.post("/tasks/:id/review", (req) => store.reviewTask(idParams.parse(req.params).id, reviewBody.parse(req.body)));
+  app.get("/tasks/:id/approvals", (req) => store.listApprovals({ taskId: idParams.parse(req.params).id }));
+
+  // ---- approval gateway ---------------------------------------------------
+
+  app.get("/approvals", (req) => {
+    const { status } = approvalsQuery.parse(req.query);
+    return store.listApprovals(status ? { status } : {});
+  });
+  app.post("/approvals/:id/approve", (req) =>
+    store.decideApproval(idParams.parse(req.params).id, "approved", decisionBody.parse(req.body ?? {}).comment),
+  );
+  app.post("/approvals/:id/reject", (req) =>
+    store.decideApproval(idParams.parse(req.params).id, "rejected", decisionBody.parse(req.body ?? {}).comment),
+  );
   app.get("/tasks/:id/executions", (req) => store.listExecutions(idParams.parse(req.params).id));
   app.get("/tasks/:id/artifacts", (req) => store.listArtifacts(idParams.parse(req.params).id));
   app.get("/tasks/:id/events", async (req) => {

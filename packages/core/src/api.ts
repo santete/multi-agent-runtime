@@ -18,6 +18,8 @@ export interface ProjectDto {
   defaultBranch: string;
   /** Run in order after the agent finishes; all must pass. */
   validation: ValidationStep[];
+  /** Max tasks of this project working at once (null = unlimited). */
+  maxParallel: number | null;
   createdAt: string;
 }
 
@@ -31,8 +33,11 @@ export interface TaskDto {
   state: TaskState;
   /** Attempts before the task is BLOCKED. */
   maxAttempts: number;
+  /** Ids of tasks that must be COMPLETED (merged) before this one becomes READY. */
+  dependsOn: string[];
   /** Set once the task's branch has been delivered as a pull request. */
   pullRequestUrl: string | null;
+  pullRequestNumber: number | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -91,9 +96,44 @@ export interface CreateProjectRequest {
   repoUrl: string;
   defaultBranch?: string | undefined;
   validation?: ValidationStep[] | undefined;
+  maxParallel?: number | undefined;
 }
 
-export type ArtifactType = "handoff" | "validation_result";
+export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result";
+
+export interface ReviewRequest {
+  decision: "approve" | "reject";
+  comment?: string | undefined;
+}
+
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+/** A risky tool call an agent attempted that needs a human decision (spec §31). */
+export interface ApprovalDto {
+  id: string;
+  projectId: string;
+  taskId: string;
+  executionId: string;
+  tool: string;
+  input: unknown;
+  summary: string;
+  risk: string;
+  reason: string;
+  status: ApprovalStatus;
+  comment: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface DecideApprovalRequest {
+  comment?: string | undefined;
+}
+
+export interface TaskGraph {
+  nodes: TaskDto[];
+  /** `from` must be completed before `to` can start. */
+  edges: Array<{ from: string; to: string }>;
+}
 
 export interface ArtifactDto {
   id: string;
@@ -150,6 +190,8 @@ export interface CreateTaskRequest {
   objective: string;
   agent: string;
   maxAttempts?: number | undefined;
+  /** Ids or keys of tasks in the same project that must be merged first. */
+  dependsOn?: string[] | undefined;
 }
 
 /** An agent a runner offers (agent registry, spec §14). */
@@ -193,13 +235,35 @@ export interface ClaimResponse {
   resume?: { sessionId: string; runnerId: string };
   /** Why the previous attempt is being reworked (spec §29). */
   rework?: ReworkContext;
+  /** Handoffs of the tasks this one depends on (spec §21, shared context). */
+  dependencies?: DependencyContext[];
+  /** Human decisions on actions the previous attempt was not allowed to take. */
+  approvals?: ApprovalDecision[];
 }
 
 export interface ReworkContext {
-  /** Attempt that failed. */
+  kind: "validation" | "review" | "merge_conflict";
+  /** Attempt that produced the rejected work. */
   attempt: number;
   reason: string;
   validation?: ValidationReport;
+  /** Reviewer's comment when the review was rejected. */
+  comment?: string;
+  /** Branch to merge in when the task conflicts with it. */
+  baseBranch?: string;
+}
+
+export interface DependencyContext {
+  key: string;
+  title: string;
+  handoff: Record<string, unknown> | null;
+}
+
+export interface ApprovalDecision {
+  tool: string;
+  summary: string;
+  status: "approved" | "rejected";
+  comment: string | null;
 }
 
 export interface HeartbeatResponse {

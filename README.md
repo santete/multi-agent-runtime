@@ -2,15 +2,18 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **M3** — real Claude Code and Antigravity runs in per-task git worktrees with task context, a policy hook on every tool call, structured handoffs, project validation with automatic rework, and delivery as a GitHub pull request. Next: M4 (task DAG, approval gateway, merge queue).
+> Status: **M4** — task DAGs across Claude Code and Antigravity agents: dependencies with shared handoffs, parallel branches, a policy hook on every tool call with a human approval gateway for risky actions, validation with automatic rework, review, and a merge queue that merges the GitHub pull requests in order. Next: M5 (UI, hardening).
 
 ## Task lifecycle
 
 ```text
-READY → ASSIGNED → RUNNING ──(agent done)──→ VALIDATING ──pass──→ REVIEW  (branch pushed, PR opened)
-                     │                           └──fail──→ REWORK → READY (retry with failure context + resumed session)
-                     ├─ policy denial ─→ WAITING_FOR_HUMAN
-                     └─ crash / lost runner ─→ RETRYING → READY … BLOCKED after maxAttempts
+CREATED ─(dependencies merged)→ READY → ASSIGNED → RUNNING ─(agent done)→ VALIDATING ─pass→ REVIEW (PR opened)
+                                   ▲                  │                        └─fail→ REWORK ─┐
+                                   │                  ├─ HIGH-risk call → WAITING_FOR_HUMAN ─(approvals decided)┤
+                                   │                  └─ crash / lost runner → RETRYING ───────────────────────┤
+                                   └────────────── requeued (context + resumed session) ◄──────────────────────┘
+REVIEW ─approve→ APPROVED → MERGING ─merged→ COMPLETED (unlocks dependents)
+   └─reject→ REWORK            └─conflict→ REWORK (base merged in, agent resolves)
 ```
 
 ## Layout
@@ -68,12 +71,17 @@ curl -s localhost:7700/tasks/<taskId>/events
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`) |
+| POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
 | PUT | `/projects/:id/validation` | replace the project's validation steps |
-| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`) → `READY` |
+| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent`, `maxAttempts?`, `dependsOn?: [id or key]`) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
+| GET | `/projects/:id/graph` | task DAG (`nodes`, `edges`) |
 | POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
+| POST | `/tasks/:id/review` | `{decision: "approve" \| "reject", comment?}` for a task in `REVIEW` |
+| POST | `/tasks/:id/retry` | send a `WAITING_FOR_HUMAN` or `BLOCKED` task back to the queue |
+| GET | `/approvals?status=pending`, `/tasks/:id/approvals` | approval requests for risky actions |
+| POST | `/approvals/:id/approve`, `/approvals/:id/reject` | decide an approval (`{comment?}`) |
 | GET | `/tasks/:id/executions` | execution attempts |
 | GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |
 | GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
