@@ -39,3 +39,6 @@ Control plane có một **Notifier** đọc event log theo cursor:
 
 - Thông báo chỉ để đọc: muốn approve hay review thì bấm link sang dashboard, nơi có kiểm tra role. Nút bấm ngay trong Slack (interactive message) cần một Slack app có endpoint public và xác thực chữ ký, nên để lại cho sau.
 - Thông báo được gửi at-least-once theo từng event. Nếu control plane crash giữa lúc gửi và lúc ghi cursor, event đó có thể được gửi lại một lần.
+- Đã kiểm chứng thật bằng một webhook giả lập Slack chạy local (không có workspace Slack thật trong môi trường này):
+  - Lượt chạy thật của Claude sinh ra đúng 3 thông báo: approval HIGH cho `curl`, task chờ người, và plan chờ duyệt.
+  - Link dashboard đúng, và URL webhook không xuất hiện trong log.

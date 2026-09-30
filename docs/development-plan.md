@@ -177,6 +177,7 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Notifier đọc event log theo cursor lưu trong DB (`event_cursors`), không gửi lặp, không bỏ sót khi restart; lần đầu bắt đầu từ cuối log
 - [x] Báo approval HIGH, task cần review (kèm PR), plan chờ duyệt, task bị chặn; tùy chọn CI fail và merged; link về dashboard (`MAR_PUBLIC_URL`)
 - [x] Retry lỗi mạng/5xx/429; webhook hỏng không làm kẹt các event khác; log không chứa URL webhook
+- [x] **Chạy thật** với một webhook giả lập Slack chạy local: nhận đủ 3 thông báo từ lượt chạy thật của Claude: "Approval needed (HIGH)" khi agent định chạy `curl`, "waiting for a person", và "Plan ready for review" (3 task). Link dashboard đúng, log không chứa URL webhook.
 
 ## Phase 3
 
