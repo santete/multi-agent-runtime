@@ -87,6 +87,11 @@ function Board({ tasks }: { tasks: TaskDto[] }) {
               <div className="task-title">{t.title}</div>
               <div className="task-meta">
                 <span className="chip">{t.agent}</span>
+                {t.kind === "review" && (
+                  <span className="badge tone-info" title="agent code review">
+                    reviews {byId.get(t.reviewOf ?? "")?.key ?? "?"}
+                  </span>
+                )}
                 {t.dependsOn.length > 0 && (
                   <span className="muted small" title="depends on">
                     ⤷ {t.dependsOn.map((d) => byId.get(d)?.key ?? "?").join(", ")}

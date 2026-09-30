@@ -21,7 +21,10 @@ import {
   type PolicyVerdict,
   type ProjectDto,
   type ReworkContext,
+  type ReviewPolicy,
   type ReviewRequest,
+  type ReviewResult,
+  type ReviewTarget,
   type RunnerDto,
   type TaskDto,
   type TaskGraph,
@@ -35,7 +38,9 @@ import {
   approvalKey,
   evaluateToolCall,
   isTerminal,
+  formatReview,
   toHandoff,
+  toReviewResult,
   transition,
 } from "@mar/core";
 import { type Actor, hasRole } from "./auth.js";
@@ -96,6 +101,8 @@ const toProject = (r: Row): ProjectDto => ({
   defaultBranch: r.default_branch,
   validation: r.validation ?? [],
   maxParallel: r.max_parallel ?? null,
+  reviewAgents: r.review_agents ?? [],
+  autoApproveOnAgentReview: Boolean(r.auto_approve_on_agent_review),
   createdAt: iso(r.created_at),
 });
 
@@ -135,6 +142,8 @@ const toTask = (r: Row): TaskDto => ({
   agent: r.agent,
   state: r.state,
   maxAttempts: r.max_attempts,
+  kind: r.kind ?? "work",
+  reviewOf: r.review_of ?? null,
   dependsOn: r.depends_on ?? [],
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
@@ -254,8 +263,9 @@ export class Store {
       const existing = await q.query("select 1 from projects where key = $1", [req.key]);
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
-        `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel)
-         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+        `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
+           review_agents, auto_approve_on_agent_review)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *`,
         [
           randomUUID(),
           req.key,
@@ -264,6 +274,8 @@ export class Store {
           req.defaultBranch ?? "main",
           JSON.stringify(req.validation ?? []),
           req.maxParallel ?? null,
+          JSON.stringify(req.reviewAgents ?? []),
+          req.autoApproveOnAgentReview ?? false,
         ],
       );
       const project = toProject(row!);
@@ -278,6 +290,22 @@ export class Store {
 
   getProject(id: string, q: Queryable = this.db): Promise<ProjectDto> {
     return one(q.query("select * from projects where id = $1", [id]), toProject, "project", id);
+  }
+
+  async setReviewPolicy(id: string, policy: ReviewPolicy): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query(
+          "update projects set review_agents = $2, auto_approve_on_agent_review = $3 where id = $1 returning *",
+          [id, JSON.stringify(policy.reviewAgents), policy.autoApproveOnAgentReview],
+        ),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectReviewPolicyChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
   }
 
   async setValidation(id: string, steps: ValidationStep[]): Promise<ProjectDto> {
@@ -469,6 +497,7 @@ export class Store {
       const rework = previous ? await this.reworkContext(q, project, previous.id, previous.attempt) : undefined;
       const approvals = previous ? await this.approvalDecisions(q, previous.id) : [];
       const dependencies = await this.dependencyContext(q, task);
+      const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null order by attempt desc limit 1`,
@@ -504,6 +533,7 @@ export class Store {
         ...(rework && { rework }),
         ...(dependencies.length > 0 && { dependencies }),
         ...(approvals.length > 0 && { approvals }),
+        ...(review && { review }),
       };
     });
   }
@@ -547,6 +577,34 @@ export class Store {
       };
     }
     return undefined;
+  }
+
+  /** What a review task reviews: the delivered branch of the task and its context. */
+  private async reviewTarget(q: Queryable, taskId: string, project: ProjectDto): Promise<ReviewTarget> {
+    const target = await this.getTask(taskId, q);
+    const [last] = await q.query<{ id: string; branch: string | null }>(
+      "select id, branch from executions where task_id = $1 and branch is not null order by attempt desc limit 1",
+      [taskId],
+    );
+    const latest = async (type: ArtifactType) =>
+      (
+        await q.query(
+          "select content from artifacts where task_id = $1 and type = $2 order by created_at desc limit 1",
+          [taskId, type],
+        )
+      )[0]?.content ?? null;
+    return {
+      taskId,
+      taskKey: target.key,
+      title: target.title,
+      objective: target.objective,
+      branch: last?.branch ?? `task/${target.key}`,
+      baseBranch: project.defaultBranch,
+      pullRequestUrl: target.pullRequestUrl,
+      handoff: await latest("handoff"),
+      validation: await latest("validation_result"),
+      author: target.agent,
+    };
   }
 
   /** Latest handoff of every dependency, so the agent does not redo their analysis (spec §21). */
@@ -681,6 +739,12 @@ export class Store {
 
   /** The agent finished. On success the execution stays leased while the runner validates. */
   async completeExecution(id: string, req: CompleteExecutionRequest): Promise<ExecutionDto> {
+    const execution = await this.completeExecutionTx(id, req);
+    await this.flushReviewComments();
+    return execution;
+  }
+
+  private async completeExecutionTx(id: string, req: CompleteExecutionRequest): Promise<ExecutionDto> {
     return this.db.tx(async (q) => {
       const { task, row: current } = await this.lockExecution(q, id, ["assigned", "running"]);
       const t = req.terminal;
@@ -699,6 +763,12 @@ export class Store {
           : t.kind === "completed" && t.success
             ? "validating"
             : "failed";
+      // A review task is done once the agent answered; its result applies to the reviewed task.
+      const review = task.kind === "review" && status === "validating" ? toReviewResult(t.kind === "completed" ? t.result : null) : undefined;
+      if (task.kind === "review" && status === "validating" && !review) {
+        return this.finishExecution(q, task, id, req, "failed", { reason: "the reviewer did not return a usable review" });
+      }
+      if (review) return this.finishReview(q, task, id, req, review);
       const stillActive = status === "validating";
 
       const [row] = await q.query(
@@ -729,6 +799,147 @@ export class Store {
       }
       return toExecution(row!);
     });
+  }
+
+  /** Ends an execution without validation (used by review tasks). */
+  private async finishExecution(
+    q: Queryable,
+    task: TaskDto,
+    id: string,
+    req: CompleteExecutionRequest,
+    status: "succeeded" | "failed",
+    payload: Record<string, unknown> = {},
+  ): Promise<ExecutionDto> {
+    const t = req.terminal;
+    const [row] = await q.query(
+      `update executions set status = $2, exit_code = $3, result = $4, finished_at = now(), lease_expires_at = null,
+         session_id = coalesce($5, session_id) where id = $1 returning *`,
+      [id, status, req.exitCode, JSON.stringify(t), t.sessionId || null],
+    );
+    await appendEvent(q, {
+      type: "AgentFinished",
+      projectId: task.projectId,
+      taskId: task.id,
+      executionId: id,
+      payload: { status, exitCode: req.exitCode, ...payload },
+    });
+    if (status === "failed" && !isTerminal(task.state)) await changeTaskState(q, task, "agent_failed", { executionId: id, ...payload });
+    return toExecution(row!);
+  }
+
+  /**
+   * Applies an agent review (spec §30) to the reviewed task: changes requested
+   * send it back to rework with the findings; an approval either queues the
+   * merge (autoApproveOnAgentReview) or leaves the final call to a human.
+   */
+  private async finishReview(
+    q: Queryable,
+    reviewTask: TaskDto,
+    id: string,
+    req: CompleteExecutionRequest,
+    review: ReviewResult,
+  ): Promise<ExecutionDto> {
+    const execution = await this.finishExecution(q, reviewTask, id, req, "succeeded", { verdict: review.verdict });
+    await this.addArtifact(q, reviewTask, id, "review_result", { ...review, reviewer: reviewTask.agent });
+    if (!isTerminal(reviewTask.state)) await changeTaskState(q, reviewTask, "review_submitted", { verdict: review.verdict });
+
+    const target = await this.getTask(reviewTask.reviewOf!, q);
+    const project = await this.getProject(target.projectId, q);
+    const reviewer = `agent ${reviewTask.agent}`;
+    const comment = formatReview(review, reviewer);
+    const [last] = await q.query<{ id: string }>(
+      "select id from executions where task_id = $1 order by attempt desc limit 1",
+      [target.id],
+    );
+    const decision = review.verdict === "approve" ? "approve" : "reject";
+    await this.addArtifact(q, target, last?.id ?? null, "review_result", {
+      decision,
+      comment,
+      reviewer,
+      reviewTask: reviewTask.key,
+      verdict: review.verdict,
+      summary: review.summary,
+      findings: review.findings,
+    });
+    await appendEvent(q, {
+      type: "AgentReviewCompleted",
+      projectId: target.projectId,
+      taskId: target.id,
+      payload: { reviewer: reviewTask.agent, reviewTask: reviewTask.key, verdict: review.verdict, findings: review.findings.length },
+    });
+    // A human may have decided in the meantime; their decision stands.
+    if (target.state === "REVIEW") {
+      if (review.verdict === "request_changes") {
+        await changeTaskState(q, target, "review_rejected", { comment: review.summary, actor: reviewer });
+      } else if (project.autoApproveOnAgentReview) {
+        await changeTaskState(q, target, "review_approved", { comment: review.summary, actor: reviewer });
+      }
+    }
+    this.pendingReviewComments.push({ project, target, body: comment });
+    return execution;
+  }
+
+  /** Creates a review task for a delivered task, with a reviewer other than its author. */
+  private async requestAgentReview(taskId: string): Promise<void> {
+    await this.db.tx(async (q) => {
+      const task = await this.getTask(taskId, q);
+      const project = await this.getProject(task.projectId, q);
+      const reviewer = project.reviewAgents.find((a) => a !== task.agent);
+      if (task.kind !== "work" || !reviewer) return;
+      const [p] = await q.query<{ key: string; task_seq: number }>(
+        "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
+        [project.id],
+      );
+      const key = `${p!.key}-${p!.task_seq}`;
+      const [row] = await q.query(
+        `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, kind, review_of)
+         values ($1, $2, $3, $4, $5, $6, 'CREATED', 2, 'review', $7) returning *`,
+        [
+          randomUUID(),
+          project.id,
+          key,
+          `Review ${task.key}: ${task.title}`,
+          `Review the changes delivered for ${task.key} ("${task.title}") by ${task.agent}.`,
+          reviewer,
+          task.id,
+        ],
+      );
+      const reviewTask = toTask(row!);
+      await appendEvent(q, {
+        type: "TaskCreated",
+        projectId: project.id,
+        taskId: reviewTask.id,
+        payload: { key, title: reviewTask.title, agent: reviewer, reviewOf: task.key },
+      });
+      await appendEvent(q, {
+        type: "AgentReviewRequested",
+        projectId: project.id,
+        taskId: task.id,
+        payload: { reviewer, reviewTask: key },
+      });
+      await changeTaskState(q, reviewTask, "dependencies_satisfied");
+    });
+  }
+
+  /** Review comments to post on pull requests once their transaction committed. */
+  private pendingReviewComments: Array<{ project: ProjectDto; target: TaskDto; body: string }> = [];
+
+  /** Posts queued agent reviews as pull request comments (best effort). */
+  async flushReviewComments(): Promise<void> {
+    const pending = this.pendingReviewComments.splice(0);
+    for (const { project, target, body } of pending) {
+      if (!target.pullRequestNumber || !this.gitProvider?.commentOnPullRequest) continue;
+      try {
+        await this.gitProvider.commentOnPullRequest({ repoUrl: project.repoUrl, number: target.pullRequestNumber, body });
+      } catch (err) {
+        await appendEvent(this.db, {
+          type: "PullRequestCommentFailed",
+          projectId: target.projectId,
+          taskId: target.id,
+          payload: { error: String(err) },
+        });
+      }
+    }
   }
 
   private async addArtifact(
@@ -807,6 +1018,16 @@ export class Store {
    * request. The provider call happens outside the transaction.
    */
   async recordDelivery(id: string, req: DeliveryRequest): Promise<DeliveryResponse> {
+    const response = await this.deliver(id, req);
+    // The pushed branch is what gets reviewed (with or without a pull request).
+    if (req.commitSha && !req.error) {
+      const [execution] = await this.db.query<{ task_id: string }>("select task_id from executions where id = $1", [id]);
+      if (execution) await this.requestAgentReview(execution.task_id);
+    }
+    return response;
+  }
+
+  private async deliver(id: string, req: DeliveryRequest): Promise<DeliveryResponse> {
     const { task, project } = await this.db.tx(async (q) => {
       const { task } = await this.lockExecution(q, id, ["delivering"]);
       await q.query(

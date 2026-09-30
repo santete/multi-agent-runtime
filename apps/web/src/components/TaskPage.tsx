@@ -73,9 +73,27 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             </Section>
           )}
 
-          <Section title="Handoff">
-            {handoff ? <HandoffView content={handoff.content} /> : <Empty>No handoff yet.</Empty>}
-          </Section>
+          {task.kind === "review" && task.reviewOf && (
+            <p className="small">
+              Agent review of <a href={href.task(task.reviewOf)}>the reviewed task</a>.
+            </p>
+          )}
+
+          {(artifacts ?? []).some((a) => a.type === "review_result") && (
+            <Section title="Reviews">
+              {(artifacts ?? [])
+                .filter((a) => a.type === "review_result")
+                .map((a) => (
+                  <ReviewView key={a.id} content={a.content} />
+                ))}
+            </Section>
+          )}
+
+          {task.kind !== "review" && (
+            <Section title="Handoff">
+              {handoff ? <HandoffView content={handoff.content} /> : <Empty>No handoff yet.</Empty>}
+            </Section>
+          )}
 
           <Section title="Validation">
             {validation ? (
@@ -233,6 +251,35 @@ export function HandoffView({ content }: { content: Record<string, unknown> }) {
       <List items={content.knownIssues} />
       <h4>Remaining work</h4>
       <List items={content.remainingWork} />
+    </div>
+  );
+}
+
+/** A human review ({decision, comment}) or an agent review ({verdict, summary, findings, reviewer}). */
+function ReviewView({ content }: { content: Record<string, any> }) {
+  const approved = (content.verdict ?? content.decision) === "approve";
+  const findings: Array<{ severity: string; file: string; line: number | null; message: string }> = content.findings ?? [];
+  return (
+    <div className="card review-card">
+      <div className="card-head">
+        <Pill tone={approved ? "success" : "warning"}>{approved ? "approved" : "changes requested"}</Pill>
+        <span className="small muted">by {content.reviewer ?? "a human"}</span>
+      </div>
+      <p className="prose">{content.summary ?? content.comment ?? ""}</p>
+      {findings.length > 0 && (
+        <ul className="findings">
+          {findings.map((f, i) => (
+            <li key={i}>
+              <Pill tone={f.severity === "blocker" || f.severity === "major" ? "danger" : "neutral"}>{f.severity}</Pill>{" "}
+              <span className="mono small">
+                {f.file}
+                {f.line ? `:${f.line}` : ""}
+              </span>{" "}
+              {f.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -33,6 +33,8 @@ export interface GitProvider {
   openPullRequest(req: OpenPullRequest): Promise<PullRequestRef | null>;
   /** Idempotent: an already merged pull request reports "merged". */
   mergePullRequest(req: MergePullRequest): Promise<MergeResult>;
+  /** Posts a comment on the pull request (agent reviews). Optional. */
+  commentOnPullRequest?(req: { repoUrl: string; number: number; body: string }): Promise<void>;
 }
 
 export class GitProviderError extends Error {
@@ -105,6 +107,15 @@ export class GitHubProvider implements GitProvider {
     if (merged.status === 405) return { status: "conflict", message: merged.body?.message ?? "not mergeable" };
     if (merged.status === 409) return { status: "pending", message: merged.body?.message ?? "head changed" };
     throw new GitProviderError(`GitHub ${merged.status}: ${JSON.stringify(merged.body).slice(0, 500)}`);
+  }
+
+  async commentOnPullRequest(req: { repoUrl: string; number: number; body: string }): Promise<void> {
+    const repo = parseGitHubRepo(req.repoUrl);
+    if (!repo) return;
+    const res = await this.call("POST", `${this.apiBase}/repos/${repo.owner}/${repo.repo}/issues/${req.number}/comments`, {
+      body: req.body,
+    });
+    if (res.status !== 201) throw new GitProviderError(`GitHub ${res.status} commenting on PR #${req.number}`);
   }
 
   private async call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {

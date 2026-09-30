@@ -167,21 +167,38 @@ export class WorktreeManager {
     return `task/${taskKey}`;
   }
 
-  async prepare(project: WorkspaceProject, taskKey: string): Promise<Workspace> {
+  /**
+   * @param from Remote branch to start from instead (review tasks check out the
+   *   reviewed task's branch). An existing worktree is moved to its latest state.
+   */
+  async prepare(project: WorkspaceProject, taskKey: string, from?: string): Promise<Workspace> {
     return this.withLock(this.repoPath(project), async () => {
       const repo = await this.ensureRepo(project);
       const path = this.worktreePath(taskKey);
       const branch = WorktreeManager.branchFor(taskKey);
-      if (existsSync(path)) return { path, branch, created: false };
+      if (existsSync(path)) {
+        if (from) await git(path, "reset", "-q", "--hard", `origin/${from}`);
+        return { path, branch, created: false };
+      }
 
       await mkdir(join(this.home, "worktrees"), { recursive: true });
       // Continue from the pushed task branch if an earlier attempt (maybe on
       // another machine) delivered it; otherwise start from the base branch.
       const remoteBranch = `origin/${branch}`;
-      const start = (await revParse(repo, `refs/remotes/${remoteBranch}`)) ? remoteBranch : `origin/${project.defaultBranch}`;
+      const start = from
+        ? `origin/${from}`
+        : (await revParse(repo, `refs/remotes/${remoteBranch}`))
+          ? remoteBranch
+          : `origin/${project.defaultBranch}`;
       await git(repo, "worktree", "add", "-B", branch, path, start);
       return { path, branch, created: true };
     });
+  }
+
+  /** The change a review is about: base...HEAD, capped to keep the context small. */
+  async diffAgainst(worktree: string, baseBranch: string, maxBytes = 150_000): Promise<string> {
+    const diff = await gitRaw(worktree, "diff", "--no-color", `origin/${baseBranch}...HEAD`);
+    return diff.length > maxBytes ? `${diff.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes]\n` : diff;
   }
 
   /**
