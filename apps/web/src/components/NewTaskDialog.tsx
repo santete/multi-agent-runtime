@@ -5,15 +5,7 @@ import { href } from "../lib/router.js";
 
 const AUTO = "auto";
 
-export function NewTaskDialog({
-  project,
-  tasks,
-  onClose,
-}: {
-  project: ProjectDto;
-  tasks: TaskDto[];
-  onClose: () => void;
-}) {
+export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto; tasks: TaskDto[]; onClose: () => void }) {
   const [title, setTitle] = useState("");
   const [objective, setObjective] = useState("");
   const [agent, setAgent] = useState("");
@@ -27,19 +19,14 @@ export function NewTaskDialog({
   useEffect(() => {
     // Offer the agents registered runners provide (agent registry, spec §14).
     api.runners().then((runners) => {
-      const ids = [
-        ...new Set(runners.flatMap((r) => r.agents.map((a) => a.id))),
-      ].sort();
+      const ids = [...new Set(runners.flatMap((r) => r.agents.map((a) => a.id)))].sort();
       setAgents(ids);
       setAgent((current) => current || (ids.length ? AUTO : ""));
     });
   }, []);
 
   const candidates = tasks.filter((t) => t.state !== "CANCELLED");
-  const toggle = (id: string) =>
-    setDependsOn((d) =>
-      d.includes(id) ? d.filter((x) => x !== id) : [...d, id],
-    );
+  const toggle = (id: string) => setDependsOn((d) => (d.includes(id) ? d.filter((x) => x !== id) : [...d, id]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,10 +42,7 @@ export function NewTaskDialog({
         agent,
         ...(dependsOn.length && { dependsOn }),
         ...(agent === AUTO && skills.length && { requires: skills }),
-        ...(agent !== AUTO &&
-          fallbackAgents.length && {
-            fallbackAgents: fallbackAgents.filter((a) => a !== agent),
-          }),
+        ...(agent !== AUTO && fallbackAgents.length && { fallbackAgents: fallbackAgents.filter((a) => a !== agent) }),
       });
       onClose();
       window.location.hash = href.task(task.id);
@@ -70,29 +54,15 @@ export function NewTaskDialog({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <form
-        className="modal card"
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-      >
+      <form className="modal card" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2>New task in {project.key}</h2>
         <label>
           Title
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            autoFocus
-            required
-          />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus required />
         </label>
         <label>
           Objective
-          <textarea
-            value={objective}
-            onChange={(e) => setObjective(e.target.value)}
-            rows={6}
-            required
-          />
+          <textarea value={objective} onChange={(e) => setObjective(e.target.value)} rows={6} required />
         </label>
         <label>
           Agent
@@ -104,30 +74,18 @@ export function NewTaskDialog({
               ))}
             </select>
           ) : (
-            <input
-              value={agent}
-              onChange={(e) => setAgent(e.target.value)}
-              placeholder="no runner registered yet"
-              required
-            />
+            <input value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="no runner registered yet" required />
           )}
         </label>
         {agent === AUTO ? (
           <label>
             Required skills (comma separated)
-            <input
-              value={requires}
-              onChange={(e) => setRequires(e.target.value)}
-              placeholder="e.g. typescript, backend"
-            />
+            <input value={requires} onChange={(e) => setRequires(e.target.value)} placeholder="e.g. typescript, backend" />
           </label>
         ) : (
           agents.length > 1 && (
             <fieldset>
-              <legend>
-                Fallback agents (take over if {agent} keeps failing or is
-                unavailable)
-              </legend>
+              <legend>Fallback agents (take over if {agent} keeps failing or is unavailable)</legend>
               <div className="checks">
                 {agents
                   .filter((a) => a !== agent)
@@ -136,13 +94,7 @@ export function NewTaskDialog({
                       <input
                         type="checkbox"
                         checked={fallbackAgents.includes(a)}
-                        onChange={() =>
-                          setFallbackAgents((f) =>
-                            f.includes(a)
-                              ? f.filter((x) => x !== a)
-                              : [...f, a],
-                          )
-                        }
+                        onChange={() => setFallbackAgents((f) => (f.includes(a) ? f.filter((x) => x !== a) : [...f, a]))}
                       />
                       {a}
                     </label>
@@ -157,11 +109,7 @@ export function NewTaskDialog({
             <div className="checks">
               {candidates.map((t) => (
                 <label key={t.id} className="check">
-                  <input
-                    type="checkbox"
-                    checked={dependsOn.includes(t.id)}
-                    onChange={() => toggle(t.id)}
-                  />
+                  <input type="checkbox" checked={dependsOn.includes(t.id)} onChange={() => toggle(t.id)} />
                   <span className="mono">{t.key}</span> {t.title}
                 </label>
               ))}
@@ -173,10 +121,7 @@ export function NewTaskDialog({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            className="primary"
-            disabled={busy || !title || !objective || !agent}
-          >
+          <button className="primary" disabled={busy || !title || !objective || !agent}>
             Create task
           </button>
         </div>

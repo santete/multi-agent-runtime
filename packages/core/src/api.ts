@@ -1,5 +1,6 @@
 /** Wire types shared by the control plane HTTP API and its clients (runner, UI). */
 import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
+import type { PlannedTask, PlanProposal } from "./plan.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
@@ -48,9 +49,14 @@ export interface TaskDto {
   fallbackAgents: string[];
   /** Agents that failed this task and will not get it again. */
   excludedAgents: string[];
-  /** "review": an agent review of another task (reviewOf); it produces a review, not code. */
-  kind: "work" | "review";
+  /**
+   * "review": an agent review of another task (reviewOf); it produces a review, not code.
+   * "plan": a planner run for a plan (planId); it produces a proposed task DAG.
+   */
+  kind: "work" | "review" | "plan";
   reviewOf: string | null;
+  /** The plan this task was planned in (work tasks) or plans (plan tasks). */
+  planId: string | null;
   /** Ids of tasks that must be COMPLETED (merged) before this one becomes READY. */
   dependsOn: string[];
   /** Set once the task's branch has been delivered as a pull request. */
@@ -129,7 +135,7 @@ export interface ReviewPolicy {
   autoApproveOnAgentReview: boolean;
 }
 
-export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result";
+export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal";
 
 export interface ReviewRequest {
   decision: "approve" | "reject";
@@ -294,6 +300,66 @@ export interface ClaimResponse {
   approvals?: ApprovalDecision[];
   /** For review tasks: what to review. */
   review?: ReviewTarget;
+  /** For plan tasks: what to plan. */
+  plan?: PlanningContext;
+}
+
+/**
+ * Assisted planning (spec §24). planning: the planner agent is working;
+ * proposed: waiting for a human; failed: the planner gave up (see its task).
+ */
+export type PlanStatus = "planning" | "proposed" | "approved" | "rejected" | "revised" | "failed";
+
+export interface PlanDto {
+  id: string;
+  projectId: string;
+  goal: string;
+  status: PlanStatus;
+  /** The planner task (its executions and events show the planning run). */
+  plannerTaskId: string | null;
+  plannerTaskKey: string | null;
+  plannerAgent: string | null;
+  proposal: PlanProposal | null;
+  /** Tasks created when the plan was approved, by planned ref. */
+  createdTasks: Array<{ ref: string; taskId: string; key: string }>;
+  /** Human feedback this plan revises (see previousPlanId). */
+  feedback: string | null;
+  previousPlanId: string | null;
+  createdBy: string | null;
+  decidedBy: string | null;
+  comment: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface CreatePlanRequest {
+  goal: string;
+  /** The planner agent, or "auto". */
+  agent: string;
+}
+
+export interface ApprovePlanRequest {
+  /** The tasks as edited by the reviewer; the proposal as is when omitted. */
+  tasks?: PlannedTask[] | undefined;
+  comment?: string | undefined;
+}
+
+export interface RevisePlanRequest {
+  /** What the planner should change. */
+  feedback: string;
+}
+
+/** What a planner agent gets to plan with. */
+export interface PlanningContext {
+  planId: string;
+  goal: string;
+  baseBranch: string;
+  /** Agents registered on runners, to assign or route by skills. */
+  agents: Array<{ id: string; skills: string[]; cost: CostTier | null }>;
+  /** Unfinished tasks of the project, which planned tasks may depend on. */
+  openTasks: Array<{ key: string; title: string; state: TaskState }>;
+  /** When revising: the rejected proposal and what to change. */
+  previous?: { proposal: PlanProposal; feedback: string } | undefined;
 }
 
 export interface ReviewTarget {

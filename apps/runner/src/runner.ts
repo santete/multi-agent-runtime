@@ -6,13 +6,22 @@ import {
   type AgentRunRequest,
   type ClaimResponse,
   HANDOFF_SCHEMA,
+  PLAN_SCHEMA,
   REVIEW_SCHEMA,
   toHandoff,
 } from "@mar/core";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
-import { type ContextExtras, buildPrompt, buildReviewPrompt, contextFiles, reviewFiles } from "./context.js";
+import {
+  type ContextExtras,
+  buildPlanPrompt,
+  buildPrompt,
+  buildReviewPrompt,
+  contextFiles,
+  planFiles,
+  reviewFiles,
+} from "./context.js";
 import { runValidation } from "./validator.js";
 import { WorktreeManager, commitAndPush, mergeBase } from "./worktree.js";
 
@@ -236,10 +245,14 @@ export class Runner {
 
     const request: AgentRunRequest = {
       workspace: workspace.path,
-      prompt: claim.review ? buildReviewPrompt(claim.review) : buildPrompt(claim, Boolean(resumeSessionId)),
+      prompt: claim.review
+        ? buildReviewPrompt(claim.review)
+        : claim.plan
+          ? buildPlanPrompt(claim.plan, adapter.capabilities.structuredOutput)
+          : buildPrompt(claim, Boolean(resumeSessionId)),
       objective: task.objective,
-      // Reviewers only read: nothing of a review worktree is ever delivered.
-      permissionProfile: claim.review ? "read-only" : "edit",
+      // Reviewers and planners only read: nothing of their worktree is ever delivered.
+      permissionProfile: claim.review || claim.plan ? "read-only" : "edit",
       timeoutSeconds: this.config.timeoutSeconds,
       env: {
         MAR_CONTROL_PLANE_URL: this.client.baseUrl,
@@ -247,7 +260,7 @@ export class Runner {
         MAR_EXECUTION_TOKEN: claim.executionToken,
       },
       ...(resumeSessionId && { resumeSessionId }),
-      ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : HANDOFF_SCHEMA }),
+      ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : claim.plan ? PLAN_SCHEMA : HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
         // Also for sandboxed agents: their hook works wherever the CLI fires it.
         (adapter.capabilities.approval === "pre-tool-hook" || adapter.capabilities.approval === "sandbox") && {
@@ -325,7 +338,11 @@ export class Runner {
             : `runner merged origin/${base} cleanly`,
         });
       }
-      const context = claim.review ? reviewFiles(claim.review, reviewDiff) : contextFiles(claim, extras);
+      const context = claim.review
+        ? reviewFiles(claim.review, reviewDiff)
+        : claim.plan
+          ? planFiles(claim.plan)
+          : contextFiles(claim, extras);
       const files = [...context, ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {

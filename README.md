@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Next: Phase 2 (see the development plan).
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, and assisted planning (an agent proposes the task DAG, a human approves it) are done; see the development plan.
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -84,6 +84,9 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
 | POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `maxAttempts?`, `dependsOn?: [id or key]`); see [ADR-0012](docs/adr/0012-capability-routing.md) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
+| POST | `/projects/:id/plans` | `{goal, agent}`: a planner agent proposes a task DAG ([ADR-0013](docs/adr/0013-assisted-planning.md)) |
+| GET | `/projects/:id/plans`, `/plans/:id` | plans with their proposal and status |
+| POST | `/plans/:id/approve`, `/plans/:id/revise`, `/plans/:id/reject` | approve (optionally `{tasks}` as edited) to create the tasks, send back with `{feedback}`, or reject |
 | GET | `/projects/:id/graph` | task DAG (`nodes`, `edges`) |
 | POST | `/tasks/:id/cancel` | cancel a task (a running agent is stopped on its next heartbeat) |
 | POST | `/tasks/:id/review` | `{decision: "approve" \| "reject", comment?}` for a task in `REVIEW` |

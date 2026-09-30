@@ -145,9 +145,20 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Resume chỉ trong cùng agent (`executions.agent`); review task có fallback reviewer và không bao giờ giao cho tác giả
 - [x] `GET /agents/stats` (runs, success, fail, thời gian trung bình, rework rate) + bảng Track record trên UI; hộp thoại tạo task hỗ trợ auto/required skills/fallback
 
+### Planner hỗ trợ — trạng thái ✅ ([ADR-0013](adr/0013-assisted-planning.md))
+
+- [x] `POST /projects/:id/plans {goal, agent}`: planner task `kind: "plan"` chạy read-only trên base branch với `PLAN.md` (goal, agent online + skill, task đang mở) và `PLAN_SCHEMA`
+- [x] `checkPlan`: ref duy nhất, không vòng, thứ tự topo, dependency tới task có sẵn theo key; đọc được JSON trong text với agent không có structured output
+- [x] Người duyệt: approve (có thể sửa task trước), revise kèm feedback (plan mới có context proposal cũ), reject; approve tạo DAG trong một transaction, `agent: null` → auto routing
+- [x] UI: tab Plans, trang plan chỉnh sửa và duyệt; event `Plan*` trên timeline
+- [x] **Chạy thật** trên `mar-sandbox`:
+  - Claude lập kế hoạch cho goal "void payment + CSV export" và tự tách thành 2 task song song để tránh conflict. Người duyệt đổi agent của một task trước khi approve.
+  - Codex (LP-4) và Claude (LP-5) chạy song song. PR #15 và #16 merge không conflict, `main` đạt 72/72 test.
+  - Với goal đã được làm xong, Claude trả về 0 task kèm giải thích. Platform nhận đây là kết quả hợp lệ ("không còn gì để làm"), không tính là lỗi. Codex với cùng goal chỉ đề xuất 1 task cập nhật tài liệu còn thiếu.
+
 ## Phase 3
 
-Planner tự động · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
+Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
 
 ## Rủi ro đang theo dõi
 

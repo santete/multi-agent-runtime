@@ -3,13 +3,14 @@ import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { COLUMNS, groupByColumn } from "../lib/model.js";
-import { href } from "../lib/router.js";
+import { href, type ProjectTab } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { Graph } from "./Graph.js";
 import { NewTaskDialog } from "./NewTaskDialog.js";
+import { NewPlanDialog, PlansList } from "./PlansPage.js";
 import { Empty, ErrorBox, Loading, StateBadge } from "./ui.js";
 
-export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | "activity" }) {
+export function ProjectPage({ id, tab }: { id: string; tab: ProjectTab }) {
   const [project, projectError] = useLiveQuery(() => api.project(id), [id], () => false);
   const [tasks, tasksError] = useLiveQuery(
     () => api.tasks(id),
@@ -17,6 +18,7 @@ export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | 
     (e) => e.projectId === id && (e.type === "TaskStateChanged" || e.type === "TaskCreated" || e.type === "PullRequestOpened"),
   );
   const [creating, setCreating] = useState(false);
+  const [planning, setPlanning] = useState(false);
 
   if (projectError) return <ErrorBox error={projectError} />;
   if (!project) return <Loading />;
@@ -33,9 +35,12 @@ export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | 
             {project.validation.length ? ` · validation: ${project.validation.map((v) => v.name).join(", ")}` : " · no validation"}
           </p>
         </div>
-        <button className="primary" onClick={() => setCreating(true)}>
-          New task
-        </button>
+        <div className="actions">
+          <button onClick={() => setPlanning(true)}>New plan</button>
+          <button className="primary" onClick={() => setCreating(true)}>
+            New task
+          </button>
+        </div>
       </header>
 
       <nav className="tabs">
@@ -44,6 +49,9 @@ export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | 
         </a>
         <a className={tab === "graph" ? "active" : ""} href={href.project(id, "graph")}>
           Graph
+        </a>
+        <a className={tab === "plans" ? "active" : ""} href={href.project(id, "plans")}>
+          Plans
         </a>
         <a className={tab === "activity" ? "active" : ""} href={href.project(id, "activity")}>
           Activity
@@ -57,6 +65,8 @@ export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | 
         <Board tasks={tasks} />
       ) : tab === "graph" ? (
         tasks.length ? <Graph tasks={tasks} /> : <Empty>No tasks yet.</Empty>
+      ) : tab === "plans" ? (
+        <PlansList projectId={id} />
       ) : (
         <ActivityFeed projectId={id} limit={100} />
       )}
@@ -64,6 +74,7 @@ export function ProjectPage({ id, tab }: { id: string; tab: "board" | "graph" | 
       {creating && tasks && (
         <NewTaskDialog project={project} tasks={tasks} onClose={() => setCreating(false)} />
       )}
+      {planning && <NewPlanDialog project={project} onClose={() => setPlanning(false)} />}
     </div>
   );
 }
@@ -87,6 +98,11 @@ function Board({ tasks }: { tasks: TaskDto[] }) {
               <div className="task-title">{t.title}</div>
               <div className="task-meta">
                 <span className="chip">{t.agent}</span>
+                {t.kind === "plan" && (
+                  <span className="badge tone-info" title="planner run">
+                    planner
+                  </span>
+                )}
                 {t.kind === "review" && (
                   <span className="badge tone-info" title="agent code review">
                     reviews {byId.get(t.reviewOf ?? "")?.key ?? "?"}

@@ -178,6 +178,70 @@ export function buildReviewPrompt(target: NonNullable<ClaimResponse["review"]>):
   ].join("\n\n");
 }
 
+function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
+  const agents = plan.agents.length
+    ? plan.agents.map((a) => `- \`${a.id}\`${a.skills.length ? ` — skills: ${a.skills.join(", ")}` : ""}${a.cost ? `; cost ${a.cost}` : ""}`).join("\n")
+    : "- _No agent registered; leave `agent` null._";
+  const open = plan.openTasks.length ? plan.openTasks.map((t) => `- \`${t.key}\` ${t.title} (${t.state.toLowerCase()})`).join("\n") : "- _None._";
+  const previous = plan.previous
+    ? [
+        "## Revision",
+        "",
+        "A human reviewed an earlier proposal and asked for changes:",
+        "",
+        plan.previous.feedback.split("\n").map((l) => `> ${l}`).join("\n"),
+        "",
+        "The earlier proposal:",
+        "",
+        "```json",
+        JSON.stringify(plan.previous.proposal, null, 2),
+        "```",
+        "",
+      ]
+    : [];
+  return [
+    "# Plan the work for this goal",
+    "",
+    plan.goal,
+    "",
+    ...previous,
+    "## Available agents",
+    "",
+    agents,
+    "",
+    "## Unfinished tasks of the project",
+    "",
+    "A planned task may depend on one of these by its key.",
+    "",
+    open,
+    "",
+    "## How to plan",
+    "",
+    `- This worktree is a checkout of \`${plan.baseBranch}\`. Read the code to ground the plan in what exists; do **not** modify anything.`,
+    "- Break the goal into tasks that one agent can finish in one session and that are reviewable as one pull request.",
+    "- Each objective must stand on its own: the agent sees only its task, the handoffs of the tasks it depends on and the code.",
+    "- Add a dependency only when a task needs another one's merged result; independent tasks run in parallel.",
+    "- Set `agent` to one of the available agents when it clearly fits, otherwise null with the skills in `requires`.",
+    "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
+    "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
+    "- If nothing is left to do, return no tasks and explain why in the summary.",
+    "",
+  ].join("\n");
+}
+
+/** Context file for a plan task. */
+export function planFiles(plan: NonNullable<ClaimResponse["plan"]>): WorkspaceFile[] {
+  return [{ path: `${CONTEXT_DIR}/PLAN.md`, content: planBrief(plan), mergeJson: false }];
+}
+
+export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, structured: boolean): string {
+  return [
+    `You are planning work for a team of coding agents. Read ${CONTEXT_DIR}/PLAN.md, inspect the repository as needed, and do not modify any file.`,
+    "Answer with a summary and the list of tasks (ref, title, objective, agent, requires, dependsOn).",
+    ...(structured ? [] : ["Reply with only that JSON object: {\"summary\": ..., \"tasks\": [...]}."]),
+  ].join("\n\n");
+}
+
 /** Context files for the agent, written into the worktree before it starts. */
 export function contextFiles(claim: ClaimResponse, extras: ContextExtras = {}): WorkspaceFile[] {
   const file = (name: string, content: string): WorkspaceFile => ({ path: `${CONTEXT_DIR}/${name}`, content, mergeJson: false });

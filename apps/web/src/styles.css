@@ -927,3 +927,62 @@ details summary {
 .stats-card {
   margin-bottom: 16px;
 }
+
+.plan-list {
+  display: grid;
+  gap: 12px;
+}
+.plan-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.plan-card:hover {
+  border-color: var(--accent);
+}
+.plan-goal {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.plan-tasks {
+  display: grid;
+  gap: 12px;
+}
+.plan-task .card-head {
+  gap: 10px;
+}
+.plan-task .card-head .link {
+  margin-left: auto;
+}
+.plan-fields {
+  display: grid;
+  gap: 8px;
+}
+.plan-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+.actions.left {
+  justify-content: flex-start;
+}
+.revise {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+}
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
+}
+button.link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
