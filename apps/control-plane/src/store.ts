@@ -20,6 +20,7 @@ import {
   type CritiqueContext,
   type PlanCritique,
   type PlanDto,
+  type QueueEntry,
   type PlanningPolicy,
   type PlanningContext,
   type PlanProposal,
@@ -67,6 +68,8 @@ import {
   KNOWLEDGE_KINDS,
   sameKnowledge,
   chooseAgent,
+  effectivePriority,
+  transitiveDependents,
   cooldownUntil,
   executionCost,
   isAgentUnavailable,
@@ -208,6 +211,7 @@ const toTask = (r: Row): TaskDto => ({
   reviewOf: r.review_of ?? null,
   planId: r.plan_id ?? null,
   dependsOn: r.depends_on ?? [],
+  priority: r.priority ?? 50,
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
   version: r.version,
@@ -469,6 +473,53 @@ export class Store {
     });
   }
 
+  /** Effective priority of tasks (their own, plus what waits on them and how long they waited). */
+  private async rank(q: Queryable, tasks: TaskDto[]): Promise<Map<string, { score: number; reasons: string[] }>> {
+    const projects = [...new Set(tasks.map((t) => t.projectId))];
+    const open = projects.length
+      ? await q.query<{ id: string; depends_on: string[] }>(
+          "select id, depends_on from tasks where project_id = any($1::uuid[]) and state not in ('COMPLETED', 'CANCELLED')",
+          [projects],
+        )
+      : [];
+    const dependents = transitiveDependents(open.map((r) => ({ id: r.id, dependsOn: r.depends_on ?? [] })));
+    const now = Date.now();
+    return new Map(
+      tasks.map((t) => [
+        t.id,
+        effectivePriority({
+          priority: t.priority,
+          dependents: dependents.get(t.id) ?? 0,
+          waitingMinutes: (now - Date.parse(t.updatedAt)) / 60_000,
+          kind: t.kind,
+        }),
+      ]),
+    );
+  }
+
+  /** The project's READY work in the order the scheduler takes it. */
+  async queue(projectId: string): Promise<QueueEntry[]> {
+    const tasks = (await this.db.query("select * from tasks where project_id = $1 and state = 'READY'", [projectId])).map(toTask);
+    const ranked = await this.rank(this.db, tasks);
+    return tasks
+      .map((t) => ({ taskId: t.id, key: t.key, title: t.title, agent: t.agent, priority: t.priority, ...ranked.get(t.id)! }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  async setTaskPriority(id: string, priority: number, actor?: string): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const before = await this.getTask(id, q);
+      const [row] = await q.query("update tasks set priority = $2 where id = $1 returning *", [id, priority]);
+      await appendEvent(q, {
+        type: "TaskReprioritized",
+        projectId: before.projectId,
+        taskId: id,
+        payload: { from: before.priority, to: priority, actor: actor ?? null },
+      });
+      return toTask(row!);
+    });
+  }
+
   async setBrokenMainPolicy(id: string, onBrokenMain: BrokenMainPolicy): Promise<ProjectDto> {
     return this.db.tx(async (q) => {
       const project = await one(
@@ -689,8 +740,8 @@ export class Store {
     const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
     const [row] = await q.query(
       `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
-         routing, requires, fallback_agents, plan_id, kind)
-       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13) returning *`,
+         routing, requires, fallback_agents, plan_id, kind, priority)
+       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13, $14) returning *`,
       [
         randomUUID(),
         projectId,
@@ -705,6 +756,7 @@ export class Store {
         JSON.stringify(req.fallbackAgents ?? []),
         planId,
         kind,
+        req.priority ?? 50,
       ],
     );
     const task = toTask(row!);
@@ -1354,9 +1406,12 @@ export class Store {
            ) < p.max_parallel)
            -- spec §39: a project over its daily budget waits until tomorrow (or a higher budget)
            and (p.budget->>'dailyUsd' is null or ${TODAY_SPEND_SQL} < (p.budget->>'dailyUsd')::numeric)
-         order by t.created_at limit 20 for update of t skip locked`,
+         order by t.created_at limit 50 for update of t skip locked`,
         [agentIds],
       );
+      // Spec §53: most important first — priority, critical path, waiting time.
+      const ranked = await this.rank(q, candidates.map(toTask));
+      candidates.sort((a, b) => ranked.get(b.id)!.score - ranked.get(a.id)!.score);
       let picked: { task: TaskDto; routed?: { agent: string; reason: string } } | undefined;
       for (const row of candidates) {
         const candidate = toTask(row);
