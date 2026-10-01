@@ -143,6 +143,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `DATABASE_URL` | – | Postgres; unset = embedded PGlite in `PGLITE_DIR` (`./.data/pglite`) |
 | `HOST` / `PORT` | `127.0.0.1` / `7700` | |
 | `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
+| `GITLAB_TOKEN`, `GITLAB_URL` | —, `https://gitlab.com` | open and merge GitLab merge requests (alongside `GITHUB_TOKEN`; each repository goes to its host) ([ADR-0031](docs/adr/0031-gitlab-provider.md)) |
 | `MAR_SECRETS_KEY` | — | key (≥ 16 chars) that encrypts stored project secrets; without it only `fromRunnerEnv` secrets can be defined |
 | `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING/REWORK → READY/BLOCKED |
 | `MAR_NOTIFY_WEBHOOKS` | – | comma-separated Slack-compatible incoming webhook URLs (Slack, Mattermost, Rocket.Chat, Discord `/slack`); unset = no notifications ([ADR-0016](docs/adr/0016-notifications.md)) |

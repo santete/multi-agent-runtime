@@ -8,9 +8,11 @@ export {
   GitHubProvider,
   GitProviderError,
   parseGitHubRepo,
+  RoutingGitProvider,
   type GitProvider,
   type MergePullRequest,
   type MergeResult,
   type OpenPullRequest,
   type PullRequestStatus,
 } from "./git-provider.js";
+export { GitLabProvider } from "./gitlab-provider.js";
