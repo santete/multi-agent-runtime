@@ -11,6 +11,7 @@ const roleRank = { viewer: 0, member: 1, senior: 2, owner: 3, runner: -1 } as co
 
 const STATUS: Record<PlanStatus, { label: string; tone: Tone }> = {
   planning: { label: "planning", tone: "active" },
+  reviewing: { label: "critic reviewing", tone: "active" },
   proposed: { label: "waiting for review", tone: "attention" },
   approved: { label: "approved", tone: "success" },
   rejected: { label: "rejected", tone: "neutral" },
@@ -34,13 +35,15 @@ function useAgents(): string[] {
 }
 
 /** The project's plans (Plans tab). */
-export function PlansList({ projectId }: { projectId: string }) {
+export function PlansList({ project, actor }: { project: ProjectDto; actor: ActorDto }) {
+  const projectId = project.id;
   const [plans, error] = useLiveQuery(() => api.plans(projectId), [projectId], (e) => e.projectId === projectId && isPlanEvent(e));
   if (error) return <ErrorBox error={error} />;
   if (!plans) return <Loading />;
-  if (!plans.length) return <Empty>No plans yet. Describe a goal with “New plan” and a planner agent proposes the tasks.</Empty>;
   return (
     <div className="plan-list">
+      <PlanningSettings project={project} canEdit={actor.role === "owner"} />
+      {!plans.length && <Empty>No plans yet. Describe a goal with “New plan” and a planner agent proposes the tasks.</Empty>}
       {plans.map((p) => (
         <a key={p.id} className="card plan-card" href={href.plan(p.id)}>
           <div className="card-head">
@@ -55,7 +58,8 @@ export function PlansList({ projectId }: { projectId: string }) {
           <div className="muted small">
             {p.proposal ? `${p.proposal.tasks.length} tasks proposed` : "no proposal yet"}
             {p.createdTasks.length ? ` · created ${p.createdTasks.map((t) => t.key).join(", ")}` : ""}
-            {p.previousPlanId ? " · revision" : ""}
+            {p.round > 1 ? ` · round ${p.round}` : p.previousPlanId ? " · revision" : ""}
+            {p.critique ? ` · ${p.critique.critic}: ${p.critique.verdict}` : ""}
           </div>
         </a>
       ))}
@@ -114,6 +118,67 @@ export function NewPlanDialog({ project, onClose }: { project: ProjectDto; onClo
         </div>
       </form>
     </div>
+  );
+}
+
+/** Debate and autonomy of planning (spec §53). */
+function PlanningSettings({ project, canEdit }: { project: ProjectDto; canEdit: boolean }) {
+  const agents = useAgents();
+  const [policy, setPolicy] = useState(project.planning);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<Error>();
+  const toggleCritic = (a: string) =>
+    setPolicy((p) => ({ ...p, critics: p.critics.includes(a) ? p.critics.filter((x) => x !== a) : [...p.critics, a] }));
+  const save = async () => {
+    try {
+      await api.setPlanning(project.id, policy);
+      setSaved(true);
+      setError(undefined);
+    } catch (err) {
+      setError(err as Error);
+    }
+  };
+  return (
+    <details className="card planning-settings">
+      <summary>
+        Planning: {policy.critics.length ? `critic ${policy.critics.join(", ")}, up to ${policy.maxRounds} round(s)` : "no critic"}
+        {policy.autoApprove ? ` · approves itself up to ${policy.maxAutoTasks} tasks` : " · a person approves"}
+      </summary>
+      <fieldset disabled={!canEdit}>
+        <div className="checks">
+          Critics:
+          {agents.map((a) => (
+            <label key={a} className="check">
+              <input type="checkbox" checked={policy.critics.includes(a)} onChange={() => toggleCritic(a)} />
+              {a}
+            </label>
+          ))}
+        </div>
+        <div className="plan-row">
+          <label>
+            Debate rounds
+            <input type="number" min={0} max={5} value={policy.maxRounds} onChange={(e) => setPolicy({ ...policy, maxRounds: Number(e.target.value) })} />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={policy.autoApprove} onChange={(e) => setPolicy({ ...policy, autoApprove: e.target.checked })} />
+            Approve automatically when the critic approves
+          </label>
+          <label>
+            …with at most this many tasks
+            <input type="number" min={1} max={20} value={policy.maxAutoTasks} onChange={(e) => setPolicy({ ...policy, maxAutoTasks: Number(e.target.value) })} />
+          </label>
+        </div>
+        {canEdit && (
+          <div className="actions left">
+            <button className="primary" type="button" onClick={save}>
+              Save
+            </button>
+            {saved && <span className="muted small">saved</span>}
+          </div>
+        )}
+        <ErrorBox error={error} />
+      </fieldset>
+    </details>
   );
 }
 
@@ -210,6 +275,24 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
           The planner is reading the repository. Follow it live on{" "}
           {plan.plannerTaskId ? <a href={href.task(plan.plannerTaskId)}>its task</a> : "its task"}.
         </Empty>
+      )}
+      {plan.status === "reviewing" && <Empty>A critic agent is checking the plan before anyone approves it.</Empty>}
+      {plan.critique && (
+        <Section title={`Critique by ${plan.critique.critic} (round ${plan.round})`}>
+          <p className="prose">
+            <Pill tone={plan.critique.verdict === "approve" ? "success" : "attention"}>{plan.critique.verdict}</Pill> {plan.critique.summary}
+          </p>
+          {plan.critique.issues.length > 0 && (
+            <ul className="bullets">
+              {plan.critique.issues.map((i, n) => (
+                <li key={n}>
+                  <span className="mono">[{i.severity}]</span> {i.ref ? <strong>{i.ref}: </strong> : null}
+                  {i.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
       )}
       {plan.status === "failed" && <div className="error">The planner did not produce a usable plan. See its task for details.</div>}
       {plan.status === "revised" && revision && (

@@ -230,6 +230,12 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
   - Task cho agent `gemini` (không runner nào có) bị escalate sau 1 phút với lý do "no online runner offers gemini".
   - Cả hai đều có thông báo.
 
+### Planner tự động · multi-agent debate — trạng thái ✅ ([ADR-0022](adr/0022-plan-debate-and-autonomy.md))
+
+- [x] Critic agent (khác planner) chạy read-only, critique plan theo `CRITIQUE_SCHEMA`; `revise` dẫn đến vòng sửa mới (tối đa `maxRounds`); critic bỏ cuộc thì người quyết định
+- [x] Tự duyệt (opt-in): critic approve, không có blocker, tối đa `maxAutoTasks` task, mọi task có agent online nhận được; nếu không thì ghi lý do và để người duyệt
+- [x] UI: trạng thái critic reviewing, phần Critique, form cài đặt planning
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

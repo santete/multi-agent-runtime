@@ -68,6 +68,13 @@ const budget = z.object({
   perTaskUsd: z.number().positive().optional(),
 });
 
+const planningPolicy = z.object({
+  critics: z.array(z.string().min(1)).max(10),
+  maxRounds: z.number().int().min(0).max(5),
+  autoApprove: z.boolean(),
+  maxAutoTasks: z.number().int().min(1).max(20),
+});
+
 const createProjectBody = z.object({
   key: z
     .string()
@@ -85,6 +92,7 @@ const createProjectBody = z.object({
   validationSandbox: validationSandbox.nullable().optional(),
   budget: budget.nullable().optional(),
   onBrokenMain: z.enum(["notify", "revert", "fix"]).optional(),
+  planning: planningPolicy.partial().optional(),
 });
 
 const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
@@ -447,6 +455,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/runners", () => store.listRunners());
   // Cost and quota (spec §39).
+  app.put("/projects/:id/planning", role("owner"), (req) =>
+    store.setPlanningPolicy(idParams.parse(req.params).id, planningPolicy.parse(req.body)),
+  );
   app.put("/projects/:id/self-healing", role("owner"), (req) =>
     store.setBrokenMainPolicy(
       idParams.parse(req.params).id,

@@ -138,6 +138,13 @@ export class Notifier {
         };
       case "RevertOpened":
         return { kind: "main", text: `:leftwards_arrow_with_hook: Revert of ${name} ready to merge: <${p.url}|PR #${p.number}>.` };
+      case "PlanAutoApproved": {
+        const plan = await this.store.getPlan(p.planId);
+        return {
+          kind: "plan",
+          text: `:white_check_mark: Plan for “${plan.goal.replace(/\s+/g, " ").slice(0, 100)}” approved automatically after ${p.critic} approved it: created ${plan.createdTasks.map((t) => t.key).join(", ")}. ${this.link(`#/plans/${plan.id}`, "Open plan")}`,
+        };
+      }
       case "CiFailed":
         return { kind: "ci", text: `:x: CI failed for ${name}: ${(p.checks ?? []).join(", ")}. The agent is reworking it. ${taskLink}` };
       case "TaskMerged":

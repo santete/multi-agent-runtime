@@ -1051,3 +1051,13 @@ button.link:disabled {
   align-items: center;
   margin-top: 4px;
 }
+
+.planning-settings summary {
+  cursor: pointer;
+}
+.planning-settings fieldset {
+  border: none;
+  padding: 8px 0 0;
+  display: grid;
+  gap: 8px;
+}

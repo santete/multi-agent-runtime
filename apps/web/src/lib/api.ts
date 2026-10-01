@@ -11,6 +11,7 @@ import type {
   KnowledgeKind,
   KnowledgeStatus,
   PlanDto,
+  PlanningPolicy,
   PlannedTask,
   EventDto,
   EventsPage,
@@ -130,6 +131,7 @@ export const api = {
   clearCooldown: (runnerId: string, agent: string) => request<void>("DELETE", `/runners/${runnerId}/cooldowns/${encodeURIComponent(agent)}`),
   costs: (projectId: string) => get<CostReport>(`/projects/${projectId}/costs`),
   setBudget: (projectId: string, budget: Budget | null) => put<ProjectDto>(`/projects/${projectId}/budget`, budget),
+  setPlanning: (projectId: string, planning: PlanningPolicy) => put<ProjectDto>(`/projects/${projectId}/planning`, planning),
   recentEvents: (limit = 50, projectId?: string) =>
     get<EventDto[]>(`/events/recent?limit=${limit}${projectId ? `&projectId=${projectId}` : ""}`),
 };

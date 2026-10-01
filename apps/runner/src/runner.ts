@@ -6,6 +6,7 @@ import {
   type AgentRunRequest,
   type ClaimResponse,
   HANDOFF_SCHEMA,
+  CRITIQUE_SCHEMA,
   PLAN_SCHEMA,
   REVIEW_SCHEMA,
   toHandoff,
@@ -16,10 +17,12 @@ import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig 
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
 import {
   type ContextExtras,
+  buildCritiquePrompt,
   buildPlanPrompt,
   buildPrompt,
   buildReviewPrompt,
   contextFiles,
+  critiqueFiles,
   knowledgeFiles,
   planFiles,
   reviewFiles,
@@ -305,10 +308,12 @@ export class Runner {
         ? buildReviewPrompt(claim.review, claim)
         : claim.plan
           ? buildPlanPrompt(claim.plan, adapter.capabilities.structuredOutput, claim)
-          : buildPrompt(claim, Boolean(resumeSessionId)),
+          : claim.critique
+            ? buildCritiquePrompt(claim.critique, claim)
+            : buildPrompt(claim, Boolean(resumeSessionId)),
       objective: task.objective,
       // Reviewers and planners only read: nothing of their worktree is ever delivered.
-      permissionProfile: claim.review || claim.plan ? "read-only" : "edit",
+      permissionProfile: claim.review || claim.plan || claim.critique ? "read-only" : "edit",
       timeoutSeconds: this.config.timeoutSeconds,
       env: {
         MAR_CONTROL_PLANE_URL: this.client.baseUrl,
@@ -316,7 +321,7 @@ export class Runner {
         MAR_EXECUTION_TOKEN: claim.executionToken,
       },
       ...(resumeSessionId && { resumeSessionId }),
-      ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : claim.plan ? PLAN_SCHEMA : HANDOFF_SCHEMA }),
+      ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : claim.plan ? PLAN_SCHEMA : claim.critique ? CRITIQUE_SCHEMA : HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
         // Also for sandboxed agents: their hook works wherever the CLI fires it.
         (adapter.capabilities.approval === "pre-tool-hook" || adapter.capabilities.approval === "sandbox") && {
@@ -426,7 +431,9 @@ export class Runner {
         ? reviewFiles(claim.review, reviewDiff)
         : claim.plan
           ? planFiles(claim.plan)
-          : contextFiles(claim, extras);
+          : claim.critique
+            ? critiqueFiles(claim.critique)
+            : contextFiles(claim, extras);
       const files = [...context, ...knowledgeFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {

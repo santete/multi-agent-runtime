@@ -1,7 +1,7 @@
 /** Wire types shared by the control plane HTTP API and its clients (runner, UI). */
 import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
 import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
-import type { PlannedTask, PlanProposal } from "./plan.js";
+import type { PlanCritique, PlannedTask, PlanProposal } from "./plan.js";
 import type { Budget, Pricing } from "./cost.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
@@ -55,6 +55,8 @@ export interface ProjectDto {
   budget: Budget | null;
   /** What to do when the base branch's CI fails on a merged task (spec §46). */
   onBrokenMain: BrokenMainPolicy;
+  /** Debate and autonomy of assisted planning (spec §53). */
+  planning: PlanningPolicy;
   createdAt: string;
 }
 
@@ -80,7 +82,7 @@ export interface TaskDto {
    * "review": an agent review of another task (reviewOf); it produces a review, not code.
    * "plan": a planner run for a plan (planId); it produces a proposed task DAG.
    */
-  kind: "work" | "review" | "plan";
+  kind: "work" | "review" | "plan" | "critique";
   reviewOf: string | null;
   /** The plan this task was planned in (work tasks) or plans (plan tasks). */
   planId: string | null;
@@ -166,6 +168,7 @@ export interface CreateProjectRequest {
   validationSandbox?: ValidationSandbox | null | undefined;
   budget?: Budget | null | undefined;
   onBrokenMain?: BrokenMainPolicy | undefined;
+  planning?: { [K in keyof PlanningPolicy]?: PlanningPolicy[K] | undefined } | undefined;
 }
 
 /**
@@ -173,6 +176,31 @@ export interface CreateProjectRequest {
  * (a person merges it); fix: also give the task's agent a fix-forward task.
  */
 export type BrokenMainPolicy = "notify" | "revert" | "fix";
+
+/**
+ * critics: agents that critique each proposal (a different agent than the
+ * planner); maxRounds: planner/critic rounds before a person decides;
+ * autoApprove: approve without a person when the critic approves and the
+ * plan stays within maxAutoTasks with agents available for every task.
+ */
+export interface PlanningPolicy {
+  critics: string[];
+  maxRounds: number;
+  autoApprove: boolean;
+  maxAutoTasks: number;
+}
+
+/** What a critic agent gets with its task. */
+export interface CritiqueContext {
+  planId: string;
+  goal: string;
+  round: number;
+  baseBranch: string;
+  proposal: PlanProposal;
+  /** Agents online, so the critic can judge assignments. */
+  agents: Array<{ id: string; skills: string[] }>;
+  planner: string;
+}
 
 /** An agent resting after it hit its quota on a runner (spec §39, §46). */
 export interface AgentCooldown {
@@ -223,7 +251,7 @@ export interface ReviewPolicy {
   autoApproveOnAgentReview: boolean;
 }
 
-export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal" | "ci_result";
+export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal" | "plan_critique" | "ci_result";
 
 /** An entry of the project's shared knowledge base (spec §20, §35). */
 export interface KnowledgeDto {
@@ -437,6 +465,8 @@ export interface ClaimResponse {
   review?: ReviewTarget;
   /** For plan tasks: what to plan. */
   plan?: PlanningContext;
+  /** For critique tasks: the proposal to critique. */
+  critique?: CritiqueContext;
   /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
   knowledge?: KnowledgeContext[];
 }
@@ -445,7 +475,7 @@ export interface ClaimResponse {
  * Assisted planning (spec §24). planning: the planner agent is working;
  * proposed: waiting for a human; failed: the planner gave up (see its task).
  */
-export type PlanStatus = "planning" | "proposed" | "approved" | "rejected" | "revised" | "failed";
+export type PlanStatus = "planning" | "reviewing" | "proposed" | "approved" | "rejected" | "revised" | "failed";
 
 export interface PlanDto {
   id: string;
@@ -459,6 +489,10 @@ export interface PlanDto {
   proposal: PlanProposal | null;
   /** Tasks created when the plan was approved, by planned ref. */
   createdTasks: Array<{ ref: string; taskId: string; key: string }>;
+  /** Debate round: 1 for the first proposal, +1 for each revision. */
+  round: number;
+  /** The critic's verdict on this proposal. */
+  critique: (PlanCritique & { critic: string }) | null;
   /** Human feedback this plan revises (see previousPlanId). */
   feedback: string | null;
   previousPlanId: string | null;
