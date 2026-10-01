@@ -35,3 +35,6 @@ Trước ADR này, mọi người dùng thấy mọi thứ, và agent chỉ đư
 - Cách ly được thực thi ở tầng API, không phải bằng row-level security trong DB. Mọi route mới cần có `/:id` hoặc filter theo org. Test `orgs.test.ts` canh cho các đường chính.
 - Notifier, budget và knowledge vẫn theo project nên đã được cách ly theo org một cách tự nhiên. Riêng notifier dùng chung webhook cho mọi org; mỗi org một webhook là việc sau.
 - Profile chỉ mô tả agent, không chứa credential. Đăng nhập CLI vẫn nằm trên máy runner.
+- Đã kiểm chứng thật:
+  - Một user ở org khác không thấy project, và truy cập trực tiếp nhận 404.
+  - Agent Claude được build từ profile `careful-coder@1` đã làm theo instructions của profile (ghi CHANGELOG, PR #31). Usage của profile được ghi lại.

@@ -255,6 +255,7 @@ Thứ tự đã thực hiện: (1) cost & quota → (2) agent performance + ch�
 - [x] Org cho project, runner và user (`*` = platform admin); API trả 404 cho tài nguyên của org khác; các danh sách và event được lọc theo org; runner chỉ nhận việc của org mình
 - [x] Agent theo project (`allowedAgents`)
 - [x] Marketplace: profile có version (adapter, skills, cost, pricing, instructions), publish theo org hoặc public; runner build agent từ `profile`; mọi task của agent nhận `AGENT.md`; thống kê usage; trang Marketplace
+- [x] **Chạy thật** trên DB thật, với các user thuộc 2 org: Bob (org globex) không thấy project LP, và GET thẳng vào LP trả 404. Lan publish profile `careful-coder` (Claude kèm quy tắc ghi CHANGELOG). Runner build agent `claude-code` từ profile này (`careful-coder@1`), và Claude làm LP-29 đúng theo quy tắc: tạo `CHANGELOG.md` với mục `## Unreleased`, mỗi dòng bắt đầu bằng `LP-29` (PR #31). Usage của profile ghi 1 lượt chạy, thành công.
 
 ## Phase 3 — hoàn tất
 
