@@ -17,6 +17,7 @@ import type {
   PlanningPolicy,
   InstructionDto,
   PutSecretRequest,
+  ProductMetrics,
   SecretDto,
   ProjectPolicy,
   QueueEntry,
@@ -162,6 +163,8 @@ export const api = {
   agentStats: () => get<AgentStats[]>("/agents/stats"),
   cooldowns: () => get<AgentCooldown[]>("/agents/cooldowns"),
   skillStats: () => get<AgentSkillStats[]>("/agents/skill-stats"),
+  metrics: (projectId: string | undefined, days: number) =>
+    get<ProductMetrics>(`/metrics?days=${days}${projectId ? `&projectId=${projectId}` : ""}`),
   secrets: (projectId: string) => get<SecretDto[]>(`/projects/${projectId}/secrets`),
   putSecret: (projectId: string, name: string, req: PutSecretRequest) => put<SecretDto>(`/projects/${projectId}/secrets/${name}`, req),
   deleteSecret: (projectId: string, name: string) => request<void>("DELETE", `/projects/${projectId}/secrets/${name}`),

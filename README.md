@@ -88,6 +88,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
 | POST | `/tasks/:id/pause`, `/tasks/:id/resume` | pause a task (a running agent stops at its next heartbeat) and resume its session later ([ADR-0028](docs/adr/0028-console-controls.md)) |
 | GET/POST | `/tasks/:id/instructions` | `{text, interrupt?}`: tell the agent something; by default a running agent is stopped and resumed with it |
+| GET | `/metrics?projectId&days` | product success metrics of spec §64, each rate with its numerator and denominator ([ADR-0030](docs/adr/0030-success-metrics.md)) |
 | GET | `/projects/:id/queue` | READY tasks in the order the scheduler takes them, with reasons and `blockedBy` (an unmerged task working on the same paths) ([ADR-0023](docs/adr/0023-automatic-reprioritization.md)) |
 | PUT | `/tasks/:id/priority` | `{priority: 0..100}` |
 | POST | `/projects/:id/plans` | `{goal, agent}`: a planner agent proposes a task DAG ([ADR-0013](docs/adr/0013-assisted-planning.md)) |
