@@ -756,3 +756,40 @@ export interface EventsPage {
   /** Pass as `after` to fetch the next page. */
   nextAfter: number;
 }
+
+/** A ratio with what it was computed from; value is null when nothing was measured. */
+export interface MetricRate {
+  value: number | null;
+  numerator: number;
+  denominator: number;
+}
+
+/**
+ * Product success metrics (spec §64) over a time window, for a project or
+ * everything the caller can see. Definitions: docs/adr/0030-success-metrics.md.
+ */
+export interface ProductMetrics {
+  since: string;
+  days: number;
+  collaboration: { handoffSuccess: MetricRate; contextReuse: MetricRate; agentToAgentHandoff: MetricRate };
+  engineering: {
+    taskSuccess: MetricRate;
+    validationPass: MetricRate;
+    rework: MetricRate;
+    reviewRejection: MetricRate;
+    meanCompletionMs: number | null;
+  };
+  automation: { humanIntervention: MetricRate; autoResolution: MetricRate; autonomousCompletion: MetricRate };
+  reliability: { failureRecovery: MetricRate; resumeSuccess: MetricRate; workspaceFailure: MetricRate };
+  platform: {
+    agentsIntegrated: number;
+    runnersOnline: number;
+    concurrentSessions: number;
+    peakConcurrentSessions: number;
+    projectsManaged: number;
+    /** READY → ASSIGNED: how long ready work waits for the scheduler. */
+    meanQueueWaitMs: number | null;
+    /** Assigned → agent started on the runner (workspace preparation included). */
+    meanDispatchMs: number | null;
+  };
+}

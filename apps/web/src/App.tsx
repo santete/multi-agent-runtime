@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AgentsPage } from "./components/AgentsPage.js";
 import { ApprovalsPage } from "./components/ApprovalsPage.js";
 import { MarketplacePage } from "./components/MarketplacePage.js";
+import { MetricsPage } from "./components/MetricsPage.js";
 import { Login } from "./components/Login.js";
 import { Overview } from "./components/Overview.js";
 import { PlanPage } from "./components/PlansPage.js";
@@ -55,6 +56,9 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
           <a className={route.page === "marketplace" ? "active" : ""} href={href.marketplace()}>
             Marketplace
           </a>
+          <a className={route.page === "metrics" ? "active" : ""} href={href.metrics()}>
+            Metrics
+          </a>
           <div className="nav-title">Projects</div>
           {(projects ?? []).map((p) => (
             <a key={p.id} className={route.page === "project" && route.id === p.id ? "active" : ""} href={href.project(p.id)}>
@@ -82,6 +86,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
         {route.page === "approvals" && <ApprovalsPage actor={actor} />}
         {route.page === "agents" && <AgentsPage actor={actor} />}
         {route.page === "marketplace" && <MarketplacePage actor={actor} />}
+        {route.page === "metrics" && <MetricsPage />}
       </main>
     </div>
   );

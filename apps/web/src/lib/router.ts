@@ -10,7 +10,8 @@ export type Route =
   | { page: "plan"; id: string }
   | { page: "approvals" }
   | { page: "agents" }
-  | { page: "marketplace" };
+  | { page: "marketplace" }
+  | { page: "metrics" };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -24,6 +25,7 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "approvals") return { page: "approvals" };
   if (parts[0] === "agents") return { page: "agents" };
   if (parts[0] === "marketplace") return { page: "marketplace" };
+  if (parts[0] === "metrics") return { page: "metrics" };
   return { page: "overview" };
 }
 
@@ -35,6 +37,7 @@ export const href = {
   approvals: () => "#/approvals",
   agents: () => "#/agents",
   marketplace: () => "#/marketplace",
+  metrics: () => "#/metrics",
 };
 
 const subscribe = (cb: () => void) => {

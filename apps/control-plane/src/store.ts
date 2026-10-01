@@ -49,6 +49,7 @@ import {
   type HeartbeatResponse,
   type PolicyVerdict,
   type InstructionDto,
+  type ProductMetrics,
   type ExecutionSecret,
   type PutSecretRequest,
   type Redactor,
@@ -107,6 +108,7 @@ import {
 } from "@mar/core";
 import { meter, withSpan } from "@mar/telemetry";
 import { type Actor, hasRole } from "./auth.js";
+import { computeMetrics } from "./metrics.js";
 import { SecretCipher } from "./secret-cipher.js";
 import type { Db, Queryable } from "./db.js";
 import type { GitProvider, MergeResult, PullRequestStatus } from "./git-provider.js";
@@ -2051,6 +2053,10 @@ export class Store {
           resumable: Boolean(lastSession),
           rework: rework?.kind ?? null,
           approvals: approvals.length,
+          // Spec §64 "context reuse": what the agent starts from besides the code.
+          kind: task.kind,
+          knowledge: knowledge.length,
+          dependencies: dependencies.length,
         },
       });
       const instructions =
@@ -3428,6 +3434,11 @@ export class Store {
   }
 
   /** Execution history per agent (spec §40), optionally for one project. */
+  /** Spec §64: the product success metrics over the last `days` days. */
+  metrics(scope: { projectId?: string | undefined; org?: string | undefined; days: number }): Promise<ProductMetrics> {
+    return computeMetrics(this.db, { ...scope, runnerOnlineSeconds: this.runnerOnlineSeconds });
+  }
+
   async agentStats(projectId?: string, q: Queryable = this.db, org?: string): Promise<AgentStats[]> {
     const rows = await q.query(
       `select e.agent,

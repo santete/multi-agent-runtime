@@ -303,6 +303,12 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
   - Codex ghi giá trị secret vào test, `secret-scan` bắt được, task về REWORK và Codex sửa. Validation pass với secret thật (0 test bị skip).
   - Codex từ chối in 4 ký tự đầu của key. Giá trị không xuất hiện ở đâu trong DB.
 
+### Success metrics — trạng thái ✅ ([ADR-0030](adr/0030-success-metrics.md))
+
+- [x] `GET /metrics`: đủ 5 nhóm metric của spec §64 (collaboration, engineering, automation, reliability, platform), mỗi tỉ lệ kèm tử số và mẫu số
+- [x] Trang Metrics (chọn project và cửa sổ thời gian; mỗi số có định nghĩa)
+- [x] Tính trên dữ liệu thật của LP: các con số khớp với những gì đã xảy ra (19/19 merge, 5/19 cần người, 0/19 tự động hoàn toàn vì mọi PR đều do người review)
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |
