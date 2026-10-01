@@ -212,6 +212,8 @@ const recentQuery = z.object({
 
 const role = (min: Role) => ({ config: { role: min } });
 
+const NOT_TRACED = new Set(["/stream", "/health", "/executions/:id/heartbeat", "/executions/:id/events"]);
+
 /** Execution routes carry the execution id: worth a span attribute. */
 function executionAttributes(params: unknown): Record<string, string> {
   const id = (params as { id?: unknown } | undefined)?.id;
@@ -240,8 +242,8 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   });
   app.addHook("onRequest", async (req) => {
     const route = req.routeOptions.url;
-    // Long-lived streams and static files are not worth a span.
-    if (!route || route === "/stream" || route === "/health" || route.startsWith("/ui")) return;
+    // Long-lived streams, static files and the runner's periodic heartbeats and event batches are not worth a span.
+    if (!route || NOT_TRACED.has(route) || route.startsWith("/ui")) return;
     const parent = extractTraceContext(req.headers);
     const span = startSpan(
       `${req.method} ${route}`,

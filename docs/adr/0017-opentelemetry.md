@@ -43,3 +43,4 @@ Metrics được xuất 15 giây một lần.
 - Lời gọi `claim` diễn ra trước khi execution tồn tại, nên nó là một trace riêng.
 - `/stream`, `/health` và file tĩnh của UI không được tạo span.
 - Span của agent chỉ có ở mức tool check. Telemetry riêng của từng CLI (ví dụ OTel của Claude Code) không được nối vào trace này.
+- Đã kiểm chứng thật với Claude (LP-13): một trace chứa 11 tool check dưới `agent.run`, bước validation và lời gọi tạo PR trên GitHub dưới `delivery`. Span của heartbeat và event batch bị bỏ để trace dễ đọc.
