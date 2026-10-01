@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorktreeManager, changedFiles, git } from "../src/worktree.js";
@@ -106,5 +106,30 @@ describe("WorktreeManager.writeFiles", () => {
       "repo-lint",
       "mar-policy",
     ]);
+  });
+});
+
+describe("self-healing workspaces", () => {
+  it("detects a broken worktree and recreates it from scratch", async () => {
+    const manager = new WorktreeManager(home.path);
+    const ws = await manager.prepare(project, "PAY-1");
+    // e.g. an interrupted cleanup left the directory but not its git link
+    await rm(join(ws.path, ".git"), { force: true });
+    await writeFile(join(ws.path, ".git"), "gitdir: /nowhere\n");
+    await expect(manager.prepare(project, "PAY-1")).rejects.toThrow(/is broken/);
+
+    await manager.discard(project, "PAY-1");
+    const fresh = await manager.prepare(project, "PAY-1");
+    expect(fresh.created).toBe(true);
+    expect(await git(fresh.path, "branch", "--show-current")).toBe("task/PAY-1");
+  });
+
+  it("can throw away the clone too", async () => {
+    const manager = new WorktreeManager(home.path);
+    await manager.prepare(project, "PAY-1");
+    await writeFile(join(manager.repoPath(project), ".git", "HEAD"), "garbage\n");
+    await manager.discard(project, "PAY-1", true);
+    expect(existsSync(manager.repoPath(project))).toBe(false);
+    expect((await manager.prepare(project, "PAY-1")).created).toBe(true);
   });
 });

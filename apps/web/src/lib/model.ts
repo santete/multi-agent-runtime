@@ -130,6 +130,20 @@ export function describeEvent(e: EventDto): string {
       return `knowledge accepted: ${p.title}${p.actor && p.actor !== "platform" ? ` by ${p.actor}` : ""}`;
     case "KnowledgeUpdated":
       return `knowledge ${p.status}: ${p.title}${by}`;
+    case "TaskStuck":
+      return `not moving (${String(p.state).toLowerCase().replace(/_/g, " ")}): ${p.reason}`;
+    case "MainHealthy":
+      return `base branch CI green after the merge (${String(p.sha).slice(0, 7)})`;
+    case "MainBroken":
+      return `base branch CI failed after the merge (${(p.checks ?? []).join(", ")}); policy: ${p.policy}`;
+    case "RevertOpened":
+      return `revert pull request #${p.number} opened`;
+    case "RevertFailed":
+      return `could not open a revert: ${p.error}`;
+    case "FixTaskCreated":
+      return `fix task ${p.fixTask} created`;
+    case "SessionDiscarded":
+      return `agent session could not be resumed; starting a new one`;
     case "AgentCooldown":
       return `${p.agent} hit its quota; resting until ${new Date(p.until).toLocaleString()}`;
     case "AgentCooldownCleared":

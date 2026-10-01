@@ -246,6 +246,28 @@ export class Runner {
     );
   }
 
+  /**
+   * Prepares the worktree; a broken one is thrown away and recreated, then the
+   * clone too (spec §46: "workspace lỗi"). Work already pushed is not lost:
+   * a fresh worktree continues from the pushed task branch.
+   */
+  private async prepareWorkspace(claim: ClaimResponse) {
+    const { project, task } = claim;
+    for (const repair of [undefined, "worktree", "clone"] as const) {
+      try {
+        if (repair) {
+          this.log.error("workspace broken, recreating it", { task: task.key, repair });
+          await this.worktrees.discard(project, task.key, repair === "clone");
+        }
+        return await this.worktrees.prepare(project, task.key, claim.review?.branch);
+      } catch (err) {
+        if (repair === "clone") throw err;
+        this.log.error("workspace preparation failed", { task: task.key, error: String(err) });
+      }
+    }
+    throw new Error("unreachable");
+  }
+
   private async runClaim(claim: ClaimResponse): Promise<string> {
     const { execution, task, project } = claim;
     const log = { task: task.key, execution: execution.id, attempt: execution.attempt };
@@ -261,7 +283,7 @@ export class Runner {
     try {
       // A review task checks out the reviewed task's delivered branch.
       workspace = await withSpan("workspace.prepare", {}, async () => {
-        const w = await this.worktrees.prepare(project, task.key, claim.review?.branch);
+        const w = await this.prepareWorkspace(claim);
         if (claim.review) reviewDiff = await this.worktrees.diffAgainst(w.path, claim.review.baseBranch);
         return w;
       });

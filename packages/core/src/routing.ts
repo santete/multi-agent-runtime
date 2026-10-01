@@ -156,3 +156,8 @@ export function chooseAgent(
 export function isAgentUnavailable(reason: string): boolean {
   return /quota|rate.?limit|usage limit|credit|unauthori[sz]ed|not logged in|login required|overloaded|503|capacity/i.test(reason);
 }
+
+/** The agent could not resume its session (expired, deleted, other machine): start a new one. */
+export function isSessionLost(reason: string): boolean {
+  return /no conversation found|(session|conversation|thread).{0,40}(not found|expired|missing|does not exist|unknown)|could not resume|failed to resume|invalid session/i.test(reason);
+}

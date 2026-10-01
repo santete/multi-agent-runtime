@@ -84,6 +84,7 @@ const createProjectBody = z.object({
   waitForChecks: z.boolean().optional(),
   validationSandbox: validationSandbox.nullable().optional(),
   budget: budget.nullable().optional(),
+  onBrokenMain: z.enum(["notify", "revert", "fix"]).optional(),
 });
 
 const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
@@ -446,6 +447,12 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/runners", () => store.listRunners());
   // Cost and quota (spec §39).
+  app.put("/projects/:id/self-healing", role("owner"), (req) =>
+    store.setBrokenMainPolicy(
+      idParams.parse(req.params).id,
+      z.object({ onBrokenMain: z.enum(["notify", "revert", "fix"]) }).parse(req.body).onBrokenMain,
+    ),
+  );
   app.put("/projects/:id/budget", role("owner"), (req) =>
     store.setBudget(idParams.parse(req.params).id, budget.nullable().parse(req.body ?? null)),
   );

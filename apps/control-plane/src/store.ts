@@ -5,6 +5,7 @@ import {
   type AgentSkillStats,
   type AgentStats,
   type Budget,
+  type BrokenMainPolicy,
   type CostReport,
   type ApprovePlanRequest,
   type CreatePlanRequest,
@@ -65,6 +66,7 @@ import {
   executionCost,
   isAgentUnavailable,
   isCiConfigPath,
+  isSessionLost,
   evaluateToolCall,
   isTerminal,
   formatReview,
@@ -150,6 +152,7 @@ const toProject = (r: Row): ProjectDto => ({
   waitForChecks: Boolean(r.wait_for_checks),
   validationSandbox: r.validation_sandbox ?? null,
   budget: r.budget ?? null,
+  onBrokenMain: r.on_broken_main ?? "notify",
   createdAt: iso(r.created_at),
 });
 
@@ -376,8 +379,8 @@ export class Store {
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
            review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks,
-           validation_sandbox, budget)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *`,
+           validation_sandbox, budget, on_broken_main)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning *`,
         [
           randomUUID(),
           req.key,
@@ -393,6 +396,7 @@ export class Store {
           req.waitForChecks ?? false,
           req.validationSandbox ? JSON.stringify(req.validationSandbox) : null,
           req.budget ? JSON.stringify(req.budget) : null,
+          req.onBrokenMain ?? "notify",
         ],
       );
       const project = toProject(row!);
@@ -452,6 +456,173 @@ export class Store {
       await appendEvent(q, { type: "ProjectBudgetChanged", projectId: id, payload: { budget } });
       return project;
     });
+  }
+
+  async setBrokenMainPolicy(id: string, onBrokenMain: BrokenMainPolicy): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set on_broken_main = $2 where id = $1 returning *", [id, onBrokenMain]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectSelfHealingChanged", projectId: id, payload: { onBrokenMain } });
+      return project;
+    });
+  }
+
+  // ---- self-healing (spec §46) --------------------------------------------
+
+  /**
+   * Watches the base branch's CI on the commits the merge queue produced in
+   * the last day. A failure is reported (MainBroken) and, per project policy,
+   * answered with a revert pull request or a fix-forward task.
+   */
+  async checkMergedCommits(): Promise<{ healthy: number; broken: number }> {
+    const result = { healthy: 0, broken: 0 };
+    if (!this.gitProvider?.commitChecks) return result;
+    const rows = await this.db.query(
+      `select t.*, m.content->>'sha' as merge_sha from tasks t
+       join lateral (
+         select content from artifacts a where a.task_id = t.id and a.type = 'merge_result' and a.content->>'status' = 'merged'
+         order by a.created_at desc limit 1
+       ) m on true
+       where t.state = 'COMPLETED' and t.kind = 'work' and m.content->>'sha' is not null
+         and t.updated_at > now() - interval '24 hours'
+         and not exists (select 1 from events e where e.task_id = t.id and e.type in ('MainHealthy', 'MainBroken'))
+       order by t.updated_at`,
+    );
+    for (const row of rows) {
+      const task = toTask(row);
+      const project = await this.getProject(task.projectId);
+      let checks;
+      try {
+        checks = await this.gitProvider.commitChecks({ repoUrl: project.repoUrl, sha: row.merge_sha });
+      } catch {
+        continue; // try again on the next tick
+      }
+      const settledWithoutCi = checks.state === "none" && Date.now() - Date.parse(task.updatedAt) > this.ciGraceSeconds * 1000;
+      if (checks.state === "success" || settledWithoutCi) {
+        await appendEvent(this.db, {
+          type: "MainHealthy",
+          projectId: task.projectId,
+          taskId: task.id,
+          payload: { sha: row.merge_sha, checks: checks.runs.map((r) => r.name) },
+        });
+        result.healthy++;
+      } else if (checks.state === "failure") {
+        await this.handleBrokenMain(task, project, row.merge_sha, checks.runs);
+        result.broken++;
+      }
+    }
+    return result;
+  }
+
+  private async handleBrokenMain(task: TaskDto, project: ProjectDto, sha: string, runs: CheckRun[]): Promise<void> {
+    const failing = runs.filter((r) => r.state === "failure");
+    await appendEvent(this.db, {
+      type: "MainBroken",
+      projectId: task.projectId,
+      taskId: task.id,
+      payload: { sha, checks: failing.map((r) => r.name), policy: project.onBrokenMain },
+    });
+    const details = failing
+      .map((c) => `- ${c.name}${c.url ? ` (${c.url})` : ""}${c.summary ? `:\n  ${c.summary.split("\n").join("\n  ")}` : ""}`)
+      .join("\n");
+
+    if (project.onBrokenMain === "revert" && this.gitProvider?.revertPullRequest && task.pullRequestNumber) {
+      try {
+        const pr = await this.gitProvider.revertPullRequest({
+          repoUrl: project.repoUrl,
+          number: task.pullRequestNumber,
+          title: `Revert ${task.key}: ${task.title}`,
+          body: `${task.key} broke \`${project.defaultBranch}\` (${sha.slice(0, 7)}). Failing checks:\n\n${details}\n\nOpened by multi-agent-runtime (spec §46 rollback). Merge it to restore ${project.defaultBranch}.`,
+        });
+        await appendEvent(this.db, { type: "RevertOpened", projectId: task.projectId, taskId: task.id, payload: { ...pr, sha } });
+      } catch (err) {
+        await appendEvent(this.db, { type: "RevertFailed", projectId: task.projectId, taskId: task.id, payload: { error: String(err).slice(0, 500) } });
+      }
+    }
+
+    if (project.onBrokenMain === "fix") {
+      const fix = await this.db.tx((q) =>
+        this.insertTask(
+          q,
+          task.projectId,
+          {
+            title: `Fix ${project.defaultBranch} after ${task.key}`,
+            objective:
+              `${task.key} ("${task.title}") was merged as ${sha.slice(0, 7)} and the CI of ${project.defaultBranch} now fails:\n\n${details}\n\n` +
+              `Fix forward on top of ${project.defaultBranch}: find why, correct it, and keep what ${task.key} was meant to do.\n\n` +
+              `What ${task.key} was meant to do:\n${task.objective}`,
+            agent: task.routing === "auto" ? AUTO : task.agent,
+            requires: task.requires,
+          },
+          "platform",
+        ),
+      );
+      await appendEvent(this.db, { type: "FixTaskCreated", projectId: task.projectId, taskId: task.id, payload: { fixTask: fix.key, sha } });
+    }
+  }
+
+  /**
+   * Escalation (spec §46): work that has not moved for too long, with why —
+   * no runner can take it, its agent rests, the budget is spent, or it waits
+   * for a person. Reported once per state the task is stuck in.
+   */
+  async escalateStuck(options: { readyMinutes: number; humanHours: number }): Promise<number> {
+    const rows = await this.db.query(
+      `select t.* from tasks t
+       where (
+         (t.state = 'READY' and t.updated_at < now() - make_interval(mins => $1))
+         or (t.state in ('WAITING_FOR_HUMAN', 'REVIEW') and t.updated_at < now() - make_interval(hours => $2))
+       )
+       and not exists (select 1 from events e where e.task_id = t.id and e.type = 'TaskStuck' and e.created_at >= t.updated_at)`,
+      [options.readyMinutes, options.humanHours],
+    );
+    for (const row of rows) {
+      const task = toTask(row);
+      await appendEvent(this.db, {
+        type: "TaskStuck",
+        projectId: task.projectId,
+        taskId: task.id,
+        payload: { state: task.state, since: task.updatedAt, reason: await this.stuckReason(task) },
+      });
+    }
+    return rows.length;
+  }
+
+  private async stuckReason(task: TaskDto): Promise<string> {
+    if (task.state === "REVIEW") return "waiting for a review";
+    if (task.state === "WAITING_FOR_HUMAN") {
+      const [p] = await this.db.query<{ n: number }>(
+        "select count(*)::int as n from approvals a join executions e on e.id = a.execution_id where e.task_id = $1 and a.status = 'pending'",
+        [task.id],
+      );
+      return p?.n ? `waiting for a person to decide ${p.n} approval(s)` : "waiting for a person";
+    }
+    const project = await this.getProject(task.projectId);
+    const [spend] = await this.db.query<{ spent: string }>(`select ${TODAY_SPEND_SQL} as spent from projects p where p.id = $1`, [project.id]);
+    if (project.budget?.dailyUsd !== undefined && Number(spend?.spent ?? 0) >= project.budget.dailyUsd) return "the project's daily budget is used up";
+    const runners = (await this.listRunners()).filter((r) => r.online);
+    const offered = runners.flatMap((r) => r.agents.map((a) => ({ runner: r, agent: a })));
+    const fits = offered.filter(({ agent }) =>
+      task.agent === AUTO
+        ? !task.excludedAgents.includes(agent.id) && task.requires.every((s) => (agent.skills ?? []).map((x) => x.toLowerCase()).includes(s.toLowerCase()))
+        : agent.id === task.agent,
+    );
+    if (!fits.length) {
+      return task.agent === AUTO
+        ? `no online runner has an agent with ${task.requires.join(", ") || "any skill"}${task.excludedAgents.length ? ` (excluding ${task.excludedAgents.join(", ")})` : ""}`
+        : `no online runner offers ${task.agent}`;
+    }
+    const resting = await this.listCooldowns();
+    const available = fits.filter(({ runner, agent }) => !resting.some((c) => c.runnerId === runner.id && c.agent === agent.id));
+    if (!available.length) {
+      const until = resting.map((c) => c.until).sort()[0];
+      return `every suitable agent is resting after a quota hit${until ? ` (first back at ${until})` : ""}`;
+    }
+    return "waiting for capacity (parallelism or concurrency limits)";
   }
 
   async setValidationSandbox(id: string, sandbox: ValidationSandbox | null): Promise<ProjectDto> {
@@ -1055,8 +1226,8 @@ export class Store {
       }
       task = await changeTaskState(q, task, "assigned", { runnerId, agent: task.agent });
 
-      const [previous] = await q.query<{ id: string; attempt: number }>(
-        "select id, attempt from executions where task_id = $1 order by attempt desc limit 1",
+      const [previous] = await q.query<{ id: string; attempt: number; status: string; result: any; session_id: string | null }>(
+        "select id, attempt, status, result, session_id from executions where task_id = $1 order by attempt desc limit 1",
         [task.id],
       );
       const project = await this.getProject(task.projectId, q);
@@ -1066,11 +1237,21 @@ export class Store {
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
       const knowledge = await this.knowledgeContext(q, project.id);
-      const [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
+      let [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
         [task.id, task.agent],
       );
+      // Spec §46 "mất session": an agent that could not resume its session starts a new one.
+      if (lastSession && previous?.status === "failed" && isSessionLost(String(previous.result?.reason ?? ""))) {
+        await appendEvent(q, {
+          type: "SessionDiscarded",
+          projectId: task.projectId,
+          taskId: task.id,
+          payload: { sessionId: lastSession.session_id, reason: String(previous.result?.reason ?? "").slice(0, 300) },
+        });
+        lastSession = undefined;
+      }
 
       const executionToken = randomBytes(24).toString("base64url");
       const [execRow] = await q.query(
