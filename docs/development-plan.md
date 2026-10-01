@@ -293,6 +293,16 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
   - Instruction giữa chừng ("đổi thành `formatMoney`, mã tiền tệ đứng trước"): agent bị dừng sau khoảng 6 giây, rồi resume cùng session và làm theo.
   - Pause: diff lúc pause đúng như instruction. Resume thì task hoàn tất và merge.
 
+### Quản lý secret — trạng thái ✅ ([ADR-0029](adr/0029-secret-management.md))
+
+- [x] Secret của project, gồm hai loại: stored (mã hóa AES-256-GCM bằng `MAR_SECRETS_KEY`) hoặc runner-env (giá trị không rời máy runner); `exposeTo` agent và/hoặc validation; API không bao giờ trả giá trị
+- [x] Claim chỉ chứa tên; runner lấy giá trị khi execution còn active (có audit `SecretsIssued`), rồi inject thành biến môi trường cho agent và validation (kể cả trong container)
+- [x] Redact ở runner, hook và control plane; policy chặn in secret (HIGH) và tool call chứa giá trị (CRITICAL); bước validation `secret-scan` đưa task về REWORK
+- [x] UI: mục Secrets trong tab Policy
+- [x] **Chạy thật** (LP-37, PR #38):
+  - Codex ghi giá trị secret vào test, `secret-scan` bắt được, task về REWORK và Codex sửa. Validation pass với secret thật (0 test bị skip).
+  - Codex từ chối in 4 ký tự đầu của key. Giá trị không xuất hiện ở đâu trong DB.
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

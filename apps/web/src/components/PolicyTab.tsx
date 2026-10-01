@@ -1,6 +1,8 @@
-import type { ActorDto, ApproverRole, PolicyRule, ProjectDto, ProjectPolicy } from "@mar/core";
+import type { ActorDto, ApproverRole, PolicyRule, ProjectDto, ProjectPolicy, SecretScope } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
+import { useLiveQuery } from "../lib/live.js";
+import { timeAgo } from "../lib/model.js";
 import { Empty, ErrorBox } from "./ui.js";
 
 const KINDS: Record<PolicyRule["kind"], string> = {
@@ -160,6 +162,101 @@ export function PolicyTab({ project, actor }: { project: ProjectDto; actor: Acto
         </div>
       )}
       <ErrorBox error={error} />
+
+      <Secrets project={project} editable={editable} />
     </div>
+  );
+}
+
+/** Spec §48: secrets reach agents and validation as environment variables; values are never shown again. */
+function Secrets({ project, editable }: { project: ProjectDto; editable: boolean }) {
+  const [secrets, error, reload] = useLiveQuery(() => api.secrets(project.id), [project.id], (e) => e.projectId === project.id && e.type.startsWith("Secret"));
+  const [name, setName] = useState("");
+  const [source, setSource] = useState<"stored" | "runner-env">("stored");
+  const [value, setValue] = useState("");
+  const [exposeTo, setExposeTo] = useState<SecretScope[]>(["validation"]);
+  const [failure, setFailure] = useState<Error>();
+  const toggle = (scope: SecretScope) => setExposeTo((x) => (x.includes(scope) ? x.filter((s) => s !== scope) : [...x, scope]));
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.putSecret(project.id, name, { ...(source === "stored" ? { value } : { fromRunnerEnv: value }), exposeTo });
+      setName("");
+      setValue("");
+      setFailure(undefined);
+      reload();
+    } catch (err) {
+      setFailure(err as Error);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h3>Secrets</h3>
+      <p className="muted small">
+        Given at run time as environment variables, to the agent and/or the validation; never in a prompt. Their values are redacted from logs,
+        and a change or tool call that contains one is refused.
+      </p>
+      <ErrorBox error={error} />
+      {secrets && secrets.length === 0 && <Empty>No secrets.</Empty>}
+      {secrets && secrets.length > 0 && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>Value from</th>
+              <th>Given to</th>
+              <th>Updated</th>
+              {editable && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {secrets.map((s) => (
+              <tr key={s.name}>
+                <td className="mono">{s.name}</td>
+                <td>{s.source === "stored" ? "stored (encrypted)" : <span className="mono">runner env {s.ref}</span>}</td>
+                <td>{s.exposeTo.join(", ")}</td>
+                <td className="muted small">
+                  {s.updatedBy} · {timeAgo(s.updatedAt)}
+                </td>
+                {editable && (
+                  <td>
+                    <button className="link" onClick={() => api.deleteSecret(project.id, s.name).then(reload, setFailure)}>
+                      remove
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {editable && (
+        <form className="policy-rule" onSubmit={add}>
+          <input className="mono" value={name} onChange={(e) => setName(e.target.value.toUpperCase())} placeholder="NPM_TOKEN" pattern="[A-Z_][A-Z0-9_]*" required />
+          <select value={source} onChange={(e) => setSource(e.target.value as "stored" | "runner-env")}>
+            <option value="stored">value</option>
+            <option value="runner-env">runner env variable</option>
+          </select>
+          <input
+            type={source === "stored" ? "password" : "text"}
+            autoComplete="off"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={source === "stored" ? "secret value" : "variable on the runner machine"}
+            required
+          />
+          <label className="check small">
+            <input type="checkbox" checked={exposeTo.includes("agent")} onChange={() => toggle("agent")} /> agent
+          </label>
+          <label className="check small">
+            <input type="checkbox" checked={exposeTo.includes("validation")} onChange={() => toggle("validation")} /> validation
+          </label>
+          <button disabled={!exposeTo.length}>Save secret</button>
+        </form>
+      )}
+      <ErrorBox error={failure} />
+    </section>
   );
 }

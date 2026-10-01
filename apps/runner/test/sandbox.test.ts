@@ -27,6 +27,12 @@ describe("container arguments", () => {
     expect(args.slice(-4)).toEqual([IMAGE, "sh", "-c", "npm test"]);
     expect(containerArgs({ name: "t", command: "x" }, "/w", { image: IMAGE, network: true }, "n")).toContain("bridge");
   });
+
+  it("passes secrets by name only: the value comes from the CLI's environment, not the command line", () => {
+    const args = containerArgs({ name: "t", command: "x" }, "/w", { image: IMAGE }, "n", ["DB_URL"]);
+    expect(args).toEqual(expect.arrayContaining(["-e", "DB_URL"]));
+    expect(args.join(" ")).not.toContain("DB_URL=");
+  });
 });
 
 describe.skipIf(!dockerReady())("validation in a container (docker)", () => {

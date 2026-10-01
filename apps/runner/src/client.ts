@@ -6,6 +6,7 @@ import type {
   DeliveryRequest,
   DeliveryResponse,
   ExecutionDto,
+  ExecutionSecret,
   HeartbeatResponse,
   RegisterRunnerResponse,
   ValidationReport,
@@ -57,6 +58,11 @@ export class ControlPlaneClient {
   }
 
   /** Not retried: the next heartbeat follows shortly. */
+  /** The project secrets of an active execution (spec §48), fetched at run time only. */
+  async secrets(executionId: string): Promise<ExecutionSecret[]> {
+    return (await this.send<ExecutionSecret[]>("GET", `/executions/${executionId}/secrets`, undefined, this.retry)) ?? [];
+  }
+
   async heartbeat(executionId: string): Promise<HeartbeatResponse> {
     return (await this.post<HeartbeatResponse>(`/executions/${executionId}/heartbeat`))!;
   }
@@ -88,7 +94,11 @@ export class ControlPlaneClient {
    * Returns undefined for 204 No Content. Network errors and 5xx responses are
    * retried with exponential backoff; 4xx responses are final.
    */
-  private async post<T>(path: string, body?: unknown, retry: RetryPolicy = NO_RETRY): Promise<T | undefined> {
+  private post<T>(path: string, body?: unknown, retry: RetryPolicy = NO_RETRY): Promise<T | undefined> {
+    return this.send<T>("POST", path, body, retry);
+  }
+
+  private async send<T>(method: "GET" | "POST", path: string, body?: unknown, retry: RetryPolicy = NO_RETRY): Promise<T | undefined> {
     const headers: Record<string, string> = {};
     if (this.apiToken) headers.authorization = `Bearer ${this.apiToken}`;
     if (body !== undefined) headers["content-type"] = "application/json";
@@ -98,7 +108,7 @@ export class ControlPlaneClient {
       let res: Response;
       try {
         res = await fetch(this.baseUrl + path, {
-          method: "POST",
+          method,
           headers,
           ...(body !== undefined && { body: JSON.stringify(body) }),
         });

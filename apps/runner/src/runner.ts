@@ -9,6 +9,11 @@ import {
   CRITIQUE_SCHEMA,
   PLAN_SCHEMA,
   REVIEW_SCHEMA,
+  type Redactor,
+  type ValidationReport,
+  containsSecret,
+  redactDeep,
+  redactor,
   toHandoff,
 } from "@mar/core";
 import { activeTraceparent, meter, SpanKind, SpanStatusCode, withSpan } from "@mar/telemetry";
@@ -56,12 +61,14 @@ class EventShipper {
   constructor(
     private readonly client: ControlPlaneClient,
     private readonly executionId: string,
+    private readonly redact: Redactor = (t) => t,
   ) {
     this.timer = setInterval(() => void this.flush(), FLUSH_INTERVAL_MS);
   }
 
   push(event: AgentEvent): void {
-    this.buffer.push(event);
+    // Secret values never leave the runner (spec §48).
+    this.buffer.push(redactDeep(event, this.redact));
     if (this.buffer.length >= FLUSH_BATCH_SIZE) void this.flush();
   }
 
@@ -83,6 +90,46 @@ class EventShipper {
     await this.flush();
     if (this.error) throw this.error;
   }
+}
+
+/** Secrets whose value appears in a diff, with the files it appears in. */
+export function secretLeaks(diff: string, values: Array<{ name: string; value: string }>): Array<{ name: string; files: string[] }> {
+  const sections = diff.split(/^(?=diff --git )/m);
+  return values.flatMap((v) => {
+    if (!containsSecret(diff, [v])) return [];
+    const files = sections.filter((s) => s.includes(v.value)).map((s) => /^diff --git a\/(.+?) b\//.exec(s)?.[1] ?? "?");
+    return [{ name: v.name, files }];
+  });
+}
+
+/** A failed validation telling the agent which secret it wrote where (spec §48). */
+function secretScanFailure(leaks: Array<{ name: string; files: string[] }>): ValidationReport {
+  const lines = leaks.map((l) => `- the value of ${l.name} is written in ${l.files.join(", ")}`);
+  return {
+    passed: false,
+    steps: [
+      {
+        name: "secret-scan",
+        command: "(runner) look for secret values in the changes",
+        passed: false,
+        exitCode: null,
+        durationMs: 0,
+        outputTail: [
+          "The changes contain secret values, which must never reach the repository:",
+          ...lines,
+          "Read them from their environment variables at run time instead (e.g. process.env.NAME), and do not hard-code or compare against the values.",
+        ].join("\n"),
+      },
+    ],
+    changedFiles: [...new Set(leaks.flatMap((l) => l.files))],
+  };
+}
+
+interface RunSecrets {
+  agentEnv: Record<string, string>;
+  validationEnv: Record<string, string>;
+  values: Array<{ name: string; value: string }>;
+  redact: Redactor;
 }
 
 export class Runner {
@@ -273,6 +320,28 @@ export class Runner {
     throw new Error("unreachable");
   }
 
+  /**
+   * Spec §48: the project's secrets for this run, as environment variables
+   * for the agent and for validation. Stored values come from the control
+   * plane; runner-env ones from this machine and never leave it.
+   */
+  private async loadSecrets(claim: ClaimResponse): Promise<RunSecrets> {
+    const none: RunSecrets = { agentEnv: {}, validationEnv: {}, values: [], redact: (t) => t };
+    if (!claim.secrets?.length) return none;
+    const result = { ...none, agentEnv: {} as Record<string, string>, validationEnv: {} as Record<string, string> };
+    for (const secret of await this.client.secrets(claim.execution.id)) {
+      const value = secret.value ?? (secret.fromRunnerEnv ? process.env[secret.fromRunnerEnv] : undefined);
+      if (value === undefined) {
+        this.log.error("secret not available on this runner", { task: claim.task.key, secret: secret.name, env: secret.fromRunnerEnv });
+        continue;
+      }
+      result.values.push({ name: secret.name, value });
+      if (secret.exposeTo.includes("agent")) result.agentEnv[secret.name] = value;
+      if (secret.exposeTo.includes("validation")) result.validationEnv[secret.name] = value;
+    }
+    return { ...result, redact: redactor(result.values) };
+  }
+
   private async runClaim(claim: ClaimResponse): Promise<string> {
     const { execution, task, project } = claim;
     const log = { task: task.key, execution: execution.id, attempt: execution.attempt };
@@ -298,6 +367,15 @@ export class Runner {
       return "failed";
     }
 
+    let secrets: RunSecrets;
+    try {
+      secrets = await this.loadSecrets(claim);
+    } catch (err) {
+      this.log.error("could not get the project's secrets", { ...log, error: String(err) });
+      await this.fail(execution.id, `could not get the project's secrets: ${String(err)}`);
+      return "failed";
+    }
+
     // Resume only our own session: agent session state lives on this machine.
     const resumeSessionId =
       claim.resume && claim.resume.runnerId === this.runnerId && adapter.capabilities.resume
@@ -318,6 +396,9 @@ export class Runner {
       permissionProfile: claim.review || claim.plan || claim.critique ? "read-only" : "edit",
       timeoutSeconds: this.config.timeoutSeconds,
       env: {
+        ...secrets.agentEnv,
+        // The policy hook redacts these variables' values and refuses calls that carry them.
+        ...(Object.keys(secrets.agentEnv).length && { MAR_SECRET_NAMES: Object.keys(secrets.agentEnv).join(",") }),
         MAR_CONTROL_PLANE_URL: this.client.baseUrl,
         MAR_EXECUTION_ID: execution.id,
         MAR_EXECUTION_TOKEN: claim.executionToken,
@@ -349,7 +430,9 @@ export class Runner {
     }, this.config.heartbeatIntervalMs);
 
     try {
-      const { outcome, restore, revalidation } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff);
+      const run = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff, secrets.redact);
+      const { restore, revalidation } = run;
+      let { outcome } = run;
       // What the agent changed so far, for people to look at (spec §43); also after a pause.
       let diff: string | undefined;
       if (task.kind === "work") {
@@ -358,6 +441,11 @@ export class Runner {
           return undefined;
         });
       }
+      // A secret value in the changes would end up in the repository: validation fails and the agent reworks it.
+      const leaks = diff !== undefined ? secretLeaks(diff, secrets.values) : [];
+      if (leaks.length) this.log.error("the changes contain secret values", { ...log, secrets: leaks.map((l) => l.name) });
+      outcome = redactDeep(outcome, secrets.redact);
+      if (diff !== undefined) diff = secrets.redact(diff);
       let after;
       try {
         after = await this.client.complete(execution.id, {
@@ -377,14 +465,17 @@ export class Runner {
       if (after.status !== "validating") return after.status;
 
       const report = await withSpan("validation", { "mar.validation.steps": project.validation.length }, async (span) => {
-        const r = await runValidation(workspace.path, project.validation, abort.signal, {
-          sandbox: project.validationSandbox,
-          containerRuntime: this.config.containerRuntime,
-        });
+        const r = leaks.length
+          ? secretScanFailure(leaks)
+          : await runValidation(workspace.path, project.validation, abort.signal, {
+              sandbox: project.validationSandbox,
+              containerRuntime: this.config.containerRuntime,
+              env: secrets.validationEnv,
+            });
         span.setAttribute("mar.validation.passed", r.passed);
         return r;
       });
-      const { deliver } = await this.client.validation(execution.id, report);
+      const { deliver } = await this.client.validation(execution.id, redactDeep(report, secrets.redact));
       this.log.info("validation finished", { ...log, passed: report.passed, deliver });
       if (!deliver) return report.passed ? "validated" : "validation_failed";
 
@@ -402,8 +493,9 @@ export class Runner {
     worktree: string,
     signal: AbortSignal,
     reviewDiff = "",
+    redact: Redactor = (t) => t,
   ): Promise<{ outcome: ProcessOutcome; restore: string[]; revalidation?: boolean }> {
-    const shipper = new EventShipper(this.client, claim.execution.id);
+    const shipper = new EventShipper(this.client, claim.execution.id, redact);
     let outcome: ProcessOutcome;
     let restore: string[] = [];
     let revalidation = false;

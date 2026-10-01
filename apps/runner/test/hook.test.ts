@@ -109,6 +109,18 @@ describe("mar-policy-hook", () => {
     expect(received.at(-1)?.traceparent).toBeUndefined();
   });
 
+  it("never sends secret values and says when a call carries one (spec §48)", async () => {
+    const env = { MAR_SECRET_NAMES: "NPM_TOKEN", NPM_TOKEN: 'npm_"quoted"_1234' };
+    await runHook("json", { tool: "Write", input: { file_path: ".npmrc", content: 'token=npm_"quoted"_1234' } }, env);
+    expect(received.at(-1)!.body).toEqual({
+      tool: "Write",
+      input: { file_path: ".npmrc", content: "token=[secret NPM_TOKEN]" },
+      containsSecret: "NPM_TOKEN",
+    });
+    await runHook("json", { tool: "Bash", input: { command: "npm whoami" } }, env);
+    expect(received.at(-1)!.body).toEqual({ tool: "Bash", input: { command: "npm whoami" } });
+  });
+
   it("fails closed without its environment or with an unknown dialect", async () => {
     expect((await runHook("agy", { toolCall: { name: "x" } }, { MAR_EXECUTION_TOKEN: "" })).decision).toBe("deny");
     expect((await runHook("vim", { tool: "x" })).decision).toBe("deny");

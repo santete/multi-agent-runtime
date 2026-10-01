@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
-import { InvalidTransitionError, KNOWLEDGE_KINDS } from "@mar/core";
+import { InvalidTransitionError, KNOWLEDGE_KINDS, SECRET_NAME } from "@mar/core";
 import {
   type Context,
   contextWithSpan,
@@ -74,6 +74,15 @@ const planningPolicy = z.object({
   autoApprove: z.boolean(),
   maxAutoTasks: z.number().int().min(1).max(20),
 });
+
+const secretParams = z.object({ id: z.uuid(), name: z.string().regex(SECRET_NAME, "an environment variable name (A-Z, 0-9, _)") });
+const putSecretBody = z
+  .object({
+    value: z.string().min(1).max(65_536).optional(),
+    fromRunnerEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/).optional(),
+    exposeTo: z.array(z.enum(["agent", "validation"])).min(1).max(2),
+  })
+  .refine((b) => (b.value === undefined) !== (b.fromRunnerEnv === undefined), "give either value or fromRunnerEnv");
 
 const approver = z.enum(["member", "senior", "owner"]);
 const projectPolicy = z.object({
@@ -284,7 +293,7 @@ const completeExecutionBody = z.object({
   diff: z.string().max(400_000).optional(),
 });
 
-const toolCheckBody = z.object({ tool: z.string().min(1), input: z.unknown() });
+const toolCheckBody = z.object({ tool: z.string().min(1), input: z.unknown(), containsSecret: z.string().max(128).optional() });
 
 const eventsQuery = z.object({
   after: z.coerce.number().int().min(0).default(0),
@@ -604,6 +613,17 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/runners", (req) => store.listRunners(scope(req)));
   // Cost and quota (spec §39).
+  // Secrets (spec §48): names only on the way out.
+  app.get("/projects/:id/secrets", (req) => store.listSecrets(idParams.parse(req.params).id));
+  app.put("/projects/:id/secrets/:name", role("owner"), (req) => {
+    const { id, name } = secretParams.parse(req.params);
+    return store.putSecret(id, name, putSecretBody.parse(req.body), req.actor.name);
+  });
+  app.delete("/projects/:id/secrets/:name", role("owner"), async (req, reply) => {
+    const { id, name } = secretParams.parse(req.params);
+    await store.deleteSecret(id, name, req.actor.name);
+    reply.status(204);
+  });
   app.put("/projects/:id/policy", role("owner"), (req) =>
     store.setProjectPolicy(idParams.parse(req.params).id, projectPolicy.parse(req.body), req.actor.name),
   );
@@ -677,6 +697,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.post("/executions/:id/delivery", role("runner"), (req) =>
     store.recordDelivery(idParams.parse(req.params).id, deliveryBody.parse(req.body)),
   );
+  app.get("/executions/:id/secrets", role("runner"), (req) => store.executionSecrets(idParams.parse(req.params).id));
   app.get("/executions/:id/events", async (req) => {
     const { after, limit } = eventsQuery.parse(req.query);
     return page(await store.listEvents({ executionId: idParams.parse(req.params).id }, after, limit), after);

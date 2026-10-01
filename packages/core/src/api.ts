@@ -4,6 +4,7 @@ import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
 import type { PlanCritique, PlannedTask, PlanProposal } from "./plan.js";
 import type { Budget, Pricing } from "./cost.js";
 import type { ProjectPolicy } from "./policy.js";
+import type { SecretScope } from "./secrets.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
@@ -580,6 +581,11 @@ export interface ClaimResponse {
   decisions?: Array<{ question: string; answer: string; answeredBy: string | null }>;
   /** What people told the agent since its last run (spec §43), oldest first. */
   instructions?: InstructionDto[];
+  /**
+   * The project's secrets for this run (spec §48): names only. The runner
+   * fetches the values with GET /executions/:id/secrets while the run lasts.
+   */
+  secrets?: Array<{ name: string; exposeTo: SecretScope[] }>;
   /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
   knowledge?: KnowledgeContext[];
 }
@@ -702,6 +708,8 @@ export interface HeartbeatResponse {
 export interface ToolCheckRequest {
   tool: string;
   input: unknown;
+  /** Set by the policy hook: the call carried the value of this secret (redacted from `input`). */
+  containsSecret?: string | undefined;
 }
 
 export interface StartExecutionRequest {
