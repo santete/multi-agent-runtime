@@ -195,3 +195,16 @@ describe("CI checks", () => {
     expect(await store.processMergeQueue()).toMatchObject({ merged: 1 });
   });
 });
+
+describe("validation sandbox", () => {
+  it("is set per project and reaches the runner with the claim", async () => {
+    const { project, runnerId } = await setup();
+    expect(project.validationSandbox).toBeNull();
+    const res = await call<ProjectDto>("PUT", `/projects/${project.id}/validation-sandbox`, { image: "node:22-alpine", memory: "2g" });
+    expect(res.body.validationSandbox).toEqual({ image: "node:22-alpine", memory: "2g" });
+    expect((await claim(runnerId)).project.validationSandbox).toEqual({ image: "node:22-alpine", memory: "2g" });
+
+    expect((await call("PUT", `/projects/${project.id}/validation-sandbox`, { image: "node; rm -rf /" })).status).toBe(400);
+    expect((await call<ProjectDto>("PUT", `/projects/${project.id}/validation-sandbox`, null)).body.validationSandbox).toBeNull();
+  });
+});

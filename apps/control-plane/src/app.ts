@@ -55,6 +55,14 @@ const validationSteps = z
   )
   .max(20);
 
+const validationSandbox = z.object({
+  // An image reference: registry/name:tag or @digest, nothing a shell could interpret.
+  image: z.string().regex(/^[\w][\w.\-/:@]{0,254}$/, "invalid image reference"),
+  network: z.boolean().optional(),
+  memory: z.string().regex(/^\d+[kmg]?$/i).optional(),
+  cpus: z.number().positive().max(64).optional(),
+});
+
 const createProjectBody = z.object({
   key: z
     .string()
@@ -69,6 +77,7 @@ const createProjectBody = z.object({
   routingPolicy: z.enum(["balanced", "reliability", "cost"]).optional(),
   revalidateOnBaseChange: z.boolean().optional(),
   waitForChecks: z.boolean().optional(),
+  validationSandbox: validationSandbox.nullable().optional(),
 });
 
 const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
@@ -301,6 +310,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
   app.put("/projects/:id/review", role("owner"), (req) =>
     store.setReviewPolicy(idParams.parse(req.params).id, reviewPolicyBody.parse(req.body)),
+  );
+  app.put("/projects/:id/validation-sandbox", role("owner"), (req) =>
+    store.setValidationSandbox(idParams.parse(req.params).id, validationSandbox.nullable().parse(req.body ?? null)),
   );
   app.put("/projects/:id/merge-policy", role("owner"), (req) =>
     store.setMergePolicy(idParams.parse(req.params).id, mergePolicyBody.parse(req.body)),

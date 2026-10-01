@@ -186,6 +186,17 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Metrics: executions, duration, tokens, cost, task transitions; merge queue có span riêng cho mỗi task
 - [x] **Chạy thật** (Claude, LP-13, với một OTLP collector chạy local): trace có 54 span, gồm `workspace.prepare` 5,5 giây, `agent.run` 35 giây (2.655 output token, $0,30) với 11 tool check của Claude nằm bên dưới, bước validation `test`, và `delivery` → `github POST /pulls`. Span heartbeat và event batch bị bỏ vì gây nhiễu.
 
+### Validation trong container · agy unattended — trạng thái ✅ ([ADR-0018](adr/0018-sandboxed-validation-and-agy-unattended.md))
+
+- [x] `validationSandbox` theo project: mỗi bước validation chạy trong `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges`, mount worktree; fail closed khi không có runtime
+- [x] agy `unattended` (opt-in theo runner): `--sandbox --dangerously-skip-permissions`, chỉ khi có policy hook
+- [x] **Chạy thật** agy unattended (LP-14, PR #24): agy tự chạy `npm test`/`git`, hook vẫn chặn `curl` thành approval
+- [ ] Chạy thật validation trong container: Docker Desktop trong môi trường hiện tại không start được container (đã có test tự chạy khi Docker hoạt động)
+
+## Phase 2 — hoàn tất
+
+Đã xong toàn bộ các mục của Phase 2: Codex adapter, review agent chéo, scheduler theo capability + reassign, planner hỗ trợ, shared knowledge base, CI gate + re-validate, thông báo, OpenTelemetry, validation trong container + agy unattended. Mỗi mục đều có ADR, test, và (trừ validation trong container) đã chạy thật trên `mar-sandbox`.
+
 ## Phase 3
 
 Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
@@ -195,7 +206,7 @@ Planner tự động (không cần người duyệt) · chọn agent dựa trên
 | Rủi ro | Giảm thiểu |
 |---|---|
 | CLI thay đổi format output | Test dựa trên fixture, pin phiên bản CLI, contract test chạy hằng đêm với CLI thật |
-| agy headless không cho phép chạy lệnh shell (upstream #548/#619) | ADR-0004: Runner chạy build/test thay agent; chế độ unattended chỉ bật khi có sandbox và owner cho phép |
+| agy headless không cho phép chạy lệnh shell (upstream #548/#619) | ADR-0004: Runner chạy build/test thay agent; ADR-0018: chế độ unattended (`--sandbox`) opt-in theo runner, luôn có policy hook |
 | Config cá nhân lọt vào lượt chạy (hook, plugin) | Claude: `--setting-sources project,local --strict-mcp-config`; agy: cách ly config theo runner (M2) |
 | Merge conflict khi chạy song song | Path ownership + merge queue |
 | Quota subscription | Theo dõi `rate_limit_event` (Claude); scheduler giới hạn concurrency theo agent |

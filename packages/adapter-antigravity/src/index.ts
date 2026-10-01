@@ -25,6 +25,13 @@ export interface AntigravityAdapterOptions {
   defaultTimeoutSeconds?: number;
   /** Target platform of the runner (for tests); defaults to the current one. */
   platform?: NodeJS.Platform;
+  /**
+   * Opt-in unattended mode (ADR-0018): agy runs with its terminal sandbox
+   * (`--sandbox`) and without its own permission prompts, so it can run
+   * shell commands headless. Only ever applied together with the policy
+   * hook, which still decides every tool call.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -62,6 +69,9 @@ export class AntigravityAdapter implements AgentAdapter {
       "--mode",
       request.permissionProfile === "read-only" ? "plan" : "accept-edits",
     ];
+    if (this.options.unattended && request.policyHook && request.permissionProfile !== "read-only") {
+      args.push("--sandbox", "--dangerously-skip-permissions");
+    }
     if (request.resumeSessionId) args.push("--conversation", request.resumeSessionId);
     if (request.model) args.push("--model", request.model);
     if (request.outputSchema) args.push("--json-schema", JSON.stringify(request.outputSchema));

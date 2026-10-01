@@ -59,6 +59,24 @@ describe("AntigravityAdapter.buildCommand", () => {
 
     expect(windows.workspaceFiles({ ...request, policyHook: undefined as never })).toEqual([]);
   });
+
+  it("runs unattended in agy's sandbox only when opted in and policed by the hook", () => {
+    const request = {
+      workspace: "/ws",
+      prompt: "x",
+      objective: "x",
+      permissionProfile: "edit" as const,
+      policyHook: { command: "node", args: ["hook.mjs"] },
+    };
+    const unattended = new AntigravityAdapter({ unattended: true });
+    const flags = (args: string[]) => args.filter((a) => a === "--sandbox" || a === "--dangerously-skip-permissions");
+
+    expect(flags(unattended.buildCommand(request).args)).toEqual(["--sandbox", "--dangerously-skip-permissions"]);
+    // Never without the policy hook, never for read-only work, never unless opted in.
+    expect(flags(unattended.buildCommand({ ...request, policyHook: undefined as never }).args)).toEqual([]);
+    expect(flags(unattended.buildCommand({ ...request, permissionProfile: "read-only" }).args)).toEqual([]);
+    expect(flags(new AntigravityAdapter().buildCommand(request).args)).toEqual([]);
+  });
 });
 
 describe("AntigravityStreamParser: tools blocked by the policy hook", () => {

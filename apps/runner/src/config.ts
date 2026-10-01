@@ -19,6 +19,8 @@ const agentConfig = z.discriminatedUnion("adapter", [
     adapter: z.literal("antigravity"),
     executable: z.string().optional(),
     defaultTimeoutSeconds: z.number().int().positive().optional(),
+    /** agy --sandbox without permission prompts, policed by the hook (ADR-0018). */
+    unattended: z.boolean().default(false),
     ...routing,
   }),
   z.object({
@@ -45,6 +47,8 @@ export const runnerConfig = z.object({
   timeoutSeconds: z.number().int().positive().default(1800),
   /** Install the platform PreToolUse policy hook into agents that support it. */
   policyHook: z.boolean().default(true),
+  /** Container CLI for projects that validate in a container (docker, podman). */
+  containerRuntime: z.string().min(1).default("docker"),
   /** Author of the commits the runner makes for delivered tasks. */
   gitAuthor: z
     .object({ name: z.string().min(1), email: z.string().min(3) })
@@ -71,6 +75,7 @@ export function createAdapter(config: AgentConfig): AgentAdapter {
       return new AntigravityAdapter({
         ...(config.executable && { executable: config.executable }),
         ...(config.defaultTimeoutSeconds && { defaultTimeoutSeconds: config.defaultTimeoutSeconds }),
+        unattended: config.unattended,
       });
     case "generic-cli":
       return new GenericCliAdapter({

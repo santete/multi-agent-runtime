@@ -334,7 +334,10 @@ export class Runner {
       if (after.status !== "validating") return after.status;
 
       const report = await withSpan("validation", { "mar.validation.steps": project.validation.length }, async (span) => {
-        const r = await runValidation(workspace.path, project.validation, abort.signal);
+        const r = await runValidation(workspace.path, project.validation, abort.signal, {
+          sandbox: project.validationSandbox,
+          containerRuntime: this.config.containerRuntime,
+        });
         span.setAttribute("mar.validation.passed", r.passed);
         return r;
       });

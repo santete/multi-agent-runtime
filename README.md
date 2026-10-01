@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 in progress: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it), a shared knowledge base, a merge queue that re-validates on a moved base and waits for CI, Slack-compatible notifications and OpenTelemetry tracing are done; see the development plan.
+> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 complete: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it), a shared knowledge base, a merge queue that re-validates on a moved base and waits for CI, Slack-compatible notifications, OpenTelemetry tracing, container-sandboxed validation and an opt-in unattended mode for agy; see the development plan.
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -81,6 +81,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | POST | `/projects` | create project (`key`, `name`, `repoUrl`, `defaultBranch?`, `validation?: [{name, command, timeoutSeconds?}]`, `maxParallel?`, `reviewAgents?`, `autoApproveOnAgentReview?`, `routingPolicy?: "balanced" \| "reliability" \| "cost"`, `revalidateOnBaseChange?` (default true), `waitForChecks?`) |
 | GET | `/projects`, `/projects/:id` | list / get projects |
 | PUT | `/projects/:id/validation` | replace the project's validation steps |
+| PUT | `/projects/:id/validation-sandbox` | `{image, network?, memory?, cpus?}` or `null`: run validation steps in a container ([ADR-0018](docs/adr/0018-sandboxed-validation-and-agy-unattended.md)) |
 | PUT | `/projects/:id/merge-policy` | `{revalidateOnBaseChange, waitForChecks}`: re-validate on a moved base and wait for CI before merging ([ADR-0015](docs/adr/0015-ci-and-revalidation.md)) |
 | PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
 | POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `maxAttempts?`, `dependsOn?: [id or key]`); see [ADR-0012](docs/adr/0012-capability-routing.md) |
