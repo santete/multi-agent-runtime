@@ -51,3 +51,11 @@ Spec §39 yêu cầu theo dõi token, thời gian, chi phí API, số lần retr
   - Claude báo cost của nó ($0,32). Codex được ước tính $0,12 từ pricing.
   - Vượt budget ngày thì task mới chờ ở READY, kèm đúng một thông báo `BudgetExceeded`.
   - Notifier giờ bỏ qua event cũ hơn `MAR_NOTIFY_MAX_AGE_MINUTES` (mặc định 60) khi bắt kịp sau một thời gian tắt, vì trước đó nó gửi lại thông báo đã cũ hàng giờ.
+
+## Sửa sau khi gặp quota thật (LP-28)
+
+Trong lúc chạy thật, Claude chạm giới hạn session của tài khoản. Lần đó lộ ra 4 lỗi, giờ đã sửa:
+1. Claude báo lỗi kiểu này dưới dạng **completed + success=false**, với nội dung "You've hit your session limit · resets 12:20pm", chứ không phải `failed`. Giờ `failureText` đọc được lỗi ở cả hai dạng, và cả cooldown lẫn reassign đều dùng nó.
+2. "session limit", "hit your … limit" và "limit reached" giờ được nhận ra là agent không khả dụng.
+3. Lượt chạy fail vì agent không khả dụng (`executions.agent_unavailable`) **không còn bị tính vào `maxAttempts`**. Trước đây task bị BLOCKED dù lỗi không nằm ở task.
+4. `total_cost_usd` mà Claude báo khi resume là **tổng cộng dồn của cả session**. Platform giờ chỉ ghi phần tăng thêm so với lượt trước của cùng session, nên không còn đếm trùng.

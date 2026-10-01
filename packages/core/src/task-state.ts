@@ -49,6 +49,7 @@ export type TaskTransitionTrigger =
   | "review_submitted"
   | "base_changed"
   | "ci_failed"
+  | "human_completed"
   | "cancelled";
 
 type TransitionTable = Partial<Record<TaskState, Partial<Record<TaskTransitionTrigger, TaskState>>>>;
@@ -57,7 +58,8 @@ const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(["COMPLETED", "CANCE
 
 const TRANSITIONS: TransitionTable = {
   CREATED: { dependencies_satisfied: "READY" },
-  READY: { assigned: "ASSIGNED" },
+  // human_completed: a person did a task assigned to "human" (spec §61).
+  READY: { assigned: "ASSIGNED", human_completed: "COMPLETED" },
   ASSIGNED: {
     agent_started: "RUNNING",
     unassigned: "READY",

@@ -242,6 +242,14 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] `priority` cho mỗi task (do người đặt); scheduler sắp theo priority, cộng thêm theo số task đang chờ nó (trực tiếp hoặc gián tiếp), thời gian chờ, và loại việc gỡ chặn (review, critique, plan)
 - [x] `GET /projects/:id/queue` kèm lý do; board xếp cột Ready theo thứ tự đó; chỉnh priority ngay trên trang task
 
+### Human as executor — trạng thái ✅ ([ADR-0024](adr/0024-human-as-executor.md))
+
+- [x] Agent báo `openQuestions` → task chờ người (`decisions`) → người trả lời → agent resume session kèm `DECISIONS.md`
+- [x] Executor `human` (được dành riêng, không runner nào có): task cho người nằm trong Inbox; khi xong, summary trở thành handoff cho các task phụ thuộc; planner có thể giao việc cho `human`
+- [x] UI Inbox (câu hỏi, task cho người, approval); thông báo
+- [x] **Chạy thật** (LP-28, PR #30): với task "áp dụng refund window của công ty", Claude không tự đoán mà hỏi: độ dài window là bao nhiêu, và có tính ngày cuối không (kèm 4 option). Câu hỏi được trả lời bằng một click trong Inbox. Claude resume đúng session và làm đúng câu trả lời (30 ngày, ngày thứ 30 vẫn được refund).
+- [x] Trong lần chạy đó, Claude chạm giới hạn session thật, và lộ ra 4 lỗi của phần quota, đều đã sửa (xem ADR-0019).
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

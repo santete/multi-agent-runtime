@@ -18,6 +18,7 @@ import {
   type RoutingPolicy,
   type UpdateKnowledgeRequest,
   type CritiqueContext,
+  type DecisionDto,
   type PlanCritique,
   type PlanDto,
   type QueueEntry,
@@ -61,6 +62,7 @@ import {
   type ValidationSandbox,
   type ValidationStep,
   ACTIVE_EXECUTION_STATUSES,
+  HUMAN_EXECUTOR,
   approvalKey,
   checkPlan,
   formatCritique,
@@ -73,6 +75,7 @@ import {
   cooldownUntil,
   executionCost,
   isAgentUnavailable,
+  failureText,
   isCiConfigPath,
   isSessionLost,
   evaluateToolCall,
@@ -264,6 +267,24 @@ const toPlan = (r: Row): PlanDto => ({
   comment: r.comment ?? null,
   createdAt: iso(r.created_at),
   decidedAt: r.decided_at ? iso(r.decided_at) : null,
+});
+
+const toDecision = (r: Row): DecisionDto => ({
+  id: r.id,
+  taskId: r.task_id,
+  taskKey: r.task_key,
+  taskTitle: r.task_title,
+  projectId: r.project_id,
+  executionId: r.execution_id,
+  agent: r.agent,
+  question: r.question,
+  options: r.options ?? [],
+  context: r.context ?? "",
+  status: r.status,
+  answer: r.answer ?? null,
+  answeredBy: r.answered_by ?? null,
+  createdAt: iso(r.created_at),
+  answeredAt: r.answered_at ? iso(r.answered_at) : null,
 });
 
 const toExecution = (r: Row): ExecutionDto => ({
@@ -656,6 +677,7 @@ export class Store {
 
   private async stuckReason(task: TaskDto): Promise<string> {
     if (task.state === "REVIEW") return "waiting for a review";
+    if (task.agent === HUMAN_EXECUTOR) return "waiting for a person to do it";
     if (task.state === "WAITING_FOR_HUMAN") {
       const [p] = await this.db.query<{ n: number }>(
         "select count(*)::int as n from approvals a join executions e on e.id = a.execution_id where e.task_id = $1 and a.status = 'pending'",
@@ -962,7 +984,7 @@ export class Store {
       planId,
       goal: plan.goal,
       baseBranch: project.defaultBranch,
-      agents: await this.onlineAgents(q),
+      agents: [...(await this.onlineAgents(q)), { id: HUMAN_EXECUTOR, skills: ["decision", "manual"], cost: null }],
       openTasks: open.map((r) => ({ key: r.key, title: r.title, state: r.state })),
       ...(previous?.proposal && { previous: { proposal: previous.proposal, feedback: plan.feedback ?? "" } }),
     };
@@ -989,7 +1011,7 @@ export class Store {
     proposal: PlanProposal,
   ): Promise<ExecutionDto> {
     // Agents the planner made up are left to the scheduler instead.
-    const known = new Set((await this.onlineAgents(q)).map((a) => a.id));
+    const known = new Set([...(await this.onlineAgents(q)).map((a) => a.id), HUMAN_EXECUTOR]);
     const plan = { ...proposal, tasks: proposal.tasks.map((t) => (t.agent && !known.has(t.agent) ? { ...t, agent: null } : t)) };
     const execution = await this.finishExecution(q, task, id, req, "succeeded", { tasks: plan.tasks.length });
     await this.proposeKnowledge(q, task, plan.knowledge);
@@ -1076,7 +1098,7 @@ export class Store {
     const agents = await this.onlineAgents(q);
     const coverable = (t: (typeof tasks)[number]) =>
       t.agent
-        ? agents.some((a) => a.id === t.agent)
+        ? t.agent === HUMAN_EXECUTOR || agents.some((a) => a.id === t.agent)
         : agents.some((a) => t.requires.every((r) => a.skills.map((x) => x.toLowerCase()).includes(r.toLowerCase())));
     const reason = !plan.critique
       ? "no critic reviewed the plan"
@@ -1453,6 +1475,14 @@ export class Store {
       const project = await this.getProject(task.projectId, q);
       const rework = previous ? await this.reworkContext(q, project, previous.id, previous.attempt) : undefined;
       const approvals = previous ? await this.approvalDecisions(q, previous.id) : [];
+      const decisions = previous
+        ? (
+            await q.query(
+              "select question, answer, answered_by from decisions where execution_id = $1 and status = 'answered' order by created_at",
+              [previous.id],
+            )
+          ).map((r) => ({ question: r.question, answer: r.answer, answeredBy: r.answered_by ?? null }))
+        : [];
       const dependencies = await this.dependencyContext(q, task);
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
@@ -1503,6 +1533,7 @@ export class Store {
         ...(rework && { rework }),
         ...(dependencies.length > 0 && { dependencies }),
         ...(approvals.length > 0 && { approvals }),
+        ...(decisions.length > 0 && { decisions }),
         ...(review && { review }),
         ...(plan && { plan }),
         ...(critique && { critique }),
@@ -1742,9 +1773,11 @@ export class Store {
         [id],
       );
       const denied = (policy?.denials ?? 0) > 0 || (t.kind === "completed" && t.deniedActions.length > 0);
+      // Spec §61: questions only a person can answer stop the task until they are answered.
+      const openQuestions = task.kind === "work" && t.kind === "completed" ? toHandoff(t.result).openQuestions : [];
       const status: ExecutionStatus = current.cancel_requested
         ? "cancelled"
-        : t.kind === "completed" && denied
+        : t.kind === "completed" && (denied || openQuestions.length > 0)
           ? "needs_approval"
           : t.kind === "completed" && t.success
             ? "validating"
@@ -1789,6 +1822,21 @@ export class Store {
         const handoff = toHandoff(t.result);
         await this.addArtifact(q, task, id, "handoff", handoff as unknown as Record<string, unknown>);
         if (status === "validating") await this.proposeKnowledge(q, task, handoff.knowledge);
+      }
+      if (status === "needs_approval" && openQuestions.length) {
+        for (const question of openQuestions) {
+          await q.query(
+            "insert into decisions (id, task_id, execution_id, question, options, context) values ($1, $2, $3, $4, $5, $6)",
+            [randomUUID(), task.id, id, question.question, JSON.stringify(question.options), question.context],
+          );
+        }
+        await appendEvent(q, {
+          type: "DecisionRequested",
+          projectId: task.projectId,
+          taskId: task.id,
+          executionId: id,
+          payload: { agent: task.agent, questions: openQuestions.map((x) => x.question) },
+        });
       }
 
       // A task cancelled while running keeps its terminal state.
@@ -2260,15 +2308,93 @@ export class Store {
   private async requeueIfApprovalsDecided(q: Queryable, task: TaskDto): Promise<void> {
     if (task.state !== "WAITING_FOR_HUMAN") return;
     const [counts] = await q.query<{ pending: number; decided: number }>(
-      `select count(*) filter (where a.status = 'pending')::int as pending,
-              count(*) filter (where a.status <> 'pending')::int as decided
-       from approvals a
-       where a.execution_id = (select id from executions where task_id = $1 order by attempt desc limit 1)`,
+      `with last as (select id from executions where task_id = $1 order by attempt desc limit 1),
+            items as (
+              select status from approvals where execution_id = (select id from last)
+              union all
+              select case when status = 'answered' then 'decided' else 'pending' end from decisions where execution_id = (select id from last)
+            )
+       select count(*) filter (where status = 'pending')::int as pending,
+              count(*) filter (where status <> 'pending')::int as decided
+       from items`,
       [task.id],
     );
     if (counts && counts.pending === 0 && counts.decided > 0) {
       await changeTaskState(q, task, "unassigned", { reason: "approvals decided" });
     }
+  }
+
+  // ---- human as executor (spec §61) ----------------------------------------
+
+  /** READY tasks waiting for a person to do them. */
+  humanTasks(): Promise<TaskDto[]> {
+    return this.db
+      .query("select * from tasks where agent = $1 and state = 'READY' order by priority desc, created_at", [HUMAN_EXECUTOR])
+      .then((rows) => rows.map(toTask));
+  }
+
+  async listDecisions(filter: { status?: "pending" | "answered" | undefined; taskId?: string | undefined }): Promise<DecisionDto[]> {
+    const rows = await this.db.query(
+      `select d.*, t.key as task_key, t.title as task_title, t.project_id, e.agent from decisions d
+       join tasks t on t.id = d.task_id join executions e on e.id = d.execution_id
+       where ($1::text is null or d.status = $1) and ($2::uuid is null or d.task_id = $2)
+       order by d.created_at`,
+      [filter.status ?? null, filter.taskId ?? null],
+    );
+    return rows.map(toDecision);
+  }
+
+  /** A person answers an agent's question; once all are answered the agent resumes. */
+  async answerDecision(id: string, answer: string, actor?: string): Promise<DecisionDto> {
+    return this.db.tx(async (q) => {
+      const [row] = await q.query("select * from decisions where id = $1 for update", [id]);
+      if (!row) throw new NotFoundError("decision", id);
+      if (row.status !== "pending") throw new ConflictError("decision is already answered");
+      await q.query("update decisions set status = 'answered', answer = $2, answered_by = $3, answered_at = now() where id = $1", [
+        id,
+        answer,
+        actor ?? null,
+      ]);
+      const task = await this.getTask(row.task_id, q);
+      await appendEvent(q, {
+        type: "DecisionAnswered",
+        projectId: task.projectId,
+        taskId: task.id,
+        payload: { question: row.question, answer: answer.slice(0, 500), actor: actor ?? null },
+      });
+      await this.requeueIfApprovalsDecided(q, task);
+      const [updated] = await q.query(
+        `select d.*, t.key as task_key, t.title as task_title, t.project_id, e.agent from decisions d
+         join tasks t on t.id = d.task_id join executions e on e.id = d.execution_id where d.id = $1`,
+        [id],
+      );
+      return toDecision(updated!);
+    });
+  }
+
+  /**
+   * A person did a task assigned to "human" (a business decision, a manual
+   * step): their summary is its handoff, so dependent tasks learn from it.
+   */
+  async completeHumanTask(id: string, summary: string, actor?: string): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      if (task.agent !== HUMAN_EXECUTOR) throw new ConflictError(`task ${task.key} is for ${task.agent}, not a person`);
+      if (task.state !== "READY") throw new ConflictError(`task ${task.key} is ${task.state}; only a READY task can be done`);
+      await this.addArtifact(q, task, null, "handoff", {
+        summary,
+        changes: [],
+        decisions: [summary],
+        knownIssues: [],
+        remainingWork: [],
+        knowledge: [],
+        openQuestions: [],
+        doneBy: actor ?? null,
+      });
+      const done = await changeTaskState(q, task, "human_completed", { actor: actor ?? null, summary: summary.slice(0, 500) });
+      await this.unlockDependents(q, done);
+      return done;
+    });
   }
 
   /** A human sends a WAITING_FOR_HUMAN or BLOCKED task back to the queue. */
@@ -2547,7 +2673,7 @@ export class Store {
       // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
       // queue until maxAttempts is used up.
       const retrying = await q.query(
-        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation)::int as attempts
+        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable)::int as attempts
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {
@@ -2603,7 +2729,7 @@ export class Store {
     );
     const last = recent[0];
     if (!last?.agent || last.agent !== task.agent) return task;
-    const reason = String(last.result?.reason ?? "");
+    const reason = failureText(last.result);
     const unavailable = isAgentUnavailable(reason);
     const repeated = recent.length === 2 && recent.every((e) => e.agent === last.agent && ["failed", "lost"].includes(e.status));
     if (!unavailable && !repeated) return task;
@@ -2634,21 +2760,33 @@ export class Store {
     const [runner] = await q.query<{ agents: AgentDescriptor[] }>("select agents from runners where id = $1", [execution.runner_id]);
     const descriptor = runner?.agents.find((a) => a.id === execution.agent);
     const cost = executionCost(terminal, descriptor?.pricing);
+    // A resumed session reports its running total (Claude): count only what this run added.
+    if (cost.costUsd !== null && !cost.estimated && terminal.sessionId) {
+      const [before] = await q.query<{ total: string | null }>(
+        `select (result->>'costUsd') as total from executions
+         where task_id = $1 and id <> $2 and session_id = $3 and result ? 'costUsd' order by attempt desc limit 1`,
+        [execution.task_id, execution.id, terminal.sessionId],
+      );
+      const previous = Number(before?.total ?? Number.NaN);
+      if (Number.isFinite(previous) && previous <= cost.costUsd) cost.costUsd = Math.round((cost.costUsd - previous) * 1e6) / 1e6;
+    }
+    const failure = failureText(terminal);
+    const unavailable = Boolean(execution.agent && failure && isAgentUnavailable(failure));
     await q.query(
-      "update executions set input_tokens = $2, output_tokens = $3, cost_usd = $4, cost_estimated = $5 where id = $1",
-      [execution.id, cost.inputTokens, cost.outputTokens, cost.costUsd, cost.estimated],
+      "update executions set input_tokens = $2, output_tokens = $3, cost_usd = $4, cost_estimated = $5, agent_unavailable = $6 where id = $1",
+      [execution.id, cost.inputTokens, cost.outputTokens, cost.costUsd, cost.estimated, unavailable],
     );
-    if (terminal.kind === "failed" && execution.agent && isAgentUnavailable(terminal.reason)) {
-      const until = cooldownUntil(terminal.reason);
+    if (unavailable) {
+      const until = cooldownUntil(failure);
       await q.query(
         `insert into agent_cooldowns (runner_id, agent, until, reason) values ($1, $2, $3, $4)
          on conflict (runner_id, agent) do update set until = excluded.until, reason = excluded.reason, created_at = now()`,
-        [execution.runner_id, execution.agent, until, terminal.reason.slice(0, 500)],
+        [execution.runner_id, execution.agent, until, failure.slice(0, 500)],
       );
       await appendEvent(q, {
         type: "AgentCooldown",
         executionId: execution.id,
-        payload: { runnerId: execution.runner_id, agent: execution.agent, until: until.toISOString(), reason: terminal.reason.slice(0, 300) },
+        payload: { runnerId: execution.runner_id, agent: execution.agent, until: until.toISOString(), reason: failure.slice(0, 300) },
       });
     }
   }

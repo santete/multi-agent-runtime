@@ -4,6 +4,7 @@ import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
+import { DecisionCard, HumanTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section } from "./ui.js";
 
 export function ApprovalsPage({ actor }: { actor: ActorDto }) {
@@ -11,10 +12,29 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
   const [pending, error] = useLiveQuery(() => api.approvals("pending"), [], isApproval);
   const [all] = useLiveQuery(() => api.approvals(), [], isApproval);
   const decided = (all ?? []).filter((a) => a.status !== "pending").reverse().slice(0, 50);
+  const isHumanWork = (e: { type: string; payload: Record<string, unknown> }) =>
+    e.type.startsWith("Decision") || (e.type === "TaskStateChanged" && (e.payload.to === "READY" || e.payload.from === "READY"));
+  const [questions] = useLiveQuery(() => api.decisions({ status: "pending" }), [], isHumanWork);
+  const [humanTasks, , reloadHuman] = useLiveQuery(api.humanTasks, [], isHumanWork);
 
   return (
     <div className="page">
-      <h1>Approvals</h1>
+      <h1>Inbox</h1>
+      {questions && questions.length > 0 && (
+        <Section title={`Questions from agents (${questions.length})`}>
+          {questions.map((d) => (
+            <DecisionCard key={d.id} decision={d} actor={actor} showTask />
+          ))}
+        </Section>
+      )}
+      {humanTasks && humanTasks.length > 0 && (
+        <Section title={`Tasks for a person (${humanTasks.length})`}>
+          {humanTasks.map((t) => (
+            <HumanTaskCard key={t.id} task={t} actor={actor} onDone={reloadHuman} showTask />
+          ))}
+        </Section>
+      )}
+      <h2>Approvals</h2>
       <p className="muted">
         Risky actions agents tried to take. HIGH risk needs a senior; CRITICAL actions (pushes, credentials, infrastructure) are never
         approvable.

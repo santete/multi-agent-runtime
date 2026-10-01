@@ -105,3 +105,13 @@ describe("project knowledge", () => {
     expect(buildPrompt(claim(), false)).not.toContain("KNOWLEDGE.md");
   });
 });
+
+describe("answers from a person", () => {
+  it("writes DECISIONS.md and tells the agent to continue with them", () => {
+    const decisions = [{ question: "How long is the refund window?", answer: "30 days from the charge", answeredBy: "lan" }];
+    const files = contextFiles(claim({ decisions }));
+    const file = files.find((f) => f.path.endsWith("DECISIONS.md"));
+    expect(String(file?.content)).toContain("## How long is the refund window?\n\n30 days from the charge");
+    expect(buildPrompt(claim({ decisions }), true)).toMatch(/^A person answered the questions you raised/);
+  });
+});

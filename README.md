@@ -99,6 +99,8 @@ curl -s localhost:7700/tasks/<taskId>/events
 | POST | `/tasks/:id/review` | `{decision: "approve" \| "reject", comment?}` for a task in `REVIEW` |
 | POST | `/tasks/:id/retry` | send a `WAITING_FOR_HUMAN` or `BLOCKED` task back to the queue |
 | GET | `/approvals?status=pending`, `/tasks/:id/approvals` | approval requests for risky actions |
+| GET | `/decisions?status=&taskId=` | questions agents could not decide alone; `POST /decisions/:id/answer {answer}` resumes the agent ([ADR-0024](docs/adr/0024-human-as-executor.md)) |
+| GET | `/human-tasks` | READY tasks for `agent: "human"`; `POST /tasks/:id/done {summary}` completes one |
 | POST | `/approvals/:id/approve`, `/approvals/:id/reject` | decide an approval (`{comment?}`) |
 | GET | `/tasks/:id/executions` | execution attempts |
 | GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |

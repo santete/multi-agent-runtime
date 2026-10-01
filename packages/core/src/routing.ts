@@ -154,7 +154,21 @@ export function chooseAgent(
 
 /** Failures that say the agent itself is unavailable, not that the task is hard. */
 export function isAgentUnavailable(reason: string): boolean {
-  return /quota|rate.?limit|usage limit|credit|unauthori[sz]ed|not logged in|login required|overloaded|503|capacity/i.test(reason);
+  return /quota|rate.?limit|usage limit|session limit|hit your .{0,20}limit|limit reached|credit|unauthori[sz]ed|not logged in|login required|overloaded|503|capacity/i.test(
+    reason,
+  );
+}
+
+/**
+ * Why a run did not succeed, from the agent's terminal event. Some CLIs
+ * (Claude) report errors as a completed but unsuccessful result whose text
+ * is the error, e.g. "You've hit your session limit · resets 12:20pm".
+ */
+export function failureText(terminal: { kind: string; reason?: string; success?: boolean; result?: unknown } | null | undefined): string {
+  if (!terminal) return "";
+  if (terminal.kind === "failed") return String(terminal.reason ?? "");
+  if (terminal.kind === "completed" && terminal.success === false && typeof terminal.result === "string") return terminal.result;
+  return "";
 }
 
 /** The agent could not resume its session (expired, deleted, other machine): start a new one. */

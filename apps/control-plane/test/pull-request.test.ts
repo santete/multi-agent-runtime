@@ -8,7 +8,7 @@ describe("pull request body", () => {
   it("describes the task, the handoff and the changed files", () => {
     const body = pullRequestBody({
       task,
-      handoff: { summary: "Added refund()", changes: ["src/refund.js"], decisions: [], knownIssues: [], remainingWork: [], knowledge: [] },
+      handoff: { summary: "Added refund()", changes: ["src/refund.js"], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [] },
       validation: undefined,
       changedFiles: ["src/refund.js"],
     });

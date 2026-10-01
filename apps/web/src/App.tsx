@@ -29,6 +29,11 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
   const status = useLiveStatus();
   const [projects] = useLiveQuery(api.projects, [], (e) => e.type === "ProjectCreated");
   const [pending] = useLiveQuery(() => api.approvals("pending"), [], (e) => e.type.startsWith("Approval"));
+  // The inbox: approvals, agents' questions and tasks for a person (spec §61).
+  const humanEvent = (e: { type: string }) => e.type.startsWith("Decision") || e.type === "TaskStateChanged";
+  const [questions] = useLiveQuery(() => api.decisions({ status: "pending" }), [], humanEvent);
+  const [humanTasks] = useLiveQuery(api.humanTasks, [], humanEvent);
+  const inbox = (pending?.length ?? 0) + (questions?.length ?? 0) + (humanTasks?.length ?? 0);
 
   return (
     <div className="shell">
@@ -41,7 +46,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
             Overview
           </a>
           <a className={route.page === "approvals" ? "active" : ""} href={href.approvals()}>
-            Approvals {pending?.length ? <span className="count">{pending.length}</span> : null}
+            Inbox {inbox ? <span className="count">{inbox}</span> : null}
           </a>
           <a className={route.page === "agents" ? "active" : ""} href={href.agents()}>
             Agents

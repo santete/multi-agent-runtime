@@ -86,6 +86,7 @@ describe("plans", () => {
       agents: [
         { id: "claude", skills: ["backend", "planning"], cost: "medium" },
         { id: "agy", skills: ["frontend"], cost: "medium" },
+        { id: "human", skills: ["decision", "manual"], cost: null },
       ],
       openTasks: [{ key: "PAY-1", title: "Existing", state: "READY" }],
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AgentSkillStats, type AgentStats, chooseAgent, hasSkills, isAgentUnavailable, qualityOf, reliabilityOf } from "../src/index.js";
+import { type AgentSkillStats, type AgentStats, chooseAgent, failureText, hasSkills, isAgentUnavailable, qualityOf, reliabilityOf } from "../src/index.js";
 
 const claude = { id: "claude-code", skills: ["typescript", "backend", "review"], cost: "high" as const };
 const codex = { id: "codex", skills: ["typescript", "backend", "review"], cost: "medium" as const };
@@ -103,5 +103,15 @@ describe("selection by measured results (spec §40)", () => {
       agent: "codex",
       reason: expect.stringContaining("avg 60s"),
     });
+  });
+});
+
+describe("failures found live", () => {
+  it("recognizes Claude's session limit, reported as an unsuccessful result", () => {
+    const t = { kind: "completed", success: false, result: "You've hit your session limit · resets 12:20pm (Asia/Ho_Chi_Minh)" };
+    expect(failureText(t)).toContain("session limit");
+    expect(isAgentUnavailable(failureText(t))).toBe(true);
+    expect(failureText({ kind: "completed", success: true, result: "done" })).toBe("");
+    expect(failureText({ kind: "failed", reason: "boom" })).toBe("boom");
   });
 });
