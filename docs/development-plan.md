@@ -261,6 +261,20 @@ Thứ tự đã thực hiện: (1) cost & quota → (2) agent performance + ch�
 
 Đã xong cả 7 mục: cost và quota, performance kèm chọn agent theo kết quả, self-healing, planner tự động với debate, tự động ưu tiên lại task, human as executor, multi-org và marketplace.
 
+## Hoàn thiện spec (sau Phase 3)
+
+Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: path ownership, policy theo project, điều khiển agent từ console, quản lý secret, các success metric còn thiếu, GitLab, và các việc còn sót.
+
+### Path ownership — trạng thái ✅ ([ADR-0026](adr/0026-path-ownership.md))
+
+- [x] `paths` (file và glob) cho task, do người khai báo hoặc planner đề xuất (sửa được trên trang Plans); critic kiểm tra vùng
+- [x] Scheduler không chạy song song hai task có vùng chồng nhau; `blockedBy` trong queue, badge trên board, event `TaskWaitingForPaths`
+- [x] Ghi vào vùng của task khác chưa merge thành deny HIGH (cần người duyệt), ở cả hook lẫn audit; `TASK.md` báo vùng cho agent
+- [x] **Chạy thật** trên `mar-sandbox`, 3 task:
+  - LP-31 chờ LP-30 vì chung `src/payments.js`, còn LP-32 chạy song song.
+  - LP-32 ghi vào `src/payments.js` thì bị chặn thành approval. Claude hỏi người thay vì ép ghi.
+  - LP-31 chạy sau khi LP-30 merge. Cả 3 PR (#32, #34, #33) đều merge.
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

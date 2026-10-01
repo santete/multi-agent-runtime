@@ -15,6 +15,7 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
   const [requires, setRequires] = useState("");
   const [fallbackAgents, setFallbackAgents] = useState<string[]>([]);
   const [priority, setPriority] = useState(50);
+  const [paths, setPaths] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -38,12 +39,17 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      const area = paths
+        .split(/[\n,]/)
+        .map((p) => p.trim())
+        .filter(Boolean);
       const task = await api.createTask(project.id, {
         title,
         objective,
         agent,
         ...(dependsOn.length && { dependsOn }),
         ...(priority !== 50 && { priority }),
+        ...(area.length && { paths: area }),
         ...(agent === AUTO && skills.length && { requires: skills }),
         ...(agent !== AUTO && fallbackAgents.length && { fallbackAgents: fallbackAgents.filter((a) => a !== agent) }),
       });
@@ -115,6 +121,10 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
               </option>
             ))}
           </select>
+        </label>
+        <label>
+          Area (files or globs it changes, one per line; overlapping tasks run one after the other)
+          <textarea value={paths} onChange={(e) => setPaths(e.target.value)} rows={2} placeholder={"src/payments/**\nREADME.md"} />
         </label>
         {candidates.length > 0 && (
           <fieldset>

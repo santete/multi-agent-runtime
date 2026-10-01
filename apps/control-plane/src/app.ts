@@ -160,6 +160,7 @@ const createTaskBody = z.object({
   requires: z.array(z.string().min(1)).max(20).optional(),
   fallbackAgents: z.array(z.string().min(1)).max(10).optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  paths: z.array(z.string().trim().min(1).max(300)).max(50).optional(),
   maxAttempts: z.number().int().min(1).max(10).optional(),
   dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
@@ -177,6 +178,7 @@ const plannedTask = z.object({
   agent: z.string().min(1).nullable(),
   requires: z.array(z.string().min(1)).max(20).default([]),
   dependsOn: z.array(z.string().min(1)).max(50).default([]),
+  paths: z.array(z.string().trim().min(1).max(300)).max(50).default([]),
 });
 const approvePlanBody = z
   .object({ tasks: z.array(plannedTask).min(1).max(20).optional(), comment: z.string().max(10_000).optional() })

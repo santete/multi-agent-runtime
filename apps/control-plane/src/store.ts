@@ -81,6 +81,9 @@ import {
   failureText,
   isCiConfigPath,
   isSessionLost,
+  areasOverlap,
+  matchesGlob,
+  writtenPaths,
   evaluateToolCall,
   isTerminal,
   formatReview,
@@ -220,6 +223,7 @@ const toTask = (r: Row): TaskDto => ({
   planId: r.plan_id ?? null,
   dependsOn: r.depends_on ?? [],
   priority: r.priority ?? 50,
+  paths: r.paths ?? [],
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
   version: r.version,
@@ -679,13 +683,72 @@ export class Store {
     );
   }
 
+  /**
+   * The unmerged task (already started, or waiting for review or merge) whose
+   * area overlaps this task's, if any (spec §27).
+   */
+  private async pathHolder(q: Queryable, task: TaskDto): Promise<{ key: string; path: string } | null> {
+    if (!task.paths.length) return null;
+    const rows = await q.query(
+      `select * from tasks where project_id = $1 and id <> $2 and jsonb_array_length(paths) > 0
+         and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING')
+       order by created_at`,
+      [task.projectId, task.id],
+    );
+    for (const other of rows.map(toTask)) {
+      const overlap = areasOverlap(task.paths, other.paths);
+      if (overlap) return { key: other.key, path: overlap[1] };
+    }
+    return null;
+  }
+
+  /**
+   * An agent writing into the area of another unmerged task (spec §27): a
+   * HIGH-risk action a person can approve; its own area and undeclared
+   * files are fine.
+   */
+  private async ownershipVerdict(q: Queryable, task: TaskDto, workspace: string, call: ToolCheckRequest, verdict: PolicyVerdict): Promise<PolicyVerdict> {
+    if (verdict.decision === "deny" || !workspace) return verdict;
+    const files = writtenPaths(call, workspace).filter((f) => !task.paths.some((g) => matchesGlob(f, g)));
+    if (!files.length) return verdict;
+    const owners = (
+      await q.query(
+        `select * from tasks where project_id = $1 and id <> $2 and jsonb_array_length(paths) > 0
+           and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING')`,
+        [task.projectId, task.id],
+      )
+    ).map(toTask);
+    for (const file of files) {
+      const owner = owners.find((o) => o.paths.some((g) => matchesGlob(file, g)));
+      if (owner) {
+        return {
+          decision: "deny",
+          risk: "HIGH",
+          reason: `${file} belongs to ${owner.key} ("${owner.title}"), which is not merged yet; change it there or after it is merged`,
+          summary: verdict.summary,
+        };
+      }
+    }
+    return verdict;
+  }
+
   /** The project's READY work in the order the scheduler takes it. */
   async queue(projectId: string): Promise<QueueEntry[]> {
     const tasks = (await this.db.query("select * from tasks where project_id = $1 and state = 'READY'", [projectId])).map(toTask);
     const ranked = await this.rank(this.db, tasks);
-    return tasks
-      .map((t) => ({ taskId: t.id, key: t.key, title: t.title, agent: t.agent, priority: t.priority, ...ranked.get(t.id)! }))
-      .sort((a, b) => b.score - a.score);
+    const entries = [];
+    for (const t of tasks) {
+      entries.push({
+        taskId: t.id,
+        key: t.key,
+        title: t.title,
+        agent: t.agent,
+        priority: t.priority,
+        ...ranked.get(t.id)!,
+        blockedBy: await this.pathHolder(this.db, t),
+      });
+    }
+    return entries.sort((a, b) => b.score - a.score);
   }
 
   async setTaskPriority(id: string, priority: number, actor?: string): Promise<TaskDto> {
@@ -839,6 +902,8 @@ export class Store {
   private async stuckReason(task: TaskDto): Promise<string> {
     if (task.state === "REVIEW") return "waiting for a review";
     if (task.agent === HUMAN_EXECUTOR) return "waiting for a person to do it";
+    const holder = await this.pathHolder(this.db, task);
+    if (holder) return `waiting for ${holder.key}, which works on ${holder.path}, to be merged`;
     if (task.state === "WAITING_FOR_HUMAN") {
       const [p] = await this.db.query<{ n: number }>(
         "select count(*)::int as n from approvals a join executions e on e.id = a.execution_id where e.task_id = $1 and a.status = 'pending'",
@@ -923,8 +988,8 @@ export class Store {
     const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
     const [row] = await q.query(
       `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
-         routing, requires, fallback_agents, plan_id, kind, priority)
-       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13, $14) returning *`,
+         routing, requires, fallback_agents, plan_id, kind, priority, paths)
+       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13, $14, $15) returning *`,
       [
         randomUUID(),
         projectId,
@@ -940,6 +1005,7 @@ export class Store {
         planId,
         kind,
         req.priority ?? 50,
+        JSON.stringify((req.paths ?? []).map((p) => p.trim()).filter(Boolean)),
       ],
     );
     const task = toTask(row!);
@@ -1063,6 +1129,7 @@ export class Store {
           objective: t.objective,
           agent: t.agent ?? AUTO,
           requires: t.requires,
+          paths: t.paths,
           dependsOn: t.dependsOn.map((d) => created.find((c) => c.ref === d)?.taskId ?? d),
         },
         actor,
@@ -1625,6 +1692,23 @@ export class Store {
       let picked: { task: TaskDto; routed?: { agent: string; reason: string } } | undefined;
       for (const row of candidates) {
         const candidate = toTask(row);
+        // Spec §27: an area another unmerged task works on waits until that task is merged.
+        const holder = await this.pathHolder(q, candidate);
+        if (holder) {
+          const [said] = await q.query(
+            "select 1 from events where task_id = $1 and type = 'TaskWaitingForPaths' and created_at >= $2 limit 1",
+            [candidate.id, candidate.updatedAt],
+          );
+          if (!said) {
+            await appendEvent(q, {
+              type: "TaskWaitingForPaths",
+              projectId: candidate.projectId,
+              taskId: candidate.id,
+              payload: { blockedBy: holder.key, path: holder.path },
+            });
+          }
+          continue;
+        }
         if (candidate.agent !== AUTO) {
           picked = { task: candidate };
           break;
@@ -1931,7 +2015,7 @@ export class Store {
     event: Extract<AgentEvent, { kind: "tool_call" }>,
   ): Promise<void> {
     const call = { tool: event.tool, input: event.input };
-    let verdict = evaluateToolCall(call, { workspace });
+    let verdict = await this.ownershipVerdict(q, task, workspace, call, evaluateToolCall(call, { workspace }));
     if (verdict.decision === "deny" && verdict.risk === "HIGH") {
       const [approved] = await q.query(
         "select id from approvals where task_id = $1 and action_key = $2 and status = 'approved' limit 1",
@@ -2397,7 +2481,7 @@ export class Store {
       return { decision: "deny", risk: "HIGH", reason: `execution is ${execution.status}`, summary: call.tool };
     }
     const task = await this.getTask(execution.task_id);
-    let verdict = evaluateToolCall(call, { workspace: execution.workspace });
+    let verdict = await this.ownershipVerdict(this.db, task, execution.workspace, call, evaluateToolCall(call, { workspace: execution.workspace }));
 
     // HIGH risk goes through the approval gateway (spec §31-32); CRITICAL stays a hard deny.
     if (verdict.decision === "deny" && verdict.risk === "HIGH") {

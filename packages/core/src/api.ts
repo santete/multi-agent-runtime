@@ -94,6 +94,11 @@ export interface TaskDto {
   dependsOn: string[];
   /** 0 (whenever) … 100 (urgent); the scheduler adds the critical path and waiting time. */
   priority: number;
+  /**
+   * Parts of the repository the task works on (globs, spec §27): tasks with
+   * overlapping areas do not run at the same time. Empty = undeclared.
+   */
+  paths: string[];
   /** Set once the task's branch has been delivered as a pull request. */
   pullRequestUrl: string | null;
   pullRequestNumber: number | null;
@@ -289,6 +294,8 @@ export interface QueueEntry {
   priority: number;
   score: number;
   reasons: string[];
+  /** Waits for an unmerged task whose area overlaps (spec §27). */
+  blockedBy: { key: string; path: string } | null;
 }
 
 /** The executor id of tasks a person does (spec §61). */
@@ -474,6 +481,7 @@ export interface CreateTaskRequest {
   requires?: string[] | undefined;
   fallbackAgents?: string[] | undefined;
   priority?: number | undefined;
+  paths?: string[] | undefined;
   maxAttempts?: number | undefined;
   /** Ids or keys of tasks in the same project that must be merged first. */
   dependsOn?: string[] | undefined;

@@ -128,6 +128,21 @@ export function isInsideWorkspace(path: string, workspace: string): boolean {
   return target === ws || target.startsWith(ws + "/");
 }
 
+/**
+ * Repository-relative paths a file-writing tool call writes inside the
+ * workspace (path ownership, spec §27); empty for other tools.
+ */
+export function writtenPaths(call: ToolCall, workspace: string): string[] {
+  if (!WRITE_TOOLS.has(call.tool.toLowerCase())) return [];
+  const ws = workspace.replace(/\\/g, "/").replace(/\/+$/, "");
+  return pathsOf(call.input).flatMap((p) => {
+    const path = p.replace(/\\/g, "/");
+    if (!/^([a-z]:\/|\/)/i.test(path)) return path.split("/").includes("..") ? [] : [path.replace(/^\.\//, "")];
+    // Case-insensitive prefix (Windows), keeping the file's own case.
+    return path.toLowerCase().startsWith(`${ws.toLowerCase()}/`) ? [path.slice(ws.length + 1)] : [];
+  });
+}
+
 function verdict(decision: PolicyDecision, risk: RiskLevel, reason: string, summary: string): PolicyVerdict {
   return { decision, risk, reason, summary };
 }
