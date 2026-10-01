@@ -52,7 +52,12 @@ async function decide() {
     try {
       const res = await fetch(`${base.replace(/\/$/, "")}/executions/${id}/tool-check`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-mar-execution-token": token },
+        headers: {
+          "content-type": "application/json",
+          "x-mar-execution-token": token,
+          // Set by the runner when tracing is on: the check joins the execution's trace.
+          ...(process.env.TRACEPARENT && { traceparent: process.env.TRACEPARENT }),
+        },
         body: JSON.stringify({ tool: call.tool, input: call.input ?? {} }),
         signal: AbortSignal.timeout(20_000),
       });

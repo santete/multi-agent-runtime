@@ -11,6 +11,7 @@ import type {
   ValidationReport,
   ValidationResponse,
 } from "@mar/core";
+import { injectTraceHeaders } from "@mar/telemetry";
 
 export class ControlPlaneError extends Error {
   constructor(
@@ -91,6 +92,8 @@ export class ControlPlaneClient {
     const headers: Record<string, string> = {};
     if (this.apiToken) headers.authorization = `Bearer ${this.apiToken}`;
     if (body !== undefined) headers["content-type"] = "application/json";
+    // The control plane's spans join the execution's trace.
+    injectTraceHeaders(headers);
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {

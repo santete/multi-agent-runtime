@@ -64,6 +64,7 @@ import {
   toReviewResult,
   transition,
 } from "@mar/core";
+import { meter, withSpan } from "@mar/telemetry";
 import { type Actor, hasRole } from "./auth.js";
 import type { Db, Queryable } from "./db.js";
 import type { GitProvider, MergeResult, PullRequestStatus } from "./git-provider.js";
@@ -297,6 +298,7 @@ async function changeTaskState(
   payload: Record<string, unknown> = {},
 ): Promise<TaskDto> {
   const to: TaskState = transition(task.state, trigger);
+  meter().createCounter("mar.task.transitions", { description: "Task state changes" }).add(1, { from: task.state, to, trigger });
   const [row] = await q.query(
     "update tasks set state = $1, version = version + 1, updated_at = now() where id = $2 and version = $3 returning *",
     [to, task.id, task.version],
@@ -1844,77 +1846,87 @@ export class Store {
        order by project_id, (state = 'MERGING') desc, updated_at`,
     );
     for (const row of next) {
-      let task = toTask(row);
-      const [last] = await this.db.query<{ id: string; branch: string | null }>(
-        "select id, branch from executions where task_id = $1 order by attempt desc limit 1",
-        [task.id],
+      await withSpan(
+        `merge_queue ${row.key}`,
+        { "mar.task.key": row.key, "mar.task.id": row.id, "mar.task.state": row.state },
+        (span) => this.processMergeQueueTask(toTask(row), result).then((outcome) => void span.setAttribute("mar.merge.outcome", outcome)),
+        { root: true },
       );
-      if (task.state === "APPROVED") {
-        try {
-          task = await this.db.tx((q) => changeTaskState(q, task, "merge_started"));
-        } catch (err) {
-          if (err instanceof ConflictError) continue; // another worker took it
-          throw err;
-        }
-      }
+    }
+    return result;
+  }
 
-      if (!task.pullRequestNumber || !this.gitProvider) {
-        // Nothing to merge (no changes, or no provider): the reviewed work is accepted as is.
-        await this.finishMerge(task, last?.id ?? null, { status: "merged", sha: null }, "no pull request to merge");
-        result.merged++;
-        continue;
-      }
-
-      const project = await this.getProject(task.projectId);
-      if (this.gitProvider.pullRequestStatus && (project.revalidateOnBaseChange || project.waitForChecks)) {
-        let status: PullRequestStatus;
-        try {
-          status = await this.gitProvider.pullRequestStatus({ repoUrl: project.repoUrl, number: task.pullRequestNumber });
-        } catch (err) {
-          result.failed++;
-          await this.recordMergeFailure(task, String(err));
-          continue;
-        }
-        // Spec §27: what was validated is not what would be merged. Validate the combination first.
-        if (project.revalidateOnBaseChange && status.behindBase) {
-          await this.leaveMergeQueue(task, last?.id ?? null, "base_changed", "merge_result", {
-            status: "base_changed",
-            headSha: status.headSha,
-          });
-          result.revalidating++;
-          continue;
-        }
-        if (project.waitForChecks) {
-          const gate = await this.checksGate(task, last?.id ?? null, status);
-          if (gate === "wait") {
-            result.waiting++;
-            continue;
-          }
-          if (gate === "failed") {
-            result.ciFailed++;
-            continue;
-          }
-        }
-      }
-      let merge: MergeResult;
+  /** One step of the merge queue for one task; returns what happened, for the trace. */
+  private async processMergeQueueTask(task: TaskDto, result: MergeQueueResult): Promise<string> {
+    const [last] = await this.db.query<{ id: string; branch: string | null }>(
+      "select id, branch from executions where task_id = $1 order by attempt desc limit 1",
+      [task.id],
+    );
+    if (task.state === "APPROVED") {
       try {
-        merge = await this.gitProvider.mergePullRequest({
-          repoUrl: project.repoUrl,
-          number: task.pullRequestNumber,
-          head: last?.branch ?? `task/${task.key}`,
-          commitTitle: `${task.key}: ${task.title} (#${task.pullRequestNumber})`,
-        });
+        task = await this.db.tx((q) => changeTaskState(q, task, "merge_started"));
+      } catch (err) {
+        if (err instanceof ConflictError) return "taken"; // another worker took it
+        throw err;
+      }
+    }
+
+    if (!task.pullRequestNumber || !this.gitProvider) {
+      // Nothing to merge (no changes, or no provider): the reviewed work is accepted as is.
+      await this.finishMerge(task, last?.id ?? null, { status: "merged", sha: null }, "no pull request to merge");
+      result.merged++;
+      return "merged";
+    }
+
+    const project = await this.getProject(task.projectId);
+    if (this.gitProvider.pullRequestStatus && (project.revalidateOnBaseChange || project.waitForChecks)) {
+      let status: PullRequestStatus;
+      try {
+        status = await this.gitProvider.pullRequestStatus({ repoUrl: project.repoUrl, number: task.pullRequestNumber });
       } catch (err) {
         result.failed++;
         await this.recordMergeFailure(task, String(err));
-        continue;
+        return "failed";
       }
-      if (merge.status === "pending") continue; // retried on the next tick
-      await this.finishMerge(task, last?.id ?? null, merge);
-      if (merge.status === "merged") result.merged++;
-      else result.conflicts++;
+      // Spec §27: what was validated is not what would be merged. Validate the combination first.
+      if (project.revalidateOnBaseChange && status.behindBase) {
+        await this.leaveMergeQueue(task, last?.id ?? null, "base_changed", "merge_result", {
+          status: "base_changed",
+          headSha: status.headSha,
+        });
+        result.revalidating++;
+        return "base_changed";
+      }
+      if (project.waitForChecks) {
+        const gate = await this.checksGate(task, last?.id ?? null, status);
+        if (gate === "wait") {
+          result.waiting++;
+          return "waiting_for_ci";
+        }
+        if (gate === "failed") {
+          result.ciFailed++;
+          return "ci_failed";
+        }
+      }
     }
-    return result;
+    let merge: MergeResult;
+    try {
+      merge = await this.gitProvider.mergePullRequest({
+        repoUrl: project.repoUrl,
+        number: task.pullRequestNumber,
+        head: last?.branch ?? `task/${task.key}`,
+        commitTitle: `${task.key}: ${task.title} (#${task.pullRequestNumber})`,
+      });
+    } catch (err) {
+      result.failed++;
+      await this.recordMergeFailure(task, String(err));
+      return "failed";
+    }
+    if (merge.status === "pending") return "pending"; // retried on the next tick
+    await this.finishMerge(task, last?.id ?? null, merge);
+    if (merge.status === "merged") result.merged++;
+    else result.conflicts++;
+    return merge.status;
   }
 
   private async finishMerge(

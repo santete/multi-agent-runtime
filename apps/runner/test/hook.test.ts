@@ -8,7 +8,12 @@ let server: Server;
 let baseUrl: string;
 /** Number of upcoming requests answered with 503. */
 let failNext = 0;
-const received: Array<{ url: string | undefined; token: string | string[] | undefined; body: unknown }> = [];
+const received: Array<{
+  url: string | undefined;
+  token: string | string[] | undefined;
+  traceparent?: string | string[] | undefined;
+  body: unknown;
+}> = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -20,7 +25,7 @@ beforeAll(async () => {
         return res.end();
       }
       const body = JSON.parse(raw);
-      received.push({ url: req.url, token: req.headers["x-mar-execution-token"], body });
+      received.push({ url: req.url, token: req.headers["x-mar-execution-token"], traceparent: req.headers.traceparent, body });
       const deny = JSON.stringify(body).includes("push");
       res.setHeader("content-type", "application/json");
       res.end(
@@ -94,6 +99,14 @@ describe("mar-policy-hook", () => {
     const out = await runHook("agy", { toolCall: { name: "view_file", args: {} } });
     expect(out).toEqual({ decision: "allow", reason: "[LOW] fine" });
     expect(failNext).toBe(0);
+  });
+
+  it("passes the execution trace on to the policy check", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    await runHook("agy", { toolCall: { name: "view_file", args: {} } }, { TRACEPARENT: traceparent });
+    expect(received.at(-1)?.traceparent).toBe(traceparent);
+    await runHook("agy", { toolCall: { name: "view_file", args: {} } });
+    expect(received.at(-1)?.traceparent).toBeUndefined();
   });
 
   it("fails closed without its environment or with an unknown dialect", async () => {

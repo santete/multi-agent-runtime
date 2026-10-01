@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ValidationReport, ValidationStep, ValidationStepResult } from "@mar/core";
+import { SpanStatusCode, withSpan } from "@mar/telemetry";
 import { killTree } from "./process.js";
 import { changedFiles, conflictedFiles } from "./worktree.js";
 
@@ -105,7 +106,12 @@ export async function runValidation(
   const results: ValidationStepResult[] = [];
   for (const step of steps) {
     if (signal?.aborted) break;
-    const result = await runStep(step, worktree, signal);
+    const result = await withSpan(`validation.step ${step.name}`, { "mar.validation.step": step.name }, async (span) => {
+      const r = await runStep(step, worktree, signal);
+      span.setAttributes({ "mar.validation.passed": r.passed, "process.exit.code": r.exitCode ?? -1 });
+      if (!r.passed) span.setStatus({ code: SpanStatusCode.ERROR, message: `${step.name} failed` });
+      return r;
+    });
     results.push(result);
     if (!result.passed) break;
   }

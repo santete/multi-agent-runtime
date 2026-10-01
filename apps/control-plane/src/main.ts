@@ -1,10 +1,14 @@
 import { fileURLToPath } from "node:url";
+import { initTelemetry } from "@mar/telemetry";
 import { buildApp } from "./app.js";
 import { loadUsers } from "./auth.js";
 import { createPgDb, createPgliteDb, migrate } from "./db.js";
 import { GitHubProvider } from "./git-provider.js";
 import { Notifier, notifierOptionsFromEnv } from "./notifier.js";
 import { Store } from "./store.js";
+
+// Traces and metrics over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set (spec §41).
+const telemetry = initTelemetry({ serviceName: "mar-control-plane" });
 
 // DATABASE_URL=postgres://... for Postgres; unset = embedded PGlite under ./.data/pglite.
 const databaseUrl = process.env.DATABASE_URL;
@@ -81,6 +85,7 @@ const shutdown = async () => {
   if (notifyTimer) clearInterval(notifyTimer);
   await app.close();
   await db.close();
+  await telemetry.shutdown();
   process.exit(0);
 };
 process.on("SIGINT", shutdown);

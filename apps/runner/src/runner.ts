@@ -10,6 +10,7 @@ import {
   REVIEW_SCHEMA,
   toHandoff,
 } from "@mar/core";
+import { activeTraceparent, meter, SpanKind, SpanStatusCode, withSpan } from "@mar/telemetry";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
@@ -216,26 +217,56 @@ export class Runner {
     }
   }
 
-  private async executeClaim(claim: ClaimResponse): Promise<void> {
+  /** One trace per execution (spec §41): workspace, agent, validation and delivery are its spans. */
+  private executeClaim(claim: ClaimResponse): Promise<void> {
+    const { execution, task, project } = claim;
+    const started = Date.now();
+    return withSpan(
+      `execution ${task.key}`,
+      {
+        "mar.project.key": project.key,
+        "mar.task.key": task.key,
+        "mar.task.id": task.id,
+        "mar.task.kind": task.kind,
+        "mar.execution.id": execution.id,
+        "mar.execution.attempt": execution.attempt,
+        "mar.agent": task.agent,
+        ...(claim.rework && { "mar.rework": claim.rework.kind }),
+      },
+      async (span) => {
+        const status = await this.runClaim(claim);
+        span.setAttribute("mar.execution.outcome", status);
+        const labels = { "mar.agent": task.agent, "mar.execution.outcome": status };
+        executionsCounter().add(1, labels);
+        executionDuration().record((Date.now() - started) / 1000, labels);
+      },
+      { root: true, kind: SpanKind.CONSUMER },
+    );
+  }
+
+  private async runClaim(claim: ClaimResponse): Promise<string> {
     const { execution, task, project } = claim;
     const log = { task: task.key, execution: execution.id, attempt: execution.attempt };
     const adapter = this.adapters.get(task.agent);
     if (!adapter) {
       // Should not happen: the control plane only hands out tasks for our agents.
       await this.fail(execution.id, `runner has no agent "${task.agent}"`);
-      return;
+      return "failed";
     }
 
     let workspace;
     let reviewDiff = "";
     try {
       // A review task checks out the reviewed task's delivered branch.
-      workspace = await this.worktrees.prepare(project, task.key, claim.review?.branch);
-      if (claim.review) reviewDiff = await this.worktrees.diffAgainst(workspace.path, claim.review.baseBranch);
+      workspace = await withSpan("workspace.prepare", {}, async () => {
+        const w = await this.worktrees.prepare(project, task.key, claim.review?.branch);
+        if (claim.review) reviewDiff = await this.worktrees.diffAgainst(w.path, claim.review.baseBranch);
+        return w;
+      });
     } catch (err) {
       this.log.error("workspace preparation failed", { ...log, error: String(err) });
       await this.fail(execution.id, `workspace preparation failed: ${String(err)}`);
-      return;
+      return "failed";
     }
 
     // Resume only our own session: agent session state lives on this machine.
@@ -295,19 +326,24 @@ export class Runner {
         // 409: the control plane already gave up on this execution (lease expired).
         if (err instanceof ControlPlaneError && err.status === 409) {
           this.log.error("execution was no longer active when the agent finished", { ...log, error: err.body });
-          return;
+          return "lost";
         }
         throw err;
       }
       this.log.info("agent finished", { ...log, exitCode: outcome.exitCode, status: after.status });
-      if (after.status !== "validating") return;
+      if (after.status !== "validating") return after.status;
 
-      const report = await runValidation(workspace.path, project.validation, abort.signal);
+      const report = await withSpan("validation", { "mar.validation.steps": project.validation.length }, async (span) => {
+        const r = await runValidation(workspace.path, project.validation, abort.signal);
+        span.setAttribute("mar.validation.passed", r.passed);
+        return r;
+      });
       const { deliver } = await this.client.validation(execution.id, report);
       this.log.info("validation finished", { ...log, passed: report.passed, deliver });
-      if (!deliver) return;
+      if (!deliver) return report.passed ? "validated" : "validation_failed";
 
-      await this.deliver(claim, workspace, outcome, restore);
+      await withSpan("delivery", { "mar.branch": workspace.branch }, () => this.deliver(claim, workspace, outcome, restore));
+      return "delivered";
     } finally {
       clearInterval(heartbeat);
     }
@@ -369,11 +405,22 @@ export class Runner {
       if (restore.length) {
         shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });
       }
-      outcome = await runAgentProcess(adapter.buildCommand(request), adapter.createParser(), {
-        timeoutMs: this.config.timeoutSeconds * 1000,
-        signal,
-        onEvent: (e) => shipper.push(e),
-      });
+      outcome = await withSpan(
+        "agent.run",
+        { "mar.agent": claim.task.agent, "mar.adapter": adapter.id, "mar.agent.resume": Boolean(request.resumeSessionId) },
+        async (span) => {
+          // The agent's policy hook sends this back, so tool checks join the trace.
+          const traceparent = activeTraceparent();
+          const command = adapter.buildCommand(traceparent ? { ...request, env: { ...request.env, TRACEPARENT: traceparent } } : request);
+          const result = await runAgentProcess(command, adapter.createParser(), {
+            timeoutMs: this.config.timeoutSeconds * 1000,
+            signal,
+            onEvent: (e) => shipper.push(e),
+          });
+          recordAgentOutcome(span, claim.task.agent, result);
+          return result;
+        },
+      );
     } catch (err) {
       outcome = { exitCode: null, terminal: { kind: "failed", reason: `runner error: ${String(err)}` } };
       shipper.push(outcome.terminal);
@@ -415,5 +462,33 @@ export class Runner {
     }
     const { pullRequest } = await this.client.delivery(execution.id, { branch: workspace.branch, ...commit });
     this.log.info("delivered", { ...log, commit: commit.commitSha, pullRequest: pullRequest?.url ?? null });
+  }
+}
+
+// ---- telemetry --------------------------------------------------------------
+
+const executionsCounter = () => meter().createCounter("mar.executions", { description: "Executions run, by agent and outcome" });
+const executionDuration = () =>
+  meter().createHistogram("mar.execution.duration", { unit: "s", description: "Execution time from claim to delivery" });
+const tokensCounter = () => meter().createCounter("mar.agent.tokens", { description: "Tokens used by agents" });
+const costCounter = () => meter().createCounter("mar.agent.cost", { unit: "USD", description: "Reported agent cost" });
+
+/** Agent results on the span (GenAI conventions for tokens) and in the metrics. */
+function recordAgentOutcome(span: import("@mar/telemetry").Span, agent: string, outcome: ProcessOutcome): void {
+  const t = outcome.terminal;
+  span.setAttributes({ "mar.agent.result": t.kind, "process.exit.code": outcome.exitCode ?? -1 });
+  if (t.kind === "failed") {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: t.reason.slice(0, 200) });
+    return;
+  }
+  span.setAttributes({ "mar.agent.success": t.success, "mar.agent.denied_actions": t.deniedActions.length });
+  if (t.usage) {
+    span.setAttributes({ "gen_ai.usage.input_tokens": t.usage.inputTokens ?? 0, "gen_ai.usage.output_tokens": t.usage.outputTokens ?? 0 });
+    tokensCounter().add(t.usage.inputTokens ?? 0, { "mar.agent": agent, "gen_ai.token.type": "input" });
+    tokensCounter().add(t.usage.outputTokens ?? 0, { "mar.agent": agent, "gen_ai.token.type": "output" });
+  }
+  if (t.costUsd !== undefined) {
+    span.setAttribute("mar.agent.cost_usd", t.costUsd);
+    costCounter().add(t.costUsd, { "mar.agent": agent });
   }
 }

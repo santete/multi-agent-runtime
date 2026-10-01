@@ -1,6 +1,16 @@
 import { existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
 import { InvalidTransitionError, KNOWLEDGE_KINDS } from "@mar/core";
+import {
+  type Context,
+  contextWithSpan,
+  extractTraceContext,
+  runInContext,
+  type Span,
+  SpanKind,
+  SpanStatusCode,
+  startSpan,
+} from "@mar/telemetry";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { type Actor, Authenticator, type Role, type UserConfig, hasRole } from "./auth.js";
@@ -11,6 +21,8 @@ export const EXECUTION_TOKEN_HEADER = "x-mar-execution-token";
 declare module "fastify" {
   interface FastifyRequest {
     actor: Actor;
+    /** Server span of the request, a child of the caller's trace (runner, policy hook). */
+    otel?: { span: Span; context: Context };
   }
   interface FastifyContextConfig {
     /** Minimum role for the route (default: viewer). */
@@ -199,6 +211,12 @@ const recentQuery = z.object({
 });
 
 const role = (min: Role) => ({ config: { role: min } });
+
+/** Execution routes carry the execution id: worth a span attribute. */
+function executionAttributes(params: unknown): Record<string, string> {
+  const id = (params as { id?: unknown } | undefined)?.id;
+  return typeof id === "string" ? { "mar.resource.id": id } : {};
+}
 const PUBLIC = { config: { public: true } };
 
 export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
@@ -210,6 +228,35 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   ]);
 
   app.decorateRequest("actor", null as unknown as Actor);
+
+  // Tracing (spec §41): every API request is a server span in the caller's trace;
+  // handlers run in its context so store and GitHub spans nest under it.
+  app.decorateRequest("otel", undefined);
+  app.addHook("onRoute", (route) => {
+    const handler = route.handler;
+    route.handler = function (this: unknown, req, reply) {
+      return req.otel ? runInContext(req.otel.context, () => handler.call(this as never, req, reply)) : handler.call(this as never, req, reply);
+    };
+  });
+  app.addHook("onRequest", async (req) => {
+    const route = req.routeOptions.url;
+    // Long-lived streams and static files are not worth a span.
+    if (!route || route === "/stream" || route === "/health" || route.startsWith("/ui")) return;
+    const parent = extractTraceContext(req.headers);
+    const span = startSpan(
+      `${req.method} ${route}`,
+      { "http.request.method": req.method, "http.route": route, ...executionAttributes(req.params) },
+      parent,
+      SpanKind.SERVER,
+    );
+    req.otel = { span, context: contextWithSpan(span, parent) };
+  });
+  app.addHook("onResponse", async (req, reply) => {
+    if (!req.otel) return;
+    req.otel.span.setAttribute("http.response.status_code", reply.statusCode);
+    if (reply.statusCode >= 500) req.otel.span.setStatus({ code: SpanStatusCode.ERROR });
+    req.otel.span.end();
+  });
   app.addHook("onRequest", async (req, reply) => {
     const url = req.routeOptions.url;
     // Static UI files and unmatched routes (404) need no token.
