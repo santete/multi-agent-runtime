@@ -1,4 +1,5 @@
 import type { CheckRun, ChecksState, PullRequestRef } from "@mar/core";
+import { SpanKind, withSpan } from "@mar/telemetry";
 
 export interface OpenPullRequest {
   repoUrl: string;
@@ -179,7 +180,17 @@ export class GitHubProvider implements GitProvider {
     return { headSha, behindBase: (compare.body.behind_by ?? 0) > 0, checks: { state: checksState(runs), runs } };
   }
 
-  private async call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {
+  private call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {
+    // The path without the host and query: /repos/o/r/pulls/7 and the like.
+    const target = url.slice(this.apiBase.length).split("?")[0];
+    return withSpan(`github ${method} ${target}`, { "http.request.method": method, "url.path": target }, async (span) => {
+      const result = await this.send(method, url, body);
+      span.setAttribute("http.response.status_code", result.status);
+      return result;
+    }, { kind: SpanKind.CLIENT });
+  }
+
+  private async send(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {
     const res = await this.fetchImpl(url, {
       method,
       headers: {

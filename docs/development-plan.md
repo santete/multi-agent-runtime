@@ -179,6 +179,13 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] Retry lỗi mạng/5xx/429; webhook hỏng không làm kẹt các event khác; log không chứa URL webhook
 - [x] **Chạy thật** với một webhook giả lập Slack chạy local: nhận đủ 3 thông báo từ lượt chạy thật của Claude: "Approval needed (HIGH)" khi agent định chạy `curl`, "waiting for a person", và "Plan ready for review" (3 task). Link dashboard đúng, log không chứa URL webhook.
 
+### OpenTelemetry — trạng thái ✅ ([ADR-0017](adr/0017-opentelemetry.md))
+
+- [x] `@mar/telemetry`: OTLP/HTTP traces + metrics khi có `OTEL_EXPORTER_OTLP_ENDPOINT`, no-op khi không
+- [x] Một trace mỗi execution: `workspace.prepare`, `agent.run` (token, cost), `validation` + từng bước, `delivery`; span server của control plane và span `github …` nằm trong cùng trace qua `traceparent`; tool check của agent nằm dưới `agent.run` nhờ `TRACEPARENT` trong policy hook
+- [x] Metrics: executions, duration, tokens, cost, task transitions; merge queue có span riêng cho mỗi task
+- [x] **Chạy thật** (Claude, LP-13, với một OTLP collector chạy local): trace có 54 span, gồm `workspace.prepare` 5,5 giây, `agent.run` 35 giây (2.655 output token, $0,30) với 11 tool check của Claude nằm bên dưới, bước validation `test`, và `delivery` → `github POST /pulls`. Span heartbeat và event batch bị bỏ vì gây nhiễu.
+
 ## Phase 3
 
 Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.

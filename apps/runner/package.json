@@ -13,10 +13,12 @@
     "@mar/adapter-codex": "workspace:*",
     "@mar/adapter-generic-cli": "workspace:*",
     "@mar/core": "workspace:*",
+    "@mar/telemetry": "workspace:*",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@mar/control-plane": "workspace:*",
+    "@opentelemetry/sdk-trace-base": "2.11.0",
     "fastify": "^5.12.5",
     "tsx": "^4.20.0"
   }
