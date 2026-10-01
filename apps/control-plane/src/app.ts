@@ -63,6 +63,11 @@ const validationSandbox = z.object({
   cpus: z.number().positive().max(64).optional(),
 });
 
+const budget = z.object({
+  dailyUsd: z.number().positive().optional(),
+  perTaskUsd: z.number().positive().optional(),
+});
+
 const createProjectBody = z.object({
   key: z
     .string()
@@ -78,6 +83,7 @@ const createProjectBody = z.object({
   revalidateOnBaseChange: z.boolean().optional(),
   waitForChecks: z.boolean().optional(),
   validationSandbox: validationSandbox.nullable().optional(),
+  budget: budget.nullable().optional(),
 });
 
 const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
@@ -175,6 +181,8 @@ const registerRunnerBody = z.object({
       capabilities,
       skills: z.array(z.string().min(1)).max(50).optional(),
       cost: z.enum(["low", "medium", "high"]).optional(),
+      pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
+      maxConcurrent: z.number().int().min(1).max(100).optional(),
     }),
   ),
 });
@@ -437,6 +445,19 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   // ---- agent registry & runner protocol -----------------------------------
 
   app.get("/runners", () => store.listRunners());
+  // Cost and quota (spec §39).
+  app.put("/projects/:id/budget", role("owner"), (req) =>
+    store.setBudget(idParams.parse(req.params).id, budget.nullable().parse(req.body ?? null)),
+  );
+  app.get("/projects/:id/costs", (req) =>
+    store.costReport(idParams.parse(req.params).id, z.object({ days: z.coerce.number().int().min(1).max(90).default(14) }).parse(req.query).days),
+  );
+  app.get("/agents/cooldowns", () => store.listCooldowns());
+  app.delete("/runners/:id/cooldowns/:agent", role("senior"), async (req, reply) => {
+    const { id, agent } = z.object({ id: z.uuid(), agent: z.string().min(1) }).parse(req.params);
+    await store.clearCooldown(id, agent, req.actor.name);
+    reply.status(204);
+  });
   app.get("/agents/stats", (req) => store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId));
 
   app.post("/runners/register", role("runner"), async (req, reply) => {

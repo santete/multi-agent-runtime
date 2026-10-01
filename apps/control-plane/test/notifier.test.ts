@@ -165,6 +165,19 @@ describe("notifier", () => {
     expect(await store.eventCursor("notifier")).toBe(await store.latestEventSeq());
   });
 
+  it("skips events too old to act on when catching up", async () => {
+    const n = notifier("review");
+    await n.poll();
+    const { project, runnerId } = await setup();
+    await call("POST", `/projects/${project.id}/tasks`, { title: "Stale", objective: "o", agent: "claude" });
+    await deliver(await claim(runnerId));
+    // As if notifications had been off for two hours.
+    await db.query("update events set created_at = now() - interval '2 hours'");
+    expect(await n.poll()).toBe(0);
+    expect(received).toEqual([]);
+    expect(await store.eventCursor("notifier")).toBe(await store.latestEventSeq());
+  });
+
   it("is off without webhooks", () => {
     expect(notifierOptionsFromEnv({}, "http://x")).toBeNull();
     expect(notifierOptionsFromEnv({ MAR_NOTIFY_WEBHOOKS: "https://a, https://b", MAR_NOTIFY_EVENTS: "plan,bogus" }, "http://x")).toEqual({

@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   type AgentDescriptor,
+  type AgentCooldown,
   type AgentStats,
+  type Budget,
+  type CostReport,
   type ApprovePlanRequest,
   type CreatePlanRequest,
   type CreateKnowledgeRequest,
@@ -56,6 +59,8 @@ import {
   KNOWLEDGE_KINDS,
   sameKnowledge,
   chooseAgent,
+  cooldownUntil,
+  executionCost,
   isAgentUnavailable,
   isCiConfigPath,
   evaluateToolCall,
@@ -116,6 +121,9 @@ export interface StoreOptions {
 type Row = Record<string, any>;
 
 const ACTIVE = [...ACTIVE_EXECUTION_STATUSES];
+/** What a project (alias p) spent since midnight UTC, as a SQL expression. */
+const TODAY_SPEND_SQL = `(select coalesce(sum(e.cost_usd), 0) from executions e join tasks t2 on t2.id = e.task_id
+  where t2.project_id = p.id and e.created_at >= date_trunc('day', now()))`;
 /** How much accepted knowledge (characters) an agent gets with its task. */
 const KNOWLEDGE_CONTEXT_CHARS = 40_000;
 /** Agent value of a task the scheduler still has to route. */
@@ -139,6 +147,7 @@ const toProject = (r: Row): ProjectDto => ({
   revalidateOnBaseChange: r.revalidate_on_base_change ?? true,
   waitForChecks: Boolean(r.wait_for_checks),
   validationSandbox: r.validation_sandbox ?? null,
+  budget: r.budget ?? null,
   createdAt: iso(r.created_at),
 });
 
@@ -244,6 +253,10 @@ const toExecution = (r: Row): ExecutionDto => ({
   runnerId: r.runner_id,
   attempt: r.attempt,
   agent: r.agent ?? null,
+  inputTokens: r.input_tokens == null ? null : Number(r.input_tokens),
+  outputTokens: r.output_tokens == null ? null : Number(r.output_tokens),
+  costUsd: r.cost_usd == null ? null : Number(r.cost_usd),
+  costEstimated: Boolean(r.cost_estimated),
   status: r.status,
   sessionId: r.session_id,
   workspace: r.workspace,
@@ -361,8 +374,8 @@ export class Store {
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
            review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks,
-           validation_sandbox)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *`,
+           validation_sandbox, budget)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *`,
         [
           randomUUID(),
           req.key,
@@ -377,6 +390,7 @@ export class Store {
           req.revalidateOnBaseChange ?? true,
           req.waitForChecks ?? false,
           req.validationSandbox ? JSON.stringify(req.validationSandbox) : null,
+          req.budget ? JSON.stringify(req.budget) : null,
         ],
       );
       const project = toProject(row!);
@@ -421,6 +435,19 @@ export class Store {
         id,
       );
       await appendEvent(q, { type: "ProjectMergePolicyChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
+  }
+
+  async setBudget(id: string, budget: Budget | null): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set budget = $2 where id = $1 returning *", [id, budget ? JSON.stringify(budget) : null]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectBudgetChanged", projectId: id, payload: { budget } });
       return project;
     });
   }
@@ -962,7 +989,20 @@ export class Store {
         [runnerId],
       );
       if (!runner) throw new NotFoundError("runner", runnerId);
-      const agentIds = runner.agents.map((a) => a.id);
+      // Agents resting after a quota hit, or at their concurrency limit on this runner, take nothing.
+      const resting = new Set(
+        (await q.query<{ agent: string }>("select agent from agent_cooldowns where runner_id = $1 and until > now()", [runnerId])).map(
+          (r) => r.agent,
+        ),
+      );
+      const busy = await q.query<{ agent: string; n: number }>(
+        `select agent, count(*)::int as n from executions where runner_id = $1 and status = any($2::text[]) group by agent`,
+        [runnerId, ACTIVE],
+      );
+      const usable = runner.agents.filter(
+        (a) => !resting.has(a.id) && !(a.maxConcurrent && (busy.find((b) => b.agent === a.id)?.n ?? 0) >= a.maxConcurrent),
+      );
+      const agentIds = usable.map((a) => a.id);
       if (!agentIds.length) return null;
 
       // Oldest READY tasks for our agents (or left to the scheduler), in projects
@@ -974,6 +1014,8 @@ export class Store {
              select count(*) from tasks w
              where w.project_id = t.project_id and w.state in ('ASSIGNED', 'RUNNING', 'VALIDATING')
            ) < p.max_parallel)
+           -- spec §39: a project over its daily budget waits until tomorrow (or a higher budget)
+           and (p.budget->>'dailyUsd' is null or ${TODAY_SPEND_SQL} < (p.budget->>'dailyUsd')::numeric)
          order by t.created_at limit 20 for update of t skip locked`,
         [agentIds],
       );
@@ -986,7 +1028,7 @@ export class Store {
         }
         const policy = (await this.getProject(candidate.projectId, q)).routingPolicy;
         const choice = chooseAgent(
-          runner.agents.map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
+          usable.map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
           { requires: candidate.requires, excluded: candidate.excludedAgents },
           await this.agentStats(candidate.projectId, q),
           policy,
@@ -1285,6 +1327,7 @@ export class Store {
     return this.db.tx(async (q) => {
       const { task, row: current } = await this.lockExecution(q, id, ["assigned", "running"]);
       const t = req.terminal;
+      await this.recordCost(q, current, t);
       // Our own audit log is authoritative: an agent that reports success after
       // a policy denial still needs a human to look at it.
       const [policy] = await q.query<{ denials: number }>(
@@ -2098,13 +2141,35 @@ export class Store {
       );
       for (const row of retrying) {
         const task = row.state === "RETRYING" ? await this.maybeReassign(q, toTask(row)) : toTask(row);
-        if (row.attempts < task.maxAttempts) {
+        const spent = await this.taskSpend(q, task.id);
+        const perTask = (await this.getProject(task.projectId, q)).budget?.perTaskUsd;
+        if (perTask !== undefined && spent >= perTask) {
+          await changeTaskState(q, task, "limit_exceeded", { reason: `task budget used up: ${spent.toFixed(2)} of ${perTask}` });
+          await appendEvent(q, { type: "TaskBudgetExceeded", projectId: task.projectId, taskId: task.id, payload: { spentUsd: spent, budgetUsd: perTask } });
+          result.blocked++;
+        } else if (row.attempts < task.maxAttempts) {
           await changeTaskState(q, task, "unassigned", { attempts: row.attempts });
           result.requeued++;
         } else {
           await changeTaskState(q, task, "limit_exceeded", { attempts: row.attempts });
           result.blocked++;
         }
+      }
+
+      // Tell people once a day when a project's budget stops its work.
+      const over = await q.query<{ id: string; spent: string; daily: string }>(
+        `select p.id, ${TODAY_SPEND_SQL} as spent, (p.budget->>'dailyUsd') as daily from projects p
+         where p.budget->>'dailyUsd' is not null and ${TODAY_SPEND_SQL} >= (p.budget->>'dailyUsd')::numeric
+           and exists (select 1 from tasks t where t.project_id = p.id and t.state = 'READY')
+           and not exists (select 1 from events e where e.project_id = p.id and e.type = 'BudgetExceeded'
+                           and e.created_at >= date_trunc('day', now()))`,
+      );
+      for (const p of over) {
+        await appendEvent(q, {
+          type: "BudgetExceeded",
+          projectId: p.id,
+          payload: { spentUsd: Number(p.spent), dailyUsd: Number(p.daily) },
+        });
       }
       return result;
     });
@@ -2146,6 +2211,83 @@ export class Store {
     return toTask(row!);
   }
 
+  /**
+   * What the execution used and cost (reported, or estimated from the agent's
+   * pricing), and a cooldown when the agent says it hit its quota.
+   */
+  private async recordCost(q: Queryable, execution: Row, terminal: CompleteExecutionRequest["terminal"]): Promise<void> {
+    const [runner] = await q.query<{ agents: AgentDescriptor[] }>("select agents from runners where id = $1", [execution.runner_id]);
+    const descriptor = runner?.agents.find((a) => a.id === execution.agent);
+    const cost = executionCost(terminal, descriptor?.pricing);
+    await q.query(
+      "update executions set input_tokens = $2, output_tokens = $3, cost_usd = $4, cost_estimated = $5 where id = $1",
+      [execution.id, cost.inputTokens, cost.outputTokens, cost.costUsd, cost.estimated],
+    );
+    if (terminal.kind === "failed" && execution.agent && isAgentUnavailable(terminal.reason)) {
+      const until = cooldownUntil(terminal.reason);
+      await q.query(
+        `insert into agent_cooldowns (runner_id, agent, until, reason) values ($1, $2, $3, $4)
+         on conflict (runner_id, agent) do update set until = excluded.until, reason = excluded.reason, created_at = now()`,
+        [execution.runner_id, execution.agent, until, terminal.reason.slice(0, 500)],
+      );
+      await appendEvent(q, {
+        type: "AgentCooldown",
+        executionId: execution.id,
+        payload: { runnerId: execution.runner_id, agent: execution.agent, until: until.toISOString(), reason: terminal.reason.slice(0, 300) },
+      });
+    }
+  }
+
+  private async taskSpend(q: Queryable, taskId: string): Promise<number> {
+    const [row] = await q.query<{ spent: string | null }>("select sum(cost_usd) as spent from executions where task_id = $1", [taskId]);
+    return Number(row?.spent ?? 0);
+  }
+
+  /** Spend of a project per day and agent over the last `days` days (spec §39). */
+  async costReport(projectId: string, days = 14): Promise<CostReport> {
+    const project = await this.getProject(projectId);
+    const rows = await this.db.query(
+      `select to_char(date_trunc('day', e.created_at), 'YYYY-MM-DD') as day, e.agent,
+         count(*)::int as executions, coalesce(sum(e.input_tokens), 0) as input_tokens,
+         coalesce(sum(e.output_tokens), 0) as output_tokens, coalesce(sum(e.cost_usd), 0) as cost_usd,
+         bool_or(e.cost_estimated) as estimated
+       from executions e join tasks t on t.id = e.task_id
+       where t.project_id = $1 and e.agent is not null and e.created_at >= date_trunc('day', now()) - make_interval(days => $2)
+       group by 1, 2 order by 1 desc, 2`,
+      [projectId, days - 1],
+    );
+    const [today] = await this.db.query<{ spent: string }>(`select ${TODAY_SPEND_SQL} as spent from projects p where p.id = $1`, [projectId]);
+    return {
+      projectId,
+      budget: project.budget,
+      todayUsd: Number(today?.spent ?? 0),
+      rows: rows.map((r) => ({
+        day: r.day,
+        agent: r.agent,
+        executions: r.executions,
+        inputTokens: Number(r.input_tokens),
+        outputTokens: Number(r.output_tokens),
+        costUsd: Number(r.cost_usd),
+        estimated: Boolean(r.estimated),
+      })),
+    };
+  }
+
+  async listCooldowns(): Promise<AgentCooldown[]> {
+    const rows = await this.db.query(
+      `select c.*, r.name as runner_name from agent_cooldowns c join runners r on r.id = c.runner_id
+       where c.until > now() order by c.until`,
+    );
+    return rows.map((r) => ({ runnerId: r.runner_id, runnerName: r.runner_name, agent: r.agent, until: iso(r.until), reason: r.reason }));
+  }
+
+  /** A person says the agent is available again (e.g. the plan was upgraded). */
+  async clearCooldown(runnerId: string, agent: string, actor?: string): Promise<void> {
+    const rows = await this.db.query("delete from agent_cooldowns where runner_id = $1 and agent = $2 returning agent", [runnerId, agent]);
+    if (!rows.length) throw new NotFoundError("cooldown", `${agent}@${runnerId}`);
+    await appendEvent(this.db, { type: "AgentCooldownCleared", payload: { runnerId, agent, actor: actor ?? null } });
+  }
+
   /** Execution history per agent (spec §40), optionally for one project. */
   async agentStats(projectId?: string, q: Queryable = this.db): Promise<AgentStats[]> {
     const rows = await q.query(
@@ -2156,6 +2298,8 @@ export class Store {
          count(*) filter (where e.status in ('assigned', 'running', 'validating', 'delivering'))::int as active,
          avg(extract(epoch from (e.finished_at - e.started_at)) * 1000)
            filter (where e.finished_at is not null and e.started_at is not null) as avg_ms,
+         coalesce(sum(e.input_tokens), 0) as input_tokens, coalesce(sum(e.output_tokens), 0) as output_tokens,
+         coalesce(sum(e.cost_usd), 0) as cost_usd,
          count(*) filter (where exists (
            select 1 from artifacts a where a.execution_id = e.id and (
              (a.type = 'validation_result' and a.content->>'passed' = 'false') or
@@ -2173,6 +2317,9 @@ export class Store {
       active: r.active,
       avgDurationMs: r.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
       reworkRate: r.executions ? Math.round((r.reworked / r.executions) * 1000) / 1000 : 0,
+      inputTokens: Number(r.input_tokens),
+      outputTokens: Number(r.output_tokens),
+      costUsd: Math.round(Number(r.cost_usd) * 1e4) / 1e4,
     }));
   }
 

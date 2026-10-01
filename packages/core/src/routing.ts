@@ -23,6 +23,10 @@ export interface AgentStats {
   avgDurationMs: number | null;
   /** Share of delivered work sent back by validation or review. */
   reworkRate: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Known spend (reported or estimated), USD. */
+  costUsd?: number;
 }
 
 export interface RoutingRequest {

@@ -199,7 +199,19 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 
 ## Phase 3
 
-Planner tự động (không cần người duyệt) · chọn agent dựa trên metric thực tế (§40) · self-healing · tối ưu cost và quota · multi-org · marketplace.
+Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn agent theo kết quả thực tế → (3) self-healing → (4) planner tự động + multi-agent debate → (5) tự động ưu tiên lại task → (6) human as executor (§61) → (7) multi-org + agent marketplace.
+
+### Cost · quota · budget — trạng thái ✅ ([ADR-0019](adr/0019-cost-and-quota.md))
+
+- [x] Ghi token và cost cho mỗi execution: lấy cost agent báo, nếu không có thì ước tính từ `pricing` trong config runner
+- [x] Agent hết quota sẽ cooldown trên runner đó, với thời gian đọc từ thông báo lỗi; task auto route sang agent khác hoặc chờ; người có thể gỡ cooldown sớm
+- [x] `maxConcurrent` theo agent; budget theo project (`dailyUsd`: task chờ, `perTaskUsd`: task bị BLOCKED); thông báo `budget` và `quota`
+- [x] `GET /projects/:id/costs`, tab Costs, cột cost và trạng thái cooldown trên trang Agents
+- [x] **Chạy thật** trên `mar-sandbox`:
+  - Claude báo cost của nó ($0,32). Codex được ước tính từ pricing (89.743 input + 1.110 output token ≈ $0,12, hiển thị kèm ≈).
+  - Hạ budget ngày xuống $0,30 thì task mới đứng ở READY, `BudgetExceeded` được ghi đúng một lần và thông báo được gửi.
+  - Notifier không gửi lại event cũ hơn 60 phút khi được bật lại.
+- [ ] Cooldown do quota mới được kiểm bằng test; trong lúc chạy thật không có agent nào hết quota
 
 ## Rủi ro đang theo dõi
 

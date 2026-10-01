@@ -10,6 +10,10 @@ import { z } from "zod";
 const routing = {
   skills: z.array(z.string().min(1)).default([]),
   cost: z.enum(["low", "medium", "high"]).default("medium"),
+  /** USD per million tokens, to estimate cost when the CLI does not report it (spec §39). */
+  pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
+  /** At most this many executions of this agent at once (subscription concurrency). */
+  maxConcurrent: z.number().int().min(1).optional(),
 };
 
 const agentConfig = z.discriminatedUnion("adapter", [

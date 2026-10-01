@@ -1,6 +1,9 @@
 import type {
   ActorDto,
+  AgentCooldown,
   AgentStats,
+  Budget,
+  CostReport,
   ApprovalDto,
   ArtifactDto,
   KnowledgeDto,
@@ -121,6 +124,10 @@ export const api = {
 
   runners: () => get<RunnerDto[]>("/runners"),
   agentStats: () => get<AgentStats[]>("/agents/stats"),
+  cooldowns: () => get<AgentCooldown[]>("/agents/cooldowns"),
+  clearCooldown: (runnerId: string, agent: string) => request<void>("DELETE", `/runners/${runnerId}/cooldowns/${encodeURIComponent(agent)}`),
+  costs: (projectId: string) => get<CostReport>(`/projects/${projectId}/costs`),
+  setBudget: (projectId: string, budget: Budget | null) => put<ProjectDto>(`/projects/${projectId}/budget`, budget),
   recentEvents: (limit = 50, projectId?: string) =>
     get<EventDto[]>(`/events/recent?limit=${limit}${projectId ? `&projectId=${projectId}` : ""}`),
 };

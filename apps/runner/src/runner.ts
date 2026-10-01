@@ -115,6 +115,8 @@ export class Runner {
       capabilities: adapter.capabilities,
       skills: this.config.agents[id]!.skills,
       cost: this.config.agents[id]!.cost,
+      ...(this.config.agents[id]!.pricing && { pricing: this.config.agents[id]!.pricing }),
+      ...(this.config.agents[id]!.maxConcurrent && { maxConcurrent: this.config.agents[id]!.maxConcurrent }),
     }));
   }
 

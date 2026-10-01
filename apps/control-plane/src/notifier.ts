@@ -7,9 +7,9 @@ import type { Store } from "./store.js";
  * Slack-compatible incoming webhooks (Slack, Mattermost, Rocket.Chat,
  * Discord's /slack endpoint, or anything that accepts `{text}`).
  */
-export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "ci" | "merged";
+export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "budget" | "quota" | "ci" | "merged";
 
-export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked"];
+export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota"];
 
 export interface NotifierOptions {
   webhooks: string[];
@@ -19,6 +19,8 @@ export interface NotifierOptions {
   fetchImpl?: typeof fetch;
   /** Delays between delivery attempts; one attempt more than entries. */
   retryDelaysMs?: number[];
+  /** Events older than this are skipped (e.g. after notifications were off for a while). Default 60. */
+  maxAgeMinutes?: number | undefined;
   log?: { info(obj: object, msg: string): void; error(obj: object, msg: string): void };
 }
 
@@ -58,7 +60,14 @@ export class Notifier {
     }
     const events = await this.store.listEvents({}, cursor, limit);
     let sent = 0;
+    const oldest = Date.now() - (this.options.maxAgeMinutes ?? 60) * 60_000;
     for (const event of events) {
+      // Catching up after a pause: what happened long ago is no longer actionable.
+      if (Date.parse(event.createdAt) < oldest) {
+        cursor = event.seq;
+        await this.store.setEventCursor(CURSOR, cursor);
+        continue;
+      }
       const notification = await this.describe(event).catch((err) => {
         this.options.log?.error({ err: String(err), event: event.seq }, "notification skipped");
         return null;
@@ -104,6 +113,20 @@ export class Notifier {
           text: `:clipboard: *Plan ready for review* — ${p.tasks} task(s) for “${oneLine(plan.goal, 120)}”. ${this.link(`#/plans/${plan.id}`, "Open plan")}`,
         };
       }
+      case "BudgetExceeded": {
+        const project = e.projectId ? await this.store.getProject(e.projectId) : undefined;
+        return {
+          kind: "budget",
+          text: `:money_with_wings: *${project?.key ?? "A project"}* used its daily budget ($${Number(p.spentUsd).toFixed(2)} of $${p.dailyUsd}); its tasks wait until tomorrow or a higher budget. ${this.link(`#/projects/${e.projectId}/costs`, "Costs")}`,
+        };
+      }
+      case "TaskBudgetExceeded":
+        return { kind: "budget", text: `:money_with_wings: ${name} used up its budget ($${Number(p.spentUsd).toFixed(2)} of $${p.budgetUsd}) and stopped. ${taskLink}` };
+      case "AgentCooldown":
+        return {
+          kind: "quota",
+          text: `:hourglass: Agent \`${p.agent}\` hit its quota; resting until ${p.until}. Its tasks move to other agents or wait. ${this.link("#/agents", "Agents")}`,
+        };
       case "CiFailed":
         return { kind: "ci", text: `:x: CI failed for ${name}: ${(p.checks ?? []).join(", ")}. The agent is reworking it. ${taskLink}` };
       case "TaskMerged":
@@ -165,11 +188,12 @@ export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string
     .map((s) => s.trim())
     .filter(Boolean);
   if (!webhooks.length) return null;
-  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "ci", "merged"];
+  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "ci", "merged"];
   const kinds = env.MAR_NOTIFY_EVENTS
     ? env.MAR_NOTIFY_EVENTS.split(",")
         .map((s) => s.trim())
         .filter((s): s is NotificationKind => all.includes(s as NotificationKind))
     : undefined;
-  return { webhooks, kinds, publicUrl: env.MAR_PUBLIC_URL || publicUrl };
+  const maxAge = Number(env.MAR_NOTIFY_MAX_AGE_MINUTES);
+  return { webhooks, kinds, publicUrl: env.MAR_PUBLIC_URL || publicUrl, ...(maxAge > 0 && { maxAgeMinutes: maxAge }) };
 }
