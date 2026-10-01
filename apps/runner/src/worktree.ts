@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { WorkspaceFile } from "@mar/core";
@@ -177,6 +177,10 @@ export class WorktreeManager {
       const path = this.worktreePath(taskKey);
       const branch = WorktreeManager.branchFor(taskKey);
       if (existsSync(path)) {
+        // A worktree git cannot read (deleted .git file, half-removed directory) is broken.
+        await git(path, "rev-parse", "--verify", "-q", "HEAD").catch((err) => {
+          throw new Error(`worktree ${path} is broken: ${String(err).slice(0, 300)}`);
+        });
         if (from) await git(path, "reset", "-q", "--hard", `origin/${from}`);
         return { path, branch, created: false };
       }
@@ -255,6 +259,26 @@ export class WorktreeManager {
     await this.withLock(repo, async () => {
       await git(repo, "worktree", "remove", "--force", path);
       await git(repo, "branch", "-D", WorktreeManager.branchFor(taskKey)).catch(() => undefined);
+    });
+  }
+
+  /**
+   * Self-healing (spec §46): throws away a task's worktree that git can no
+   * longer use (and, with `clone`, the project's clone too) so the next
+   * prepare starts clean. Works when git itself fails on the directory.
+   */
+  async discard(project: WorkspaceProject, taskKey: string, clone = false): Promise<void> {
+    const repo = this.repoPath(project);
+    await this.withLock(repo, async () => {
+      await rm(this.worktreePath(taskKey), { recursive: true, force: true, maxRetries: 3 });
+      if (clone) {
+        await rm(repo, { recursive: true, force: true, maxRetries: 3 });
+        return;
+      }
+      if (existsSync(join(repo, ".git"))) {
+        await git(repo, "worktree", "prune").catch(() => undefined);
+        await git(repo, "branch", "-D", WorktreeManager.branchFor(taskKey)).catch(() => undefined);
+      }
     });
   }
 

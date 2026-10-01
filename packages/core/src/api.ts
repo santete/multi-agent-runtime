@@ -53,6 +53,8 @@ export interface ProjectDto {
   validationSandbox: ValidationSandbox | null;
   /** Spending limits (spec §39); null: unlimited. */
   budget: Budget | null;
+  /** What to do when the base branch's CI fails on a merged task (spec §46). */
+  onBrokenMain: BrokenMainPolicy;
   createdAt: string;
 }
 
@@ -163,7 +165,14 @@ export interface CreateProjectRequest {
   waitForChecks?: boolean | undefined;
   validationSandbox?: ValidationSandbox | null | undefined;
   budget?: Budget | null | undefined;
+  onBrokenMain?: BrokenMainPolicy | undefined;
 }
+
+/**
+ * notify: tell people; revert: also open a pull request reverting the merge
+ * (a person merges it); fix: also give the task's agent a fix-forward task.
+ */
+export type BrokenMainPolicy = "notify" | "revert" | "fix";
 
 /** An agent resting after it hit its quota on a runner (spec §39, §46). */
 export interface AgentCooldown {

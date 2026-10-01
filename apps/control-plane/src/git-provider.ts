@@ -54,6 +54,10 @@ export interface GitProvider {
   commentOnPullRequest?(req: { repoUrl: string; number: number; body: string }): Promise<void>;
   /** CI checks and whether the base moved (spec §27, §34). Optional: without it the queue merges directly. */
   pullRequestStatus?(req: { repoUrl: string; number: number }): Promise<PullRequestStatus>;
+  /** CI checks of a commit on the base branch, e.g. a merge (spec §46). */
+  commitChecks?(req: { repoUrl: string; sha: string }): Promise<{ state: ChecksState; runs: CheckRun[] }>;
+  /** Opens a pull request that reverts a merged one (spec §46 rollback). */
+  revertPullRequest?(req: { repoUrl: string; number: number; title: string; body: string }): Promise<PullRequestRef>;
 }
 
 export class GitProviderError extends Error {
@@ -145,12 +149,45 @@ export class GitHubProvider implements GitProvider {
     if (pr.status !== 200) throw new GitProviderError(`GitHub ${pr.status} reading PR #${req.number}`);
     const headSha: string = pr.body.head.sha;
 
-    const [compare, checkRuns, statuses] = await Promise.all([
+    const [compare, checks] = await Promise.all([
       this.call("GET", `${base}/compare/${encodeURIComponent(pr.body.base.ref)}...${headSha}`),
-      this.call("GET", `${base}/commits/${headSha}/check-runs?per_page=100`),
-      this.call("GET", `${base}/commits/${headSha}/status`),
+      this.checksOf(base, headSha),
     ]);
     if (compare.status !== 200) throw new GitProviderError(`GitHub ${compare.status} comparing PR #${req.number} with its base`);
+    return { headSha, behindBase: (compare.body.behind_by ?? 0) > 0, checks };
+  }
+
+  async commitChecks(req: { repoUrl: string; sha: string }): Promise<{ state: ChecksState; runs: CheckRun[] }> {
+    const repo = parseGitHubRepo(req.repoUrl);
+    if (!repo) throw new GitProviderError(`not a GitHub repository: ${req.repoUrl}`);
+    return this.checksOf(`${this.apiBase}/repos/${repo.owner}/${repo.repo}`, req.sha);
+  }
+
+  /** GitHub's own "Revert" button: the revertPullRequest GraphQL mutation. */
+  async revertPullRequest(req: { repoUrl: string; number: number; title: string; body: string }): Promise<PullRequestRef> {
+    const repo = parseGitHubRepo(req.repoUrl);
+    if (!repo) throw new GitProviderError(`not a GitHub repository: ${req.repoUrl}`);
+    const pr = await this.call("GET", `${this.apiBase}/repos/${repo.owner}/${repo.repo}/pulls/${req.number}`);
+    if (pr.status !== 200) throw new GitProviderError(`GitHub ${pr.status} reading PR #${req.number}`);
+    const res = await this.call("POST", `${this.apiBase}/graphql`, {
+      query: `mutation($id: ID!, $title: String!, $body: String!) {
+        revertPullRequest(input: { pullRequestId: $id, title: $title, body: $body }) { revertPullRequest { url number } }
+      }`,
+      variables: { id: pr.body.node_id, title: req.title, body: req.body },
+    });
+    const created = res.body?.data?.revertPullRequest?.revertPullRequest;
+    if (res.status !== 200 || !created) {
+      throw new GitProviderError(`GitHub could not revert PR #${req.number}: ${JSON.stringify(res.body?.errors ?? res.body).slice(0, 300)}`);
+    }
+    return { url: created.url, number: created.number };
+  }
+
+  /** Check runs (with annotations of failures) and commit statuses of a commit. */
+  private async checksOf(base: string, sha: string): Promise<{ state: ChecksState; runs: CheckRun[] }> {
+    const [checkRuns, statuses] = await Promise.all([
+      this.call("GET", `${base}/commits/${sha}/check-runs?per_page=100`),
+      this.call("GET", `${base}/commits/${sha}/status`),
+    ]);
 
     const runs: CheckRun[] = [
       ...(await Promise.all(
@@ -177,7 +214,7 @@ export class GitHubProvider implements GitProvider {
         }),
       ),
     ];
-    return { headSha, behindBase: (compare.body.behind_by ?? 0) > 0, checks: { state: checksState(runs), runs } };
+    return { state: checksState(runs), runs };
   }
 
   private call(method: string, url: string, body?: object): Promise<{ status: number; body: any }> {

@@ -134,3 +134,34 @@ describe("pull request status", () => {
     expect(checksState([run("pending"), run("failure")])).toBe("failure");
   });
 });
+
+describe("revert pull request", () => {
+  it("uses GitHub's revertPullRequest mutation", async () => {
+    const f = fakeFetch([
+      { status: 200, body: { node_id: "PR_kw1", number: 7 } },
+      { status: 200, body: { data: { revertPullRequest: { revertPullRequest: { url: "https://github.com/o/r/pull/9", number: 9 } } } } },
+    ]);
+    const pr = await new GitHubProvider("t", "https://api.test", f.impl).revertPullRequest({
+      repoUrl: "https://github.com/o/r",
+      number: 7,
+      title: "Revert PAY-1",
+      body: "broke main",
+    });
+    expect(pr).toEqual({ url: "https://github.com/o/r/pull/9", number: 9 });
+    expect(f.calls[1]).toMatchObject({
+      url: "https://api.test/graphql",
+      method: "POST",
+      body: { variables: { id: "PR_kw1", title: "Revert PAY-1", body: "broke main" } },
+    });
+  });
+
+  it("reports GraphQL errors", async () => {
+    const f = fakeFetch([
+      { status: 200, body: { node_id: "PR_kw1" } },
+      { status: 200, body: { errors: [{ message: "Pull request is not merged" }] } },
+    ]);
+    await expect(
+      new GitHubProvider("t", "https://api.test", f.impl).revertPullRequest({ repoUrl: "https://github.com/o/r", number: 7, title: "x", body: "y" }),
+    ).rejects.toThrow(/not merged/);
+  });
+});

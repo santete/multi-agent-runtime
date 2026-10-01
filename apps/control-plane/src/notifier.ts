@@ -7,9 +7,9 @@ import type { Store } from "./store.js";
  * Slack-compatible incoming webhooks (Slack, Mattermost, Rocket.Chat,
  * Discord's /slack endpoint, or anything that accepts `{text}`).
  */
-export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "budget" | "quota" | "ci" | "merged";
+export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "budget" | "quota" | "main" | "ci" | "merged";
 
-export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota"];
+export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "main"];
 
 export interface NotifierOptions {
   webhooks: string[];
@@ -127,6 +127,17 @@ export class Notifier {
           kind: "quota",
           text: `:hourglass: Agent \`${p.agent}\` hit its quota; resting until ${p.until}. Its tasks move to other agents or wait. ${this.link("#/agents", "Agents")}`,
         };
+      case "TaskStuck":
+        return { kind: "blocked", text: `:rotating_light: ${name} has not moved (${String(p.state).toLowerCase().replace(/_/g, " ")}): ${p.reason}. ${taskLink}` };
+      case "MainBroken":
+        return {
+          kind: "main",
+          text: `:boom: Merging ${name} broke the base branch's CI (${(p.checks ?? []).join(", ")}). ${
+            p.policy === "revert" ? "Opening a revert." : p.policy === "fix" ? "A fix task was created." : "Someone needs to look."
+          } ${taskLink}`,
+        };
+      case "RevertOpened":
+        return { kind: "main", text: `:leftwards_arrow_with_hook: Revert of ${name} ready to merge: <${p.url}|PR #${p.number}>.` };
       case "CiFailed":
         return { kind: "ci", text: `:x: CI failed for ${name}: ${(p.checks ?? []).join(", ")}. The agent is reworking it. ${taskLink}` };
       case "TaskMerged":
@@ -188,7 +199,7 @@ export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string
     .map((s) => s.trim())
     .filter(Boolean);
   if (!webhooks.length) return null;
-  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "ci", "merged"];
+  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "main", "ci", "merged"];
   const kinds = env.MAR_NOTIFY_EVENTS
     ? env.MAR_NOTIFY_EVENTS.split(",")
         .map((s) => s.trim())

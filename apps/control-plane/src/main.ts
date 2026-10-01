@@ -45,6 +45,9 @@ if (extended) app.log.info({ executions: extended }, "active leases extended aft
 
 // Housekeeping: expire lost runners' leases, requeue/block RETRYING and REWORK tasks, run the merge queue.
 const sweepEveryMs = Number(process.env.MAR_SWEEP_INTERVAL_MS ?? 5000);
+// Escalate READY work nobody can take after this long, and work waiting for a person after these hours.
+const escalateReadyMinutes = Number(process.env.MAR_ESCALATE_READY_MINUTES ?? 30);
+const escalateHumanHours = Number(process.env.MAR_ESCALATE_HUMAN_HOURS ?? 8);
 let sweeping = false;
 const sweeper = setInterval(async () => {
   if (sweeping) return;
@@ -54,6 +57,10 @@ const sweeper = setInterval(async () => {
     if (r.lost || r.requeued || r.blocked) app.log.info(r, "sweep");
     const m = await store.processMergeQueue();
     if (m.merged || m.conflicts || m.failed) app.log.info(m, "merge queue");
+    // Self-healing (spec §46): the base branch's CI after merges, and work that stopped moving.
+    const h = await store.checkMergedCommits();
+    if (h.broken) app.log.warn(h, "base branch broken after a merge");
+    await store.escalateStuck({ readyMinutes: escalateReadyMinutes, humanHours: escalateHumanHours });
   } catch (err) {
     app.log.error(err, "housekeeping failed");
   } finally {
