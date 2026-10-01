@@ -105,7 +105,9 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/budget` | `{dailyUsd?, perTaskUsd?}` or `null`: spending limits ([ADR-0019](docs/adr/0019-cost-and-quota.md)) |
 | GET | `/projects/:id/costs?days=` | spend per day and agent (reported, or estimated from runner `pricing`) |
 | GET | `/agents/cooldowns` | agents resting after a quota hit; `DELETE /runners/:id/cooldowns/:agent` makes one available again |
-| GET | `/agents/stats?projectId=` | per-agent track record: runs, succeeded, failed, running, average duration, rework rate |
+| GET | `/agents/stats?projectId=` | per-agent track record (spec §40): runs, success, validation pass, review rejects, human interventions, tasks merged/blocked, rework, duration, tokens, cost |
+| GET | `/agents/skill-stats?projectId=` | the same per required skill; the scheduler routes by it ([ADR-0020](docs/adr/0020-agent-performance-routing.md)) |
+| PUT | `/projects/:id/routing-policy` | `{routingPolicy: "balanced" | "reliability" | "cost" | "speed"}` |
 | GET | `/me` | the calling user and role |
 | GET | `/stream?projectId=&after=` | live events (server-sent events) |
 | GET | `/events/recent?projectId=&limit=` | recent events, newest first |

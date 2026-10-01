@@ -213,6 +213,13 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
   - Notifier không gửi lại event cũ hơn 60 phút khi được bật lại.
 - [ ] Cooldown do quota mới được kiểm bằng test; trong lúc chạy thật không có agent nào hết quota
 
+### Agent performance · chọn agent theo kết quả thực tế — trạng thái ✅ ([ADR-0020](adr/0020-agent-performance-routing.md))
+
+- [x] Chỉ số §40: validation pass, review rejects, cần người, task merged/blocked, cùng các chỉ số runs/rework/thời gian/cost đã có; thống kê theo skill (`/agents/skill-stats`)
+- [x] Router dùng reliability theo skill (kéo về tỉ lệ tổng), trừ điểm theo rework và lần cần người; policy `speed`; `PUT /projects/:id/routing-policy`
+- [x] UI: bảng Track record mở rộng, bảng By skill
+- [x] **Chạy thật**: trên lịch sử thật của project LP, task `auto` cần javascript+backend được giao cho Codex với lý do "reliability 94% (8/8 runs; 2/2 on javascript, backend) … avg 73s"
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |
