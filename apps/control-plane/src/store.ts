@@ -48,6 +48,10 @@ import {
   type Handoff,
   type HeartbeatResponse,
   type PolicyVerdict,
+  type ProjectPolicy,
+  DEFAULT_PROJECT_POLICY,
+  approverFor,
+  isApprovable,
   type ProjectDto,
   type ReworkContext,
   type ReviewPolicy,
@@ -173,6 +177,11 @@ const toProject = (r: Row): ProjectDto => ({
   budget: r.budget ?? null,
   onBrokenMain: r.on_broken_main ?? "notify",
   planning: { ...DEFAULT_PLANNING, ...(r.planning ?? {}) },
+  policy: {
+    ...DEFAULT_PROJECT_POLICY,
+    ...(r.policy ?? {}),
+    approvers: { ...DEFAULT_PROJECT_POLICY.approvers, ...(r.policy?.approvers ?? {}) },
+  },
   orgId: r.org_id ?? "default",
   allowedAgents: r.allowed_agents ?? [],
   createdAt: iso(r.created_at),
@@ -1399,6 +1408,20 @@ export class Store {
     };
   }
 
+  /** Spec §47: the project's own tool-call rules, allowed hosts and approvers. */
+  async setProjectPolicy(id: string, policy: ProjectPolicy, actor = "local"): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set policy = $2 where id = $1 returning *", [id, JSON.stringify(policy)]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectPolicyChanged", projectId: id, payload: { ...policy, actor } });
+      return project;
+    });
+  }
+
   async setPlanningPolicy(id: string, policy: PlanningPolicy): Promise<ProjectDto> {
     return this.db.tx(async (q) => {
       const project = await one(
@@ -2015,8 +2038,9 @@ export class Store {
     event: Extract<AgentEvent, { kind: "tool_call" }>,
   ): Promise<void> {
     const call = { tool: event.tool, input: event.input };
-    let verdict = await this.ownershipVerdict(q, task, workspace, call, evaluateToolCall(call, { workspace }));
-    if (verdict.decision === "deny" && verdict.risk === "HIGH") {
+    const { policy } = await this.getProject(task.projectId, q);
+    let verdict = await this.ownershipVerdict(q, task, workspace, call, evaluateToolCall(call, { workspace, policy }));
+    if (isApprovable(verdict, policy)) {
       const [approved] = await q.query(
         "select id from approvals where task_id = $1 and action_key = $2 and status = 'approved' limit 1",
         [task.id, approvalKey(call)],
@@ -2481,10 +2505,17 @@ export class Store {
       return { decision: "deny", risk: "HIGH", reason: `execution is ${execution.status}`, summary: call.tool };
     }
     const task = await this.getTask(execution.task_id);
-    let verdict = await this.ownershipVerdict(this.db, task, execution.workspace, call, evaluateToolCall(call, { workspace: execution.workspace }));
+    const { policy } = await this.getProject(task.projectId);
+    let verdict = await this.ownershipVerdict(
+      this.db,
+      task,
+      execution.workspace,
+      call,
+      evaluateToolCall(call, { workspace: execution.workspace, policy }),
+    );
 
-    // HIGH risk goes through the approval gateway (spec §31-32); CRITICAL stays a hard deny.
-    if (verdict.decision === "deny" && verdict.risk === "HIGH") {
+    // Approvable risks go through the approval gateway (spec §31-32); by default CRITICAL stays a hard deny.
+    if (isApprovable(verdict, policy)) {
       const key = approvalKey(call);
       const [approved] = await this.db.query(
         "select id from approvals where task_id = $1 and action_key = $2 and status = 'approved' limit 1",
@@ -2566,8 +2597,8 @@ export class Store {
       const row = (await q.query("select * from approvals where id = $1 for update", [id]))[0];
       if (!row) throw new NotFoundError("approval", id);
       if (row.status !== "pending") throw new ConflictError(`approval ${id} is already ${row.status}`);
-      // Spec §32: HIGH risk needs a senior developer (owners can always decide).
-      const needed = row.risk === "HIGH" ? "senior" : "member";
+      // Spec §32: the project's policy says who decides each risk (default: HIGH needs a senior developer).
+      const needed = approverFor(row.risk, (await this.getProject(row.project_id, q)).policy) ?? "owner";
       if (!hasRole(actor, needed)) throw new ForbiddenError(`${row.risk} risk approvals require role ${needed}`);
       const [updated] = await q.query(
         "update approvals set status = $2, comment = $3, decided_by = $4, decided_at = now() where id = $1 returning *",

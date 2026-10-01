@@ -1,3 +1,5 @@
+import { matchesGlob } from "./paths.js";
+
 /**
  * Tool-call policy (spec §31-32, ADR-0004). Evaluated for every tool call an
  * agent makes, via the PreToolUse hook the runner injects.
@@ -18,6 +20,56 @@ export interface ToolCall {
 export interface PolicyContext {
   /** Absolute path of the task worktree. */
   workspace: string;
+  /** The project's own rules on top of the built-in ones (spec §47). */
+  policy?: ProjectPolicy | undefined;
+}
+
+export type ApproverRole = "member" | "senior" | "owner";
+
+/**
+ * A project rule (spec §47). `command` matches shell commands (a regular
+ * expression); `write` matches files the agent writes and `access` files it
+ * reads or writes (globs of the repository).
+ */
+export interface PolicyRule {
+  kind: "command" | "write" | "access";
+  pattern: string;
+  /**
+   * allow: lifts a built-in approval requirement (never for secrets, .git,
+   * files outside the workspace or CRITICAL actions); approve: needs a
+   * person (HIGH); deny: CRITICAL.
+   */
+  action: "allow" | "approve" | "deny";
+  reason: string;
+}
+
+export interface ProjectPolicy {
+  rules: PolicyRule[];
+  /** Hosts network commands may reach without an approval (`*.example.com` for subdomains). */
+  allowedHosts: string[];
+  /** MEDIUM-risk actions (dependency installs) need an approval too. */
+  approveMedium: boolean;
+  /** Who may approve each risk level (spec §32); CRITICAL null = never, a hard deny. */
+  approvers: { MEDIUM: ApproverRole; HIGH: ApproverRole; CRITICAL: ApproverRole | null };
+}
+
+export const DEFAULT_PROJECT_POLICY: ProjectPolicy = {
+  rules: [],
+  allowedHosts: [],
+  approveMedium: false,
+  approvers: { MEDIUM: "member", HIGH: "senior", CRITICAL: null },
+};
+
+/** Whether a denied verdict can be turned into an allow by a person under this policy. */
+export function isApprovable(verdict: PolicyVerdict, policy: ProjectPolicy = DEFAULT_PROJECT_POLICY): boolean {
+  if (verdict.decision !== "deny") return false;
+  if (verdict.risk === "CRITICAL") return policy.approvers.CRITICAL !== null;
+  return verdict.risk === "HIGH" || verdict.risk === "MEDIUM";
+}
+
+/** The role needed to approve an action of this risk. */
+export function approverFor(risk: RiskLevel, policy: ProjectPolicy = DEFAULT_PROJECT_POLICY): ApproverRole | null {
+  return risk === "LOW" ? "member" : policy.approvers[risk];
 }
 
 export interface PolicyVerdict {
@@ -133,9 +185,13 @@ export function isInsideWorkspace(path: string, workspace: string): boolean {
  * workspace (path ownership, spec §27); empty for other tools.
  */
 export function writtenPaths(call: ToolCall, workspace: string): string[] {
-  if (!WRITE_TOOLS.has(call.tool.toLowerCase())) return [];
+  return WRITE_TOOLS.has(call.tool.toLowerCase()) ? repositoryPaths(pathsOf(call.input), workspace) : [];
+}
+
+/** Repository-relative paths of files inside the workspace; others are left out. */
+function repositoryPaths(paths: string[], workspace: string): string[] {
   const ws = workspace.replace(/\\/g, "/").replace(/\/+$/, "");
-  return pathsOf(call.input).flatMap((p) => {
+  return paths.flatMap((p) => {
     const path = p.replace(/\\/g, "/");
     if (!/^([a-z]:\/|\/)/i.test(path)) return path.split("/").includes("..") ? [] : [path.replace(/^\.\//, "")];
     // Case-insensitive prefix (Windows), keeping the file's own case.
@@ -164,6 +220,125 @@ export function approvalKey(call: ToolCall): string {
 }
 
 export function evaluateToolCall(call: ToolCall, ctx: PolicyContext): PolicyVerdict {
+  const builtin = builtinVerdict(call, ctx);
+  return ctx.policy ? applyProjectPolicy(call, ctx, builtin, ctx.policy) : builtin;
+}
+
+/**
+ * The allow rule that lifts a denied call, if every denied part of it (each
+ * command segment, each file) is covered by an allow rule: allowing `npm view`
+ * must not also allow a `git reset --hard` in the same command.
+ */
+function liftingRule(call: ToolCall, ctx: PolicyContext, allows: PolicyRule[]): PolicyRule | undefined {
+  if (!allows.length) return undefined;
+  const tool = call.tool.toLowerCase();
+  let used: PolicyRule | undefined;
+  const covered = (rule: PolicyRule | undefined) => (rule ? ((used ??= rule), true) : false);
+  if (SHELL_TOOLS.has(tool)) {
+    const ok = segments(commandOf(call.input)).every(
+      (s) =>
+        builtinVerdict({ tool: call.tool, input: { command: s } }, ctx).decision === "allow" ||
+        covered(allows.find((r) => r.kind === "command" && ruleRegExp(r.pattern)?.test(s))),
+    );
+    return ok ? used : undefined;
+  }
+  const writes = WRITE_TOOLS.has(tool);
+  const ok = pathsOf(call.input).every(
+    (p) =>
+      builtinVerdict({ tool: call.tool, input: { file_path: p } }, ctx).decision === "allow" ||
+      covered(
+        allows.find(
+          (r) => (r.kind === "access" || (r.kind === "write" && writes)) && repositoryPaths([p], ctx.workspace).some((f) => matchesGlob(f, r.pattern)),
+        ),
+      ),
+  );
+  return ok ? used : undefined;
+}
+
+/** Built-in verdicts a project rule may never lift. */
+const UNLIFTABLE = new Set(["accessing secrets", "writing inside .git", "writing outside the task workspace"]);
+
+/** A rule's regular expression; an invalid one never matches (they are checked when saved). */
+function ruleRegExp(pattern: string): RegExp | null {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Spec §47: the project's rules on top of the built-in verdict. deny wins
+ * over approve over allow; CRITICAL built-in verdicts are never lowered.
+ */
+function applyProjectPolicy(call: ToolCall, ctx: PolicyContext, builtin: PolicyVerdict, policy: ProjectPolicy): PolicyVerdict {
+  const { workspace } = ctx;
+  const shell = SHELL_TOOLS.has(call.tool.toLowerCase());
+  const command = shell ? commandOf(call.input) : "";
+  const accessed = shell ? [] : repositoryPaths(pathsOf(call.input), workspace);
+  const written = writtenPaths(call, workspace);
+  const matches = (r: PolicyRule) =>
+    r.kind === "command"
+      ? shell && (ruleRegExp(r.pattern)?.test(command) ?? false)
+      : (r.kind === "write" ? written : accessed).some((f) => matchesGlob(f, r.pattern));
+  const hit = (action: PolicyRule["action"]) => policy.rules.find((r) => r.action === action && matches(r));
+  const { summary } = builtin;
+
+  const deny = hit("deny");
+  if (deny) return verdict("deny", "CRITICAL", `project policy: ${deny.reason}`, summary);
+  if (builtin.risk === "CRITICAL") return builtin;
+  const approve = hit("approve");
+  if (approve) return verdict("deny", "HIGH", `project policy: ${approve.reason}`, summary);
+  if (builtin.decision === "deny" && !UNLIFTABLE.has(builtin.reason)) {
+    const allow = liftingRule(call, ctx, policy.rules.filter((r) => r.action === "allow"));
+    if (allow) return verdict("allow", "MEDIUM", `${builtin.reason}, allowed by project policy: ${allow.reason}`, summary);
+    if (builtin.reason === "network access" && reachesOnlyAllowedHosts(command, policy.allowedHosts)) {
+      return verdict("allow", "MEDIUM", "network access to an allowed host", summary);
+    }
+  }
+  if (builtin.decision === "allow" && builtin.risk === "MEDIUM" && policy.approveMedium) {
+    return verdict("deny", "MEDIUM", `${builtin.reason} needs an approval in this project`, summary);
+  }
+  return builtin;
+}
+
+const hostAllowed = (host: string, allowed: string[]) =>
+  allowed.some((a) => {
+    const h = host.toLowerCase();
+    const p = a.toLowerCase();
+    return p.startsWith("*.") ? h.endsWith(p.slice(1)) || h === p.slice(2) : h === p;
+  });
+
+/**
+ * Whether every network command of a shell command only reaches allowed
+ * hosts. Conservative: each network segment needs a URL, and every URL or
+ * bare host name in it must be allowed (a file name like out.json counts as
+ * a host unless it follows -o/--output).
+ */
+export function reachesOnlyAllowedHosts(command: string, allowed: string[]): boolean {
+  if (!allowed.length) return false;
+  const network = /\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm|scp|rsync|ssh|nc|ncat)\b/i;
+  const parts = segments(command).filter((s) => network.test(s));
+  if (!parts.length) return false;
+  return parts.every((segment) => {
+    if (!/\b(curl|wget|invoke-webrequest|iwr|invoke-restmethod|irm)\b/i.test(segment)) return false; // ssh, scp, nc: always ask
+    const tokens = segment.split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ""));
+    let urls = 0;
+    for (const [i, token] of tokens.entries()) {
+      const url = /^https?:\/\/([^/:?#\s]+)/i.exec(token);
+      if (url) {
+        urls++;
+        if (!hostAllowed(url[1]!, allowed)) return false;
+        continue;
+      }
+      const bare = /^(?:[\w-]+@)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(?:\/\S*)?$/i.exec(token);
+      if (bare && !/^(-o|--output|-OutFile)$/i.test(tokens[i - 1] ?? "") && !hostAllowed(bare[1]!, allowed)) return false;
+    }
+    return urls > 0;
+  });
+}
+
+function builtinVerdict(call: ToolCall, ctx: PolicyContext): PolicyVerdict {
   const tool = call.tool.toLowerCase();
 
   if (SHELL_TOOLS.has(tool)) {

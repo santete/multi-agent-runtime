@@ -75,6 +75,37 @@ const planningPolicy = z.object({
   maxAutoTasks: z.number().int().min(1).max(20),
 });
 
+const approver = z.enum(["member", "senior", "owner"]);
+const projectPolicy = z.object({
+  rules: z
+    .array(
+      z
+        .object({
+          kind: z.enum(["command", "write", "access"]),
+          /** A regular expression for commands, a glob for files. */
+          pattern: z.string().trim().min(1).max(300),
+          action: z.enum(["allow", "approve", "deny"]),
+          reason: z.string().trim().min(1).max(300),
+        })
+        .refine(
+          (r) => {
+            if (r.kind !== "command") return true;
+            try {
+              new RegExp(r.pattern);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { message: "not a valid regular expression", path: ["pattern"] },
+        ),
+    )
+    .max(100),
+  allowedHosts: z.array(z.string().trim().toLowerCase().regex(/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*$/, "a host name or *.domain")).max(100),
+  approveMedium: z.boolean(),
+  approvers: z.object({ MEDIUM: approver, HIGH: approver, CRITICAL: approver.nullable() }),
+});
+
 const createProjectBody = z.object({
   key: z
     .string()
@@ -563,6 +594,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/runners", (req) => store.listRunners(scope(req)));
   // Cost and quota (spec §39).
+  app.put("/projects/:id/policy", role("owner"), (req) =>
+    store.setProjectPolicy(idParams.parse(req.params).id, projectPolicy.parse(req.body), req.actor.name),
+  );
   app.put("/projects/:id/planning", role("owner"), (req) =>
     store.setPlanningPolicy(idParams.parse(req.params).id, planningPolicy.parse(req.body)),
   );
