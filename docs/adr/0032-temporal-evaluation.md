@@ -33,7 +33,7 @@ Lý do:
 
 Nên chuyển các luồng dài (merge queue, plan và debate, self-healing) sang Temporal khi có một trong các dấu hiệu sau:
 
-- **Cần chạy nhiều instance control plane.** Sweep đã an toàn nhờ `SKIP LOCKED`, nhưng merge queue, notifier (con trỏ event) và escalation hiện giả định chỉ có một instance chạy vòng lặp. Lúc đó, hoặc thêm leader election (Postgres advisory lock, việc nhỏ), hoặc chuyển sang Temporal.
+- **Cần chạy nhiều instance control plane.** Sweep đã an toàn nhờ `SKIP LOCKED`, nhưng merge queue, notifier (con trỏ event) và escalation hiện giả định chỉ có một instance chạy vòng lặp. Lúc đó, hoặc thêm leader election (Postgres advisory lock, việc nhỏ), hoặc chuyển sang Temporal. → Đã làm leader election ở ADR-0033.
 - Có quy trình nhiều bước xuyên dịch vụ, cần saga hoặc compensation, ví dụ deploy, migration DB, phát hành.
 - Số timer hoặc luồng chờ rất lớn, khiến vòng lặp định kỳ quét DB trở nên tốn kém.
 - Logic điều phối thay đổi thường xuyên đến mức state machine khó đọc hơn code tuần tự.
@@ -41,4 +41,4 @@ Nên chuyển các luồng dài (merge queue, plan và debate, self-healing) san
 ## Consequences
 
 - Không thêm hạ tầng. Platform vẫn chạy được chỉ với một Postgres.
-- Giới hạn đã biết: control plane chỉ nên chạy **một instance** cho các vòng lặp nền. Nếu cần chạy song song, việc đầu tiên là thêm advisory lock cho merge queue, notifier và escalation.
+- ~~Giới hạn đã biết: control plane chỉ nên chạy một instance cho các vòng lặp nền.~~ Đã giải quyết bằng leader election ([ADR-0033](0033-leader-election.md)): nhiều instance cùng phục vụ API, một leader chạy việc nền, failover tự động.

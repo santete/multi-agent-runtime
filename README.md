@@ -150,8 +150,10 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `MAR_NOTIFY_WEBHOOKS` | – | comma-separated Slack-compatible incoming webhook URLs (Slack, Mattermost, Rocket.Chat, Discord `/slack`); unset = no notifications ([ADR-0016](docs/adr/0016-notifications.md)) |
 | `MAR_NOTIFY_EVENTS` | `approval,review,plan,blocked,budget,quota,main` | also `ci`, `merged` |
 | `MAR_ESCALATE_READY_MINUTES` / `MAR_ESCALATE_HUMAN_HOURS` | `30` / `8` | escalate work that has not moved (`TaskStuck`, with the reason) |
-| `MAR_PUBLIC_URL` | `http://HOST:PORT` | dashboard base URL used in notification links |
+| `MAR_PUBLIC_URL` | `http://HOST:PORT` | dashboard base URL used in notification links (set it to the load balancer when running several instances) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | – | OTLP/HTTP collector for traces and metrics (control plane and runner); one trace per execution ([ADR-0017](docs/adr/0017-opentelemetry.md)) |
 | `GITHUB_TOKEN` | – | opens pull requests for delivered tasks (e.g. `GITHUB_TOKEN=$(gh auth token)`); without it the branch is pushed and the PR is skipped |
+
+**Several instances** ([ADR-0033](docs/adr/0033-leader-election.md)): with Postgres (`DATABASE_URL`) you can run any number of control planes behind a load balancer. All of them serve the API, and one leader runs the background work (sweep, merge queue, self-healing, escalation, notifications). If the leader dies, another instance takes over within one sweep interval. `GET /health` reports each instance's `role` (`leader` or `standby`). Migrations are safe when instances start together. With embedded PGlite, run a single instance.
 
 The runner pushes task branches with its machine's own git credentials; agents never can (the policy denies `git push`).

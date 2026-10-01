@@ -42,6 +42,8 @@ export interface AppOptions extends FastifyServerOptions {
   webRoot?: string | undefined;
   /** How often the event stream polls for new events. */
   streamPollMs?: number | undefined;
+  /** Whether this instance runs the background work (leader) or stands by (ADR-0033); shown by /health. */
+  role?: (() => "leader" | "standby") | undefined;
 }
 
 const idParams = z.object({ id: z.uuid() });
@@ -325,7 +327,7 @@ function executionAttributes(params: unknown): Record<string, string> {
 const PUBLIC = { config: { public: true } };
 
 export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
-  const { users, apiToken, webRoot, streamPollMs = 1000, ...fastifyOpts } = opts;
+  const { users, apiToken, webRoot, streamPollMs = 1000, role: instanceRole, ...fastifyOpts } = opts;
   const app = Fastify(fastifyOpts);
   const auth = new Authenticator([
     ...(users ?? []),
@@ -406,7 +408,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     return reply.status(500).send({ error: "internal" });
   });
 
-  app.get("/health", PUBLIC, async () => ({ ok: true }));
+  app.get("/health", PUBLIC, async () => ({ ok: true, ...(instanceRole && { role: instanceRole() }) }));
   app.get("/me", (req) => req.actor);
 
   if (webRoot && existsSync(webRoot)) {

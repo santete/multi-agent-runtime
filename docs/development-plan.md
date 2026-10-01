@@ -320,7 +320,7 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] **Webhook theo org:** `PUT /orgs/:id/notifications {webhooks, kinds}` (owner của org). Notifier luôn chạy: gửi tới webhook chung của platform và tới webhook của org sở hữu project. API chỉ hiện host của URL webhook
 - [x] **Cách ly config của agy:** agent agy chạy với `USERPROFILE`/`HOME` riêng (`<home>/profiles/<agent>`, mặc định bật, tắt bằng `isolateConfig: false`). agy vẫn đăng nhập được vì thông tin đăng nhập không nằm trong `~/.gemini`, nhưng không đọc settings, hook, plugin hay MCP cá nhân. Đã chạy thật (LP-38): agy chạy trong profile riêng và đọc repo bình thường. `ANTIGRAVITY_APP_DATA_DIR` đã thử nhưng làm agy treo nên không dùng
 - [x] **Dữ liệu LP-9:** task bị ghi CANCELLED dù PR #21 đã merge (lỗi cancel khi đang MERGING, đã sửa trước đó). Đã sửa thành COMPLETED, có event `TaskStateCorrected` để audit
-- [x] **Temporal:** đã đánh giá, chưa dùng ([ADR-0032](adr/0032-temporal-evaluation.md)); giới hạn đã biết là các vòng lặp nền chỉ nên chạy trên một instance control plane
+- [x] **Temporal:** đã đánh giá, chưa dùng ([ADR-0032](adr/0032-temporal-evaluation.md)). Giới hạn chỉ chạy được một instance đã được giải quyết bằng leader election (xem bên dưới)
 
 ### Chạy end-to-end đủ tính năng trên GitHub — trạng thái ✅
 
@@ -334,6 +334,14 @@ Cấu hình LP: review chéo do agent, agent duyệt là merge; Codex làm criti
   - metric "autonomous" coi review của agent là review của người, và tính cả task do người làm;
   - planner bảo người ghi câu trả lời vào `DECISIONS.md` (đúng ra là handoff), và khai `paths` cho task của người; `checkPlan` giờ bỏ các path đó;
   - timeline của UI hiện tên thô cho các event mới, và layout tab Policy bị vỡ.
+
+
+### Scale ngang: leader election — trạng thái ✅ ([ADR-0033](adr/0033-leader-election.md))
+
+- [x] Advisory lock trên Postgres (kết nối riêng, kiểm tra mỗi lượt): chỉ leader chạy sweep, merge queue, self-healing, escalation và thông báo; mọi instance phục vụ API
+- [x] `/health` trả `role: leader | standby`; `migrate()` an toàn khi nhiều instance khởi động cùng lúc
+- [x] Test trên Postgres thật (container): chuyển giao lock, failover, hai control plane chỉ gửi webhook một lần, ba instance cùng migrate một DB
+- [x] **Chạy thật** với hai control plane trên một Postgres (HA-1, PR #42): giết leader thì standby lên thay trong chưa tới 8 giây, rồi merge PR; leader cũ khởi động lại thì về standby; tổng cộng chỉ có một thông báo
 
 ## Rủi ro đang theo dõi
 
