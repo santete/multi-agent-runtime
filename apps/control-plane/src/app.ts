@@ -13,7 +13,7 @@ import {
 } from "@mar/telemetry";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
-import { type Actor, Authenticator, type Role, type UserConfig, hasRole } from "./auth.js";
+import { type Actor, ALL_ORGS, Authenticator, DEFAULT_ORG, type Role, type UserConfig, hasRole } from "./auth.js";
 import { ConflictError, ForbiddenError, NotFoundError, type Store, UnauthorizedError } from "./store.js";
 
 export const EXECUTION_TOKEN_HEADER = "x-mar-execution-token";
@@ -93,7 +93,35 @@ const createProjectBody = z.object({
   budget: budget.nullable().optional(),
   onBrokenMain: z.enum(["notify", "revert", "fix"]).optional(),
   planning: planningPolicy.partial().optional(),
+  orgId: z.string().min(1).optional(),
+  allowedAgents: z.array(z.string().min(1)).max(50).optional(),
 });
+
+const orgBody = z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/), name: z.string().trim().min(1).max(200) });
+const profileBody = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "lowercase letters, digits, dots, dashes"),
+  adapter: z.string().min(1),
+  description: z.string().max(2000).optional(),
+  skills: z.array(z.string().min(1)).max(50).optional(),
+  cost: z.enum(["low", "medium", "high"]).optional(),
+  pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
+  instructions: z.string().max(20_000).optional(),
+  public: z.boolean().optional(),
+});
+
+/** Path segment before ":id" → the kind of resource whose organization is checked (spec §49). */
+const RESOURCES = {
+  projects: "project",
+  tasks: "task",
+  plans: "plan",
+  executions: "execution",
+  approvals: "approval",
+  decisions: "decision",
+  knowledge: "knowledge",
+  runners: "runner",
+  "agent-profiles": "profile",
+} as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const mergePolicyBody = z.object({ revalidateOnBaseChange: z.boolean(), waitForChecks: z.boolean() });
 
@@ -196,6 +224,7 @@ const registerRunnerBody = z.object({
       cost: z.enum(["low", "medium", "high"]).optional(),
       pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
       maxConcurrent: z.number().int().min(1).max(100).optional(),
+      profile: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}(@\d+)?$/).optional(),
     }),
   ),
 });
@@ -300,6 +329,26 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     req.actor = actor;
   });
 
+  /** The caller's organization, or undefined for a platform admin (sees everything). */
+  const scope = (req: { actor: Actor }) => (req.actor.org === ALL_ORGS ? undefined : req.actor.org);
+  /** Resources of another organization look as if they did not exist. */
+  const checkOrg = async (actor: Actor, kind: (typeof RESOURCES)[keyof typeof RESOURCES], id: string) => {
+    if (actor.org === ALL_ORGS) return;
+    if (!UUID.test(id)) throw new NotFoundError(kind, id);
+    const org = await store.orgOf(kind, id);
+    // Public marketplace profiles (no organization) are visible to everyone.
+    if (org !== actor.org && !(kind === "profile" && org === null)) throw new NotFoundError(kind, id);
+  };
+  app.addHook("preHandler", async (req) => {
+    const route = req.routeOptions.url;
+    if (!req.actor || !route) return;
+    const m = /^\/([a-z-]+)\/:id(\/|$)/.exec(route);
+    const kind = m ? RESOURCES[m[1] as keyof typeof RESOURCES] : undefined;
+    if (kind) await checkOrg(req.actor, kind, String((req.params as { id?: unknown }).id ?? ""));
+    const projectId = (req.query as { projectId?: unknown } | undefined)?.projectId;
+    if (typeof projectId === "string") await checkOrg(req.actor, "project", projectId);
+  });
+
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: "validation", issues: err.issues });
     if (err instanceof NotFoundError) return reply.status(404).send({ error: "not_found", message: err.message });
@@ -324,10 +373,40 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   // ---- projects & tasks ---------------------------------------------------
 
   app.post("/projects", role("owner"), async (req, reply) => {
+    const body = createProjectBody.parse(req.body);
+    // Projects go into the caller's organization; only platform admins choose another.
+    if (body.orgId && scope(req) && body.orgId !== scope(req)) throw new ForbiddenError("cannot create a project in another organization");
+    const org = scope(req) ?? body.orgId ?? DEFAULT_ORG;
     reply.status(201);
-    return store.createProject(createProjectBody.parse(req.body));
+    return store.createProject(body, org);
   });
-  app.get("/projects", () => store.listProjects());
+  app.get("/projects", (req) => store.listProjects(scope(req)));
+  app.put("/projects/:id/agents", role("owner"), (req) =>
+    store.setAllowedAgents(idParams.parse(req.params).id, z.object({ allowedAgents: z.array(z.string().min(1)).max(50) }).parse(req.body).allowedAgents),
+  );
+
+  // Organizations (spec §49): platform admins create them; people see their own.
+  app.get("/orgs", (req) => store.listOrgs(scope(req)));
+  app.post("/orgs", role("owner"), async (req, reply) => {
+    if (scope(req)) throw new ForbiddenError("only platform admins create organizations");
+    const body = orgBody.parse(req.body);
+    reply.status(201);
+    return store.createOrg(body.id, body.name, req.actor.name);
+  });
+
+  // Agent marketplace (spec §53): profiles published to the organization, or to everyone.
+  app.get("/agent-profiles", (req) => store.listProfiles(scope(req)));
+  app.post("/agent-profiles", role("senior"), async (req, reply) => {
+    const body = profileBody.parse(req.body);
+    if (body.public && scope(req)) throw new ForbiddenError("only platform admins publish to every organization");
+    reply.status(201);
+    return store.publishProfile(body, body.public ? null : (scope(req) ?? DEFAULT_ORG), req.actor.name);
+  });
+  app.post("/agent-profiles/:id/deprecate", role("senior"), async (req) => {
+    const { id } = idParams.parse(req.params);
+    if (scope(req) && (await store.orgOf("profile", id)) !== scope(req)) throw new ForbiddenError("only its organization deprecates a profile");
+    return store.deprecateProfile(id, req.actor.name);
+  });
   app.get("/projects/:id", (req) => store.getProject(idParams.parse(req.params).id));
   app.put("/projects/:id/review", role("owner"), (req) =>
     store.setReviewPolicy(idParams.parse(req.params).id, reviewPolicyBody.parse(req.body)),
@@ -393,11 +472,12 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/projects/:id/queue", (req) => store.queue(idParams.parse(req.params).id));
 
   // Human as executor (spec §61): agents' questions and tasks for people.
-  app.get("/human-tasks", () => store.humanTasks());
+  app.get("/human-tasks", (req) => store.humanTasks(scope(req)));
   app.get("/decisions", (req) =>
-    store.listDecisions(
-      z.object({ status: z.enum(["pending", "answered"]).optional(), taskId: z.uuid().optional() }).parse(req.query),
-    ),
+    store.listDecisions({
+      ...z.object({ status: z.enum(["pending", "answered"]).optional(), taskId: z.uuid().optional() }).parse(req.query),
+      org: scope(req),
+    }),
   );
   app.post("/decisions/:id/answer", role("member"), (req) =>
     store.answerDecision(idParams.parse(req.params).id, z.object({ answer: z.string().trim().min(1).max(10_000) }).parse(req.body).answer, req.actor.name),
@@ -430,7 +510,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/approvals", (req) => {
     const { status } = approvalsQuery.parse(req.query);
-    return store.listApprovals(status ? { status } : {});
+    return store.listApprovals({ ...(status && { status }), org: scope(req) });
   });
   // The store enforces the risk-specific role (HIGH needs senior).
   app.post("/approvals/:id/approve", role("member"), (req) =>
@@ -444,7 +524,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   app.get("/events/recent", (req) => {
     const { projectId, limit } = recentQuery.parse(req.query);
-    return store.recentEvents(limit, projectId);
+    return store.recentEvents(limit, projectId, scope(req));
   });
 
   app.get("/stream", async (req, reply) => {
@@ -463,7 +543,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     reply.raw.write(`: connected at ${cursor}\n\n`);
     let idle = 0;
     while (open) {
-      const events = await store.listEvents(projectId ? { projectId } : {}, cursor, 500);
+      const events = await store.listEvents(projectId ? { projectId } : { org: scope(req) }, cursor, 500);
       for (const e of events) reply.raw.write(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`);
       if (events.length) {
         cursor = events.at(-1)!.seq;
@@ -479,7 +559,7 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   // ---- agent registry & runner protocol -----------------------------------
 
-  app.get("/runners", () => store.listRunners());
+  app.get("/runners", (req) => store.listRunners(scope(req)));
   // Cost and quota (spec §39).
   app.put("/projects/:id/planning", role("owner"), (req) =>
     store.setPlanningPolicy(idParams.parse(req.params).id, planningPolicy.parse(req.body)),
@@ -496,14 +576,14 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/projects/:id/costs", (req) =>
     store.costReport(idParams.parse(req.params).id, z.object({ days: z.coerce.number().int().min(1).max(90).default(14) }).parse(req.query).days),
   );
-  app.get("/agents/cooldowns", () => store.listCooldowns());
+  app.get("/agents/cooldowns", (req) => store.listCooldowns(scope(req)));
   app.delete("/runners/:id/cooldowns/:agent", role("senior"), async (req, reply) => {
     const { id, agent } = z.object({ id: z.uuid(), agent: z.string().min(1) }).parse(req.params);
     await store.clearCooldown(id, agent, req.actor.name);
     reply.status(204);
   });
   app.get("/agents/skill-stats", (req) =>
-    store.agentSkillStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId),
+    store.agentSkillStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId, undefined, scope(req)),
   );
   app.put("/projects/:id/routing-policy", role("owner"), (req) =>
     store.setRoutingPolicy(
@@ -511,12 +591,15 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
       z.object({ routingPolicy: z.enum(["balanced", "reliability", "cost", "speed"]) }).parse(req.body).routingPolicy,
     ),
   );
-  app.get("/agents/stats", (req) => store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId));
+  app.get("/agents/stats", (req) =>
+    store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId, undefined, scope(req)),
+  );
 
   app.post("/runners/register", role("runner"), async (req, reply) => {
     const { name, agents } = registerRunnerBody.parse(req.body);
     reply.status(201);
-    return { runnerId: await store.registerRunner(name, agents) };
+    // A runner works for the organization of its token (open mode: the default organization).
+    return { runnerId: await store.registerRunner(name, agents, scope(req) ?? DEFAULT_ORG) };
   });
 
   app.post("/runners/:id/claim", role("runner"), async (req, reply) => {

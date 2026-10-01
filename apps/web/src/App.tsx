@@ -2,6 +2,7 @@ import type { ActorDto } from "@mar/core";
 import { useEffect, useState } from "react";
 import { AgentsPage } from "./components/AgentsPage.js";
 import { ApprovalsPage } from "./components/ApprovalsPage.js";
+import { MarketplacePage } from "./components/MarketplacePage.js";
 import { Login } from "./components/Login.js";
 import { Overview } from "./components/Overview.js";
 import { PlanPage } from "./components/PlansPage.js";
@@ -51,6 +52,9 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
           <a className={route.page === "agents" ? "active" : ""} href={href.agents()}>
             Agents
           </a>
+          <a className={route.page === "marketplace" ? "active" : ""} href={href.marketplace()}>
+            Marketplace
+          </a>
           <div className="nav-title">Projects</div>
           {(projects ?? []).map((p) => (
             <a key={p.id} className={route.page === "project" && route.id === p.id ? "active" : ""} href={href.project(p.id)}>
@@ -61,7 +65,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
         <footer className="sidebar-foot">
           <span className={`live-dot ${status}`} title={`event stream: ${status}`} />
           <span>
-            {actor.name} <span className="muted">· {actor.role}</span>
+            {actor.name} <span className="muted">· {actor.role}{actor.org && actor.org !== "*" ? ` · ${actor.org}` : ""}</span>
           </span>
           {actor.name !== "local" && (
             <button className="link" onClick={onLogout}>
@@ -77,6 +81,7 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
         {route.page === "plan" && <PlanPage id={route.id} actor={actor} />}
         {route.page === "approvals" && <ApprovalsPage actor={actor} />}
         {route.page === "agents" && <AgentsPage actor={actor} />}
+        {route.page === "marketplace" && <MarketplacePage actor={actor} />}
       </main>
     </div>
   );

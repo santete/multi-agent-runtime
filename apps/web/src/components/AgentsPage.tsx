@@ -131,6 +131,12 @@ export function AgentsPage({ actor }: { actor: ActorDto }) {
                 <li key={a.id}>
                   <span className="chip">{a.id}</span> <span className="muted small">{a.adapter}</span>
                   {a.cost && <span className="muted small"> · cost {a.cost}</span>}
+                  {a.profile && (
+                    <a className="small" href="#/marketplace" title="built from a marketplace profile">
+                      {" "}
+                      · {a.profile}
+                    </a>
+                  )}
                   {a.skills?.length ? <div className="muted small">skills: {a.skills.join(", ")}</div> : null}
                   {cooldowns
                     ?.filter((c) => c.runnerId === r.id && c.agent === a.id)

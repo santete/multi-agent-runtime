@@ -10,14 +10,14 @@ const users = [
 describe("Authenticator", () => {
   it("resolves bearer tokens to actors", () => {
     const auth = new Authenticator(users);
-    expect(auth.authenticate("Bearer senior-token-0000001")).toEqual({ name: "sam", role: "senior" });
+    expect(auth.authenticate("Bearer senior-token-0000001")).toEqual({ name: "sam", role: "senior", org: "default" });
     expect(auth.authenticate("Bearer nope")).toBeNull();
     expect(auth.authenticate(undefined)).toBeNull();
     expect(auth.authenticate("senior-token-0000001")).toBeNull();
   });
 
   it("acts as the local owner in open mode", () => {
-    expect(new Authenticator([]).authenticate(undefined)).toEqual({ name: "local", role: "owner" });
+    expect(new Authenticator([]).authenticate(undefined)).toEqual({ name: "local", role: "owner", org: "*" });
   });
 });
 
@@ -36,7 +36,7 @@ describe("hasRole", () => {
 describe("loadUsers", () => {
   it("adds MAR_API_TOKEN as an owner and rejects short tokens", () => {
     expect(loadUsers({ MAR_API_TOKEN: "a-long-enough-token" })).toEqual([
-      { name: "admin", role: "owner", token: "a-long-enough-token" },
+      { name: "admin", role: "owner", token: "a-long-enough-token", org: "*" },
     ]);
     expect(() => loadUsers({ MAR_API_TOKEN: "short" })).toThrow();
   });

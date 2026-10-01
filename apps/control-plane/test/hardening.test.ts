@@ -69,7 +69,7 @@ describe("roles", () => {
   it("rejects missing or unknown tokens and reports who is calling", async () => {
     expect((await as(null, "GET", "/projects")).status).toBe(401);
     expect((await app.inject({ method: "GET", url: "/projects", headers: { authorization: "Bearer nope" } })).statusCode).toBe(401);
-    expect((await as("viewer", "GET", "/me")).body).toEqual({ name: "vic", role: "viewer" });
+    expect((await as("viewer", "GET", "/me")).body).toEqual({ name: "vic", role: "viewer", org: "default" });
     expect((await as(null, "GET", "/health")).status).toBe(200);
   });
 

@@ -2,6 +2,9 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import {
   type AgentDescriptor,
   type AgentCooldown,
+  type AgentProfileDto,
+  type OrgDto,
+  type PublishAgentProfileRequest,
   type AgentSkillStats,
   type AgentStats,
   type Budget,
@@ -167,6 +170,8 @@ const toProject = (r: Row): ProjectDto => ({
   budget: r.budget ?? null,
   onBrokenMain: r.on_broken_main ?? "notify",
   planning: { ...DEFAULT_PLANNING, ...(r.planning ?? {}) },
+  orgId: r.org_id ?? "default",
+  allowedAgents: r.allowed_agents ?? [],
   createdAt: iso(r.created_at),
 });
 
@@ -267,6 +272,23 @@ const toPlan = (r: Row): PlanDto => ({
   comment: r.comment ?? null,
   createdAt: iso(r.created_at),
   decidedAt: r.decided_at ? iso(r.decided_at) : null,
+});
+
+const toProfile = (r: Row): AgentProfileDto => ({
+  id: r.id,
+  orgId: r.org_id ?? null,
+  name: r.name,
+  version: r.version,
+  adapter: r.adapter,
+  description: r.description,
+  skills: r.skills ?? [],
+  cost: r.cost,
+  pricing: r.pricing ?? null,
+  instructions: r.instructions,
+  publishedBy: r.published_by ?? null,
+  deprecated: Boolean(r.deprecated),
+  createdAt: iso(r.created_at),
+  usage: { executions: r.executions ?? 0, succeeded: r.succeeded ?? 0, failed: r.failed ?? 0 },
 });
 
 const toDecision = (r: Row): DecisionDto => ({
@@ -407,15 +429,16 @@ export class Store {
 
   // ---- projects -----------------------------------------------------------
 
-  async createProject(req: CreateProjectRequest): Promise<ProjectDto> {
+  async createProject(req: CreateProjectRequest, org = "default"): Promise<ProjectDto> {
     return this.db.tx(async (q) => {
+      if (!(await q.query("select 1 from orgs where id = $1", [org])).length) throw new ConflictError(`unknown organization: ${org}`);
       const existing = await q.query("select 1 from projects where key = $1", [req.key]);
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
            review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks,
-           validation_sandbox, budget, on_broken_main, planning)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning *`,
+           validation_sandbox, budget, on_broken_main, planning, org_id, allowed_agents)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning *`,
         [
           randomUUID(),
           req.key,
@@ -433,6 +456,8 @@ export class Store {
           req.budget ? JSON.stringify(req.budget) : null,
           req.onBrokenMain ?? "notify",
           JSON.stringify({ ...DEFAULT_PLANNING, ...(req.planning ?? {}) }),
+          org,
+          JSON.stringify(req.allowedAgents ?? []),
         ],
       );
       const project = toProject(row!);
@@ -441,8 +466,144 @@ export class Store {
     });
   }
 
-  listProjects(): Promise<ProjectDto[]> {
-    return this.db.query("select * from projects order by created_at").then((rows) => rows.map(toProject));
+  listProjects(org?: string): Promise<ProjectDto[]> {
+    return this.db
+      .query("select * from projects where ($1::text is null or org_id = $1) order by created_at", [org ?? null])
+      .then((rows) => rows.map(toProject));
+  }
+
+  // ---- organizations (spec §49) ---------------------------------------------
+
+  listOrgs(org?: string): Promise<OrgDto[]> {
+    return this.db
+      .query("select * from orgs where ($1::text is null or id = $1) order by id", [org ?? null])
+      .then((rows) => rows.map((r) => ({ id: r.id, name: r.name, createdAt: iso(r.created_at) })));
+  }
+
+  async createOrg(id: string, name: string, actor?: string): Promise<OrgDto> {
+    return this.db.tx(async (q) => {
+      if ((await q.query("select 1 from orgs where id = $1", [id])).length) throw new ConflictError(`organization already exists: ${id}`);
+      const [row] = await q.query("insert into orgs (id, name) values ($1, $2) returning *", [id, name]);
+      await appendEvent(q, { type: "OrgCreated", payload: { orgId: id, name, actor: actor ?? null } });
+      return { id: row!.id, name: row!.name, createdAt: iso(row!.created_at) };
+    });
+  }
+
+  /** Organizations named in the users file exist (created on start). */
+  async ensureOrgs(ids: string[]): Promise<void> {
+    for (const id of ids) await this.db.query("insert into orgs (id, name) values ($1, $1) on conflict (id) do nothing", [id]);
+  }
+
+  /**
+   * The organization a resource belongs to, for access checks (spec §49);
+   * NotFoundError when it does not exist.
+   */
+  async orgOf(kind: "project" | "task" | "plan" | "execution" | "approval" | "decision" | "knowledge" | "runner" | "profile", id: string): Promise<string | null> {
+    const sql: Record<typeof kind, string> = {
+      project: "select org_id from projects where id = $1",
+      task: "select p.org_id from tasks t join projects p on p.id = t.project_id where t.id = $1",
+      plan: "select p.org_id from plans x join projects p on p.id = x.project_id where x.id = $1",
+      execution: "select p.org_id from executions e join tasks t on t.id = e.task_id join projects p on p.id = t.project_id where e.id = $1",
+      approval: "select p.org_id from approvals a join projects p on p.id = a.project_id where a.id = $1",
+      decision: "select p.org_id from decisions d join tasks t on t.id = d.task_id join projects p on p.id = t.project_id where d.id = $1",
+      knowledge: "select p.org_id from knowledge k join projects p on p.id = k.project_id where k.id = $1",
+      runner: "select org_id from runners where id = $1",
+      profile: "select org_id from agent_profiles where id = $1",
+    };
+    const [row] = await this.db.query<{ org_id: string | null }>(sql[kind], [id]);
+    if (!row) throw new NotFoundError(kind, id);
+    return row.org_id;
+  }
+
+  async setAllowedAgents(id: string, agents: string[]): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set allowed_agents = $2 where id = $1 returning *", [id, JSON.stringify(agents)]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectAgentsChanged", projectId: id, payload: { allowedAgents: agents } });
+      return project;
+    });
+  }
+
+  // ---- agent marketplace (spec §53) -----------------------------------------
+
+  /** Publishes a new version of an agent profile to an organization's catalog, or to everyone (org null). */
+  async publishProfile(req: PublishAgentProfileRequest, org: string | null, actor?: string): Promise<AgentProfileDto> {
+    return this.db.tx(async (q) => {
+      const [latest] = await q.query<{ v: number | null }>(
+        "select max(version) as v from agent_profiles where coalesce(org_id, '') = coalesce($1, '') and name = $2",
+        [org, req.name],
+      );
+      const id = randomUUID();
+      await q.query(
+        `insert into agent_profiles (id, org_id, name, version, adapter, description, skills, cost, pricing, instructions, published_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          id,
+          org,
+          req.name,
+          (latest?.v ?? 0) + 1,
+          req.adapter,
+          req.description ?? "",
+          JSON.stringify(req.skills ?? []),
+          req.cost ?? "medium",
+          req.pricing ? JSON.stringify(req.pricing) : null,
+          req.instructions ?? "",
+          actor ?? null,
+        ],
+      );
+      await appendEvent(q, { type: "AgentProfilePublished", payload: { profileId: id, name: req.name, version: (latest?.v ?? 0) + 1, org, actor: actor ?? null } });
+      return (await this.listProfilesTx(q, org ?? undefined, id))[0]!;
+    });
+  }
+
+  listProfiles(org?: string): Promise<AgentProfileDto[]> {
+    return this.listProfilesTx(this.db, org);
+  }
+
+  /** Profiles visible to an organization (its own and public ones), with what they did on its projects. */
+  private async listProfilesTx(q: Queryable, org?: string, id?: string): Promise<AgentProfileDto[]> {
+    const rows = await q.query(
+      `select ap.*,
+         (select count(*) from executions e join tasks t on t.id = e.task_id join projects p on p.id = t.project_id
+          where split_part(e.profile, '@', 1) = ap.name and ($1::text is null or p.org_id = $1))::int as executions,
+         (select count(*) from executions e join tasks t on t.id = e.task_id join projects p on p.id = t.project_id
+          where split_part(e.profile, '@', 1) = ap.name and e.status = 'succeeded' and ($1::text is null or p.org_id = $1))::int as succeeded,
+         (select count(*) from executions e join tasks t on t.id = e.task_id join projects p on p.id = t.project_id
+          where split_part(e.profile, '@', 1) = ap.name and e.status in ('failed', 'lost') and ($1::text is null or p.org_id = $1))::int as failed
+       from agent_profiles ap
+       where ($1::text is null or ap.org_id = $1 or ap.org_id is null) and ($2::uuid is null or ap.id = $2)
+       order by ap.name, ap.version desc`,
+      [org ?? null, id ?? null],
+    );
+    return rows.map(toProfile);
+  }
+
+  async deprecateProfile(id: string, actor?: string): Promise<AgentProfileDto> {
+    return this.db.tx(async (q) => {
+      const [row] = await q.query("update agent_profiles set deprecated = true where id = $1 returning *", [id]);
+      if (!row) throw new NotFoundError("profile", id);
+      await appendEvent(q, { type: "AgentProfileDeprecated", payload: { profileId: id, name: row.name, version: row.version, actor: actor ?? null } });
+      return (await this.listProfilesTx(q, undefined, id))[0]!;
+    });
+  }
+
+  /**
+   * The profile an agent names ("name" = latest usable version, or
+   * "name@version"), preferring the organization's own over a public one.
+   */
+  private async resolveProfile(q: Queryable, ref: string, org: string): Promise<AgentProfileDto | undefined> {
+    const [name, version] = ref.split("@");
+    const rows = await q.query(
+      `select * from agent_profiles where name = $1 and (org_id = $2 or org_id is null)
+         and ($3::int is null or version = $3) and ($3::int is not null or not deprecated)
+       order by (org_id is null), version desc limit 1`,
+      [name, org, version ? Number(version) : null],
+    );
+    return rows[0] ? toProfile({ ...rows[0], executions: 0, succeeded: 0, failed: 0 }) : undefined;
   }
 
   getProject(id: string, q: Queryable = this.db): Promise<ProjectDto> {
@@ -688,7 +849,7 @@ export class Store {
     const project = await this.getProject(task.projectId);
     const [spend] = await this.db.query<{ spent: string }>(`select ${TODAY_SPEND_SQL} as spent from projects p where p.id = $1`, [project.id]);
     if (project.budget?.dailyUsd !== undefined && Number(spend?.spent ?? 0) >= project.budget.dailyUsd) return "the project's daily budget is used up";
-    const runners = (await this.listRunners()).filter((r) => r.online);
+    const runners = (await this.listRunners(project.orgId)).filter((r) => r.online);
     const offered = runners.flatMap((r) => r.agents.map((a) => ({ runner: r, agent: a })));
     const fits = offered.filter(({ agent }) =>
       task.agent === AUTO
@@ -700,7 +861,7 @@ export class Store {
         ? `no online runner has an agent with ${task.requires.join(", ") || "any skill"}${task.excludedAgents.length ? ` (excluding ${task.excludedAgents.join(", ")})` : ""}`
         : `no online runner offers ${task.agent}`;
     }
-    const resting = await this.listCooldowns();
+    const resting = await this.listCooldowns(project.orgId);
     const available = fits.filter(({ runner, agent }) => !resting.some((c) => c.runnerId === runner.id && c.agent === agent.id));
     if (!available.length) {
       const until = resting.map((c) => c.until).sort()[0];
@@ -984,16 +1145,17 @@ export class Store {
       planId,
       goal: plan.goal,
       baseBranch: project.defaultBranch,
-      agents: [...(await this.onlineAgents(q)), { id: HUMAN_EXECUTOR, skills: ["decision", "manual"], cost: null }],
+      agents: [...(await this.onlineAgents(q, project.orgId)), { id: HUMAN_EXECUTOR, skills: ["decision", "manual"], cost: null }],
       openTasks: open.map((r) => ({ key: r.key, title: r.title, state: r.state })),
       ...(previous?.proposal && { previous: { proposal: previous.proposal, feedback: plan.feedback ?? "" } }),
     };
   }
 
-  private async onlineAgents(q: Queryable): Promise<PlanningContext["agents"]> {
+  private async onlineAgents(q: Queryable, org?: string): Promise<PlanningContext["agents"]> {
     const rows = await q.query<{ agents: AgentDescriptor[] }>(
-      "select agents from runners where last_seen_at > now() - make_interval(secs => $1) order by name",
-      [this.runnerOnlineSeconds],
+      `select agents from runners where last_seen_at > now() - make_interval(secs => $1)
+         and ($2::text is null or org_id = $2) order by name`,
+      [this.runnerOnlineSeconds, org ?? null],
     );
     const agents = new Map<string, PlanningContext["agents"][number]>();
     for (const a of rows.flatMap((r) => r.agents)) {
@@ -1011,7 +1173,7 @@ export class Store {
     proposal: PlanProposal,
   ): Promise<ExecutionDto> {
     // Agents the planner made up are left to the scheduler instead.
-    const known = new Set([...(await this.onlineAgents(q)).map((a) => a.id), HUMAN_EXECUTOR]);
+    const known = new Set([...(await this.onlineAgents(q, (await this.getProject(task.projectId, q)).orgId)).map((a) => a.id), HUMAN_EXECUTOR]);
     const plan = { ...proposal, tasks: proposal.tasks.map((t) => (t.agent && !known.has(t.agent) ? { ...t, agent: null } : t)) };
     const execution = await this.finishExecution(q, task, id, req, "succeeded", { tasks: plan.tasks.length });
     await this.proposeKnowledge(q, task, plan.knowledge);
@@ -1092,10 +1254,11 @@ export class Store {
    * online to take it. Otherwise a person decides, as always.
    */
   private async maybeAutoApprove(q: Queryable, plan: PlanDto): Promise<void> {
-    const policy = (await this.getProject(plan.projectId, q)).planning;
+    const planProject = await this.getProject(plan.projectId, q);
+    const policy = planProject.planning;
     if (!policy.autoApprove) return;
     const tasks = plan.proposal?.tasks ?? [];
-    const agents = await this.onlineAgents(q);
+    const agents = await this.onlineAgents(q, planProject.orgId);
     const coverable = (t: (typeof tasks)[number]) =>
       t.agent
         ? t.agent === HUMAN_EXECUTOR || agents.some((a) => a.id === t.agent)
@@ -1164,7 +1327,7 @@ export class Store {
       round: plan.round,
       baseBranch: project.defaultBranch,
       proposal: plan.proposal ?? { summary: "", tasks: [], knowledge: [] },
-      agents: (await this.onlineAgents(q)).map((a) => ({ id: a.id, skills: a.skills })),
+      agents: (await this.onlineAgents(q, project.orgId)).map((a) => ({ id: a.id, skills: a.skills })),
       planner: plan.plannerAgent ?? "unknown",
     };
   }
@@ -1351,13 +1514,33 @@ export class Store {
   // ---- runners (agent registry) -------------------------------------------
 
   /** Registers or re-registers (same name keeps the id, so sessions stay resumable). */
-  async registerRunner(name: string, agents: AgentDescriptor[]): Promise<string> {
+  async registerRunner(name: string, offered: AgentDescriptor[], org = "default"): Promise<string> {
     return this.db.tx(async (q) => {
+      // Agents built from a marketplace profile: what the runner did not set comes from it.
+      const agents: AgentDescriptor[] = [];
+      for (const a of offered) {
+        if (!a.profile) {
+          agents.push(a);
+          continue;
+        }
+        const profile = await this.resolveProfile(q, a.profile, org);
+        if (!profile) throw new ConflictError(`agent ${a.id}: no usable profile "${a.profile}" in the marketplace`);
+        if (profile.adapter !== a.adapter) {
+          throw new ConflictError(`agent ${a.id} uses adapter ${a.adapter}, but profile ${profile.name} is for ${profile.adapter}`);
+        }
+        agents.push({
+          ...a,
+          skills: a.skills?.length ? a.skills : profile.skills,
+          cost: a.cost ?? profile.cost,
+          ...((a.pricing ?? profile.pricing) && { pricing: a.pricing ?? profile.pricing! }),
+          profile: `${profile.name}@${profile.version}`,
+        });
+      }
       const [row] = await q.query<{ id: string }>(
-        `insert into runners (id, name, agents) values ($1, $2, $3)
-         on conflict (name) do update set agents = excluded.agents, last_seen_at = now()
+        `insert into runners (id, name, agents, org_id) values ($1, $2, $3, $4)
+         on conflict (name) do update set agents = excluded.agents, org_id = excluded.org_id, last_seen_at = now()
          returning id`,
-        [randomUUID(), name, JSON.stringify(agents)],
+        [randomUUID(), name, JSON.stringify(agents), org],
       );
       await appendEvent(q, {
         type: "RunnerRegistered",
@@ -1367,10 +1550,11 @@ export class Store {
     });
   }
 
-  async listRunners(): Promise<RunnerDto[]> {
+  async listRunners(org?: string): Promise<RunnerDto[]> {
     const rows = await this.db.query(
-      `select *, last_seen_at > now() - make_interval(secs => $1) as online from runners order by name`,
-      [this.runnerOnlineSeconds],
+      `select *, last_seen_at > now() - make_interval(secs => $1) as online from runners
+       where ($2::text is null or org_id = $2) order by name`,
+      [this.runnerOnlineSeconds, org ?? null],
     );
     const active = await this.db.query(
       `select e.id, e.runner_id, e.status, e.attempt, t.id as task_id, t.key, t.agent from executions e
@@ -1381,6 +1565,7 @@ export class Store {
       id: r.id as string,
       name: r.name as string,
       agents: r.agents as AgentDescriptor[],
+      orgId: r.org_id ?? "default",
       online: Boolean(r.online),
       registeredAt: iso(r.registered_at),
       lastSeenAt: iso(r.last_seen_at),
@@ -1396,8 +1581,8 @@ export class Store {
    */
   async claim(runnerId: string): Promise<ClaimResponse | null> {
     return this.db.tx(async (q) => {
-      const [runner] = await q.query<{ agents: AgentDescriptor[] }>(
-        "update runners set last_seen_at = now() where id = $1 returning agents",
+      const [runner] = await q.query<{ agents: AgentDescriptor[]; org_id: string }>(
+        "update runners set last_seen_at = now() where id = $1 returning agents, org_id",
         [runnerId],
       );
       if (!runner) throw new NotFoundError("runner", runnerId);
@@ -1422,6 +1607,9 @@ export class Store {
       const candidates = await q.query(
         `select t.* from tasks t join projects p on p.id = t.project_id
          where t.state = 'READY' and (t.agent = any($1::text[]) or t.agent = '${AUTO}')
+           -- spec §49: a runner works for its own organization, on agents its projects allow
+           and p.org_id = $2
+           and (jsonb_array_length(p.allowed_agents) = 0 or t.agent = '${AUTO}' or p.allowed_agents ? t.agent)
            and (p.max_parallel is null or (
              select count(*) from tasks w
              where w.project_id = t.project_id and w.state in ('ASSIGNED', 'RUNNING', 'VALIDATING')
@@ -1429,7 +1617,7 @@ export class Store {
            -- spec §39: a project over its daily budget waits until tomorrow (or a higher budget)
            and (p.budget->>'dailyUsd' is null or ${TODAY_SPEND_SQL} < (p.budget->>'dailyUsd')::numeric)
          order by t.created_at limit 50 for update of t skip locked`,
-        [agentIds],
+        [agentIds, runner.org_id],
       );
       // Spec §53: most important first — priority, critical path, waiting time.
       const ranked = await this.rank(q, candidates.map(toTask));
@@ -1441,9 +1629,13 @@ export class Store {
           picked = { task: candidate };
           break;
         }
-        const policy = (await this.getProject(candidate.projectId, q)).routingPolicy;
+        const candidateProject = await this.getProject(candidate.projectId, q);
+        const policy = candidateProject.routingPolicy;
+        const allowed = candidateProject.allowedAgents;
         const choice = chooseAgent(
-          usable.map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
+          usable
+            .filter((a) => !allowed.length || allowed.includes(a.id))
+            .map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
           { requires: candidate.requires, excluded: candidate.excludedAgents },
           await this.agentStats(candidate.projectId, q),
           policy,
@@ -1504,11 +1696,13 @@ export class Store {
         lastSession = undefined;
       }
 
+      const profileRef = runner.agents.find((a) => a.id === task.agent)?.profile;
+      const agentProfile = profileRef ? await this.resolveProfile(q, profileRef, runner.org_id) : undefined;
       const executionToken = randomBytes(24).toString("base64url");
       const [execRow] = await q.query(
-        `insert into executions (id, task_id, runner_id, attempt, status, token_hash, lease_expires_at, agent)
-         values ($1, $2, $3, $4, 'assigned', $5, now() + make_interval(secs => $6), $7) returning *`,
-        [randomUUID(), task.id, runnerId, (previous?.attempt ?? 0) + 1, sha256(executionToken), this.leaseSeconds, task.agent],
+        `insert into executions (id, task_id, runner_id, attempt, status, token_hash, lease_expires_at, agent, profile)
+         values ($1, $2, $3, $4, 'assigned', $5, now() + make_interval(secs => $6), $7, $8) returning *`,
+        [randomUUID(), task.id, runnerId, (previous?.attempt ?? 0) + 1, sha256(executionToken), this.leaseSeconds, task.agent, profileRef ?? null],
       );
       const execution = toExecution(execRow!);
       await appendEvent(q, {
@@ -1534,6 +1728,7 @@ export class Store {
         ...(dependencies.length > 0 && { dependencies }),
         ...(approvals.length > 0 && { approvals }),
         ...(decisions.length > 0 && { decisions }),
+        ...(agentProfile?.instructions && { agentInstructions: agentProfile.instructions }),
         ...(review && { review }),
         ...(plan && { plan }),
         ...(critique && { critique }),
@@ -2262,11 +2457,12 @@ export class Store {
 
   // ---- approvals, review, merge queue ---------------------------------------
 
-  async listApprovals(filter: { status?: ApprovalDto["status"]; taskId?: string }): Promise<ApprovalDto[]> {
+  async listApprovals(filter: { status?: ApprovalDto["status"]; taskId?: string; org?: string | undefined }): Promise<ApprovalDto[]> {
     const rows = await this.db.query(
       `select * from approvals where ($1::text is null or status = $1) and ($2::uuid is null or task_id = $2)
+         and ($3::text is null or project_id in (select id from projects where org_id = $3))
        order by created_at`,
-      [filter.status ?? null, filter.taskId ?? null],
+      [filter.status ?? null, filter.taskId ?? null, filter.org ?? null],
     );
     return rows.map(toApproval);
   }
@@ -2280,7 +2476,7 @@ export class Store {
     id: string,
     status: "approved" | "rejected",
     comment?: string,
-    actor: Actor = { name: "local", role: "owner" },
+    actor: Actor = { name: "local", role: "owner", org: "*" },
   ): Promise<ApprovalDto> {
     return this.db.tx(async (q) => {
       const row = (await q.query("select * from approvals where id = $1 for update", [id]))[0];
@@ -2327,19 +2523,28 @@ export class Store {
   // ---- human as executor (spec §61) ----------------------------------------
 
   /** READY tasks waiting for a person to do them. */
-  humanTasks(): Promise<TaskDto[]> {
+  humanTasks(org?: string): Promise<TaskDto[]> {
     return this.db
-      .query("select * from tasks where agent = $1 and state = 'READY' order by priority desc, created_at", [HUMAN_EXECUTOR])
+      .query(
+        `select * from tasks where agent = $1 and state = 'READY'
+           and ($2::text is null or project_id in (select id from projects where org_id = $2)) order by priority desc, created_at`,
+        [HUMAN_EXECUTOR, org ?? null],
+      )
       .then((rows) => rows.map(toTask));
   }
 
-  async listDecisions(filter: { status?: "pending" | "answered" | undefined; taskId?: string | undefined }): Promise<DecisionDto[]> {
+  async listDecisions(filter: {
+    status?: "pending" | "answered" | undefined;
+    taskId?: string | undefined;
+    org?: string | undefined;
+  }): Promise<DecisionDto[]> {
     const rows = await this.db.query(
       `select d.*, t.key as task_key, t.title as task_title, t.project_id, e.agent from decisions d
        join tasks t on t.id = d.task_id join executions e on e.id = d.execution_id
        where ($1::text is null or d.status = $1) and ($2::uuid is null or d.task_id = $2)
+         and ($3::text is null or t.project_id in (select id from projects where org_id = $3))
        order by d.created_at`,
-      [filter.status ?? null, filter.taskId ?? null],
+      [filter.status ?? null, filter.taskId ?? null, filter.org ?? null],
     );
     return rows.map(toDecision);
   }
@@ -2826,10 +3031,11 @@ export class Store {
     };
   }
 
-  async listCooldowns(): Promise<AgentCooldown[]> {
+  async listCooldowns(org?: string): Promise<AgentCooldown[]> {
     const rows = await this.db.query(
       `select c.*, r.name as runner_name from agent_cooldowns c join runners r on r.id = c.runner_id
-       where c.until > now() order by c.until`,
+       where c.until > now() and ($1::text is null or r.org_id = $1) order by c.until`,
+      [org ?? null],
     );
     return rows.map((r) => ({ runnerId: r.runner_id, runnerName: r.runner_name, agent: r.agent, until: iso(r.until), reason: r.reason }));
   }
@@ -2842,7 +3048,7 @@ export class Store {
   }
 
   /** Execution history per agent (spec §40), optionally for one project. */
-  async agentStats(projectId?: string, q: Queryable = this.db): Promise<AgentStats[]> {
+  async agentStats(projectId?: string, q: Queryable = this.db, org?: string): Promise<AgentStats[]> {
     const rows = await q.query(
       `select e.agent,
          count(*)::int as executions,
@@ -2872,8 +3078,9 @@ export class Store {
              (a.type = 'review_result' and a.content->>'decision' = 'reject'))))::int as reworked
        from executions e join tasks t on t.id = e.task_id
        where e.agent is not null and ($1::uuid is null or t.project_id = $1)
+         and ($2::text is null or t.project_id in (select id from projects where org_id = $2))
        group by e.agent order by e.agent`,
-      [projectId ?? null],
+      [projectId ?? null, org ?? null],
     );
     // Who finished each work task last: merged, or given up on.
     const outcomes = await q.query<{ agent: string; merged: number; blocked: number }>(
@@ -2883,8 +3090,9 @@ export class Store {
          select agent from executions e where e.task_id = t.id and e.agent is not null order by attempt desc limit 1
        ) last on true
        where t.kind = 'work' and t.state in ('COMPLETED', 'BLOCKED') and ($1::uuid is null or t.project_id = $1)
+         and ($2::text is null or t.project_id in (select id from projects where org_id = $2))
        group by last.agent`,
-      [projectId ?? null],
+      [projectId ?? null, org ?? null],
     );
     return rows.map((r) => ({
       agent: r.agent,
@@ -2908,7 +3116,7 @@ export class Store {
   }
 
   /** Per agent and required skill (spec §40): what the scheduler learns from. */
-  async agentSkillStats(projectId?: string, q: Queryable = this.db): Promise<AgentSkillStats[]> {
+  async agentSkillStats(projectId?: string, q: Queryable = this.db, org?: string): Promise<AgentSkillStats[]> {
     const rows = await q.query(
       `select e.agent, lower(sk.skill) as skill,
          count(*) filter (where e.status = 'succeeded')::int as succeeded,
@@ -2920,8 +3128,9 @@ export class Store {
        from executions e join tasks t on t.id = e.task_id
          cross join lateral jsonb_array_elements_text(t.requires) as sk(skill)
        where e.agent is not null and ($1::uuid is null or t.project_id = $1)
+         and ($2::text is null or t.project_id in (select id from projects where org_id = $2))
        group by 1, 2 order by 1, 2`,
-      [projectId ?? null],
+      [projectId ?? null, org ?? null],
     );
     return rows.map((r) => ({ agent: r.agent, skill: r.skill, succeeded: r.succeeded, failed: r.failed, reworked: r.reworked }));
   }
@@ -2943,7 +3152,7 @@ export class Store {
 
   async listEvents(
     /** Empty filter = all events. */
-    filter: { projectId?: string; taskId?: string; executionId?: string },
+    filter: { projectId?: string; taskId?: string; executionId?: string; org?: string | undefined },
     after = 0,
     limit = 200,
   ): Promise<EventDto[]> {
@@ -2956,15 +3165,25 @@ export class Store {
           : [undefined, undefined];
     const rows = column
       ? await this.db.query(`select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.${column} = $1 and e.seq > $2 order by e.seq limit $3`, [value, after, limit])
-      : await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.seq > $1 order by e.seq limit $2", [after, limit]);
+      : await this.db.query(
+          `select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id
+           where e.seq > $1 and ($3::text is null or e.project_id in (select id from projects where org_id = $3))
+           order by e.seq limit $2`,
+          [after, limit, filter.org ?? null],
+        );
     return rows.map(toEvent);
   }
 
   /** Most recent events, newest first (activity feeds). */
-  async recentEvents(limit: number, projectId?: string): Promise<EventDto[]> {
+  async recentEvents(limit: number, projectId?: string, org?: string): Promise<EventDto[]> {
     const rows = projectId
       ? await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id where e.project_id = $1 order by e.seq desc limit $2", [projectId, limit])
-      : await this.db.query("select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id order by e.seq desc limit $1", [limit]);
+      : await this.db.query(
+          `select e.*, t.key as task_key from events e left join tasks t on t.id = e.task_id
+           where ($2::text is null or e.project_id in (select id from projects where org_id = $2))
+           order by e.seq desc limit $1`,
+          [limit, org ?? null],
+        );
     return rows.map(toEvent);
   }
 

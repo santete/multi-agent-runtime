@@ -2,7 +2,7 @@
 
 Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
-> Status: **MVP (M1–M5) complete** — task DAGs across Claude Code, Antigravity and Codex agents with shared handoffs, parallel branches, a policy hook on every tool call and a human approval gateway, validation with automatic rework, review and a merge queue for GitHub pull requests, role-based access with audit, restart recovery, and a live web dashboard. Phase 2 complete: cross-agent review, capability-based routing with reassignment, assisted planning (an agent proposes the task DAG, a human approves it), a shared knowledge base, a merge queue that re-validates on a moved base and waits for CI, Slack-compatible notifications, OpenTelemetry tracing, container-sandboxed validation and an opt-in unattended mode for agy; see the development plan.
+> Status: **MVP, Phase 2 and Phase 3 complete.** Task DAGs across Claude Code, Antigravity and Codex agents with a policy hook on every tool call, validation, review, CI-gated merge queue and GitHub pull requests; assisted and autonomous planning with a critic agent; capability routing by measured results; shared knowledge; cost, quota and budgets; self-healing (revert or fix a broken base branch, escalation); human decisions and tasks for people; organizations and an agent marketplace; Slack-compatible notifications, OpenTelemetry and a live dashboard. See the development plan.
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
@@ -114,7 +114,10 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/agents/stats?projectId=` | per-agent track record (spec §40): runs, success, validation pass, review rejects, human interventions, tasks merged/blocked, rework, duration, tokens, cost |
 | GET | `/agents/skill-stats?projectId=` | the same per required skill; the scheduler routes by it ([ADR-0020](docs/adr/0020-agent-performance-routing.md)) |
 | PUT | `/projects/:id/routing-policy` | `{routingPolicy: "balanced" | "reliability" | "cost" | "speed"}` |
-| GET | `/me` | the calling user and role |
+| GET | `/me` | the calling user, role and organization |
+| GET/POST | `/orgs` | organizations; platform admins (`org: "*"`) create them ([ADR-0025](docs/adr/0025-organizations-and-marketplace.md)) |
+| PUT | `/projects/:id/agents` | `{allowedAgents}`: agents allowed on the project (empty = any) |
+| GET/POST | `/agent-profiles` | agent marketplace: versioned profiles (adapter, skills, cost, pricing, instructions); runners use them with `"profile": "name"`; `POST /agent-profiles/:id/deprecate` |
 | GET | `/stream?projectId=&after=` | live events (server-sent events) |
 | GET | `/events/recent?projectId=&limit=` | recent events, newest first |
 | POST | `/runners/:id/gc` | runner protocol: which task worktrees can be removed |
@@ -124,7 +127,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 
 ### Security
 
-- **Users and roles** ([ADR-0009](docs/adr/0009-roles-recovery-ui.md)): `MAR_USERS_FILE` points at a JSON array of `{ "name", "role", "token" }` (tokens ≥ 16 chars); `MAR_API_TOKEN` adds an owner named `admin`. Roles: `viewer` (read) < `member` (create/cancel/retry/review tasks) < `senior` (decide HIGH-risk approvals) < `owner` (projects, validation), plus `runner` for runner machines (runner protocol only; set `apiToken` in the runner config). Actors are recorded in the event log. With no users configured the API runs in open mode and refuses to listen on a non-loopback address.
+- **Users and roles** ([ADR-0009](docs/adr/0009-roles-recovery-ui.md)): `MAR_USERS_FILE` points at a JSON array of `{ "name", "role", "token", "org"? }` (`org` defaults to `default`; `"*"` is a platform admin across organizations) (tokens ≥ 16 chars); `MAR_API_TOKEN` adds an owner named `admin`. Roles: `viewer` (read) < `member` (create/cancel/retry/review tasks) < `senior` (decide HIGH-risk approvals) < `owner` (projects, validation), plus `runner` for runner machines (runner protocol only; set `apiToken` in the runner config). Actors are recorded in the event log. With no users configured the API runs in open mode and refuses to listen on a non-loopback address.
 - Agents never receive an API token. Their policy hook uses a per-execution token that only authorizes `tool-check`.
 - Policy (`packages/core/src/policy.ts`): HIGH-risk actions (network, secrets, destructive git, writes outside the worktree) need a human approval; CRITICAL ones (push, remote/credential changes, publishing, infrastructure, `.git`) are always denied. See [ADR-0004](docs/adr/0004-policy-enforcement.md) and [ADR-0008](docs/adr/0008-dag-approvals-merge-queue.md).
 

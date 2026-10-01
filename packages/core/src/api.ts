@@ -57,6 +57,10 @@ export interface ProjectDto {
   onBrokenMain: BrokenMainPolicy;
   /** Debate and autonomy of assisted planning (spec §53). */
   planning: PlanningPolicy;
+  /** The organization the project belongs to (spec §49). */
+  orgId: string;
+  /** Agents allowed to work on the project (project-level agents); empty = any. */
+  allowedAgents: string[];
   createdAt: string;
 }
 
@@ -171,6 +175,51 @@ export interface CreateProjectRequest {
   budget?: Budget | null | undefined;
   onBrokenMain?: BrokenMainPolicy | undefined;
   planning?: { [K in keyof PlanningPolicy]?: PlanningPolicy[K] | undefined } | undefined;
+  /** Platform admins only; everyone else creates projects in their own organization. */
+  orgId?: string | undefined;
+  allowedAgents?: string[] | undefined;
+}
+
+/** An organization (spec §49): its projects, runners and agent catalog are its own. */
+export interface OrgDto {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+/**
+ * A reusable agent definition in the marketplace (spec §53): how to run it,
+ * what it is good at and what it costs, plus instructions every task it runs
+ * gets. Published to one organization, or to everyone (orgId null).
+ */
+export interface AgentProfileDto {
+  id: string;
+  orgId: string | null;
+  name: string;
+  version: number;
+  adapter: string;
+  description: string;
+  skills: string[];
+  cost: CostTier;
+  pricing: Pricing | null;
+  instructions: string;
+  publishedBy: string | null;
+  deprecated: boolean;
+  createdAt: string;
+  /** Measured on the executions of agents built from this profile (any version). */
+  usage: { executions: number; succeeded: number; failed: number };
+}
+
+export interface PublishAgentProfileRequest {
+  name: string;
+  adapter: string;
+  description?: string | undefined;
+  skills?: string[] | undefined;
+  cost?: CostTier | undefined;
+  pricing?: Pricing | undefined;
+  instructions?: string | undefined;
+  /** Publish to every organization (platform admins only). */
+  public?: boolean | undefined;
 }
 
 /**
@@ -445,6 +494,12 @@ export interface AgentDescriptor {
   pricing?: Pricing | undefined;
   /** At most this many executions of the agent at once on the runner (subscription limits). */
   maxConcurrent?: number | undefined;
+  /**
+   * Marketplace profile the agent is built from ("name" for the latest, or
+   * "name@version"); the control plane fills in what the runner left out and
+   * records the resolved "name@version".
+   */
+  profile?: string | undefined;
 }
 
 export interface RegisterRunnerRequest {
@@ -461,6 +516,7 @@ export interface RunnerDto {
   id: string;
   name: string;
   agents: AgentDescriptor[];
+  orgId: string;
   online: boolean;
   registeredAt: string;
   lastSeenAt: string;
@@ -478,6 +534,8 @@ export interface RunnerDto {
 export interface ActorDto {
   name: string;
   role: "viewer" | "member" | "senior" | "owner" | "runner";
+  /** Organization (spec §49); "*" for platform admins. */
+  org: string;
 }
 
 export interface ClaimResponse {
@@ -503,6 +561,8 @@ export interface ClaimResponse {
   plan?: PlanningContext;
   /** For critique tasks: the proposal to critique. */
   critique?: CritiqueContext;
+  /** Instructions of the agent's marketplace profile, for every task it runs. */
+  agentInstructions?: string;
   /** Answers a person gave to the previous attempt's open questions (spec §61). */
   decisions?: Array<{ question: string; answer: string; answeredBy: string | null }>;
   /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
