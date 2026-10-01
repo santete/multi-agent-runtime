@@ -152,6 +152,10 @@ export function describeEvent(e: EventDto): string {
       return `knowledge accepted: ${p.title}${p.actor && p.actor !== "platform" ? ` by ${p.actor}` : ""}`;
     case "KnowledgeUpdated":
       return `knowledge ${p.status}: ${p.title}${by}`;
+    case "DecisionRequested":
+      return `${p.agent} asks a person: ${(p.questions ?? []).join("; ")}`;
+    case "DecisionAnswered":
+      return `answered “${p.question}”: ${p.answer}${by}`;
     case "TaskStuck":
       return `not moving (${String(p.state).toLowerCase().replace(/_/g, " ")}): ${p.reason}`;
     case "MainHealthy":

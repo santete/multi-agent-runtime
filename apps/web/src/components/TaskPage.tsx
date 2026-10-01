@@ -7,6 +7,7 @@ import { href } from "../lib/router.js";
 import { EventRow } from "./ActivityFeed.js";
 import { AgentConsole } from "./AgentConsole.js";
 import { ApprovalCard } from "./ApprovalsPage.js";
+import { DecisionCard, HumanTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section, StateBadge } from "./ui.js";
 
 const TERMINAL = new Set(["COMPLETED", "CANCELLED"]);
@@ -20,6 +21,7 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
   const [approvals] = useLiveQuery(() => api.taskApprovals(id), [id], (e) => forTask(e) && e.type.startsWith("Approval"));
   const [events] = useLiveQuery(() => api.taskEvents(id), [id], (e) => forTask(e) && e.type !== "AgentEvent");
   const [selected, setSelected] = useState<string>();
+  const [decisions] = useLiveQuery(() => api.decisions({ taskId: id }), [id], (e) => forTask(e) && e.type.startsWith("Decision"));
 
   if (error) return <ErrorBox error={error} />;
   if (!task) return <Loading />;
@@ -76,6 +78,19 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             <p className="prose">{task.objective}</p>
             {task.dependsOn.length > 0 && <Dependencies ids={task.dependsOn} />}
           </Section>
+
+          {task.agent === "human" && task.state === "READY" && (
+            <Section title="For a person">
+              <HumanTaskCard task={task} actor={actor} onDone={reload} />
+            </Section>
+          )}
+          {decisions && decisions.length > 0 && (
+            <Section title="Questions">
+              {decisions.map((d) => (
+                <DecisionCard key={d.id} decision={d} actor={actor} />
+              ))}
+            </Section>
+          )}
 
           {approvals && approvals.length > 0 && (
             <Section title="Approvals">

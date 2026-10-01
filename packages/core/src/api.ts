@@ -242,6 +242,28 @@ export interface QueueEntry {
   reasons: string[];
 }
 
+/** The executor id of tasks a person does (spec §61). */
+export const HUMAN_EXECUTOR = "human";
+
+/** A question an agent could not decide alone (spec §61: Decision Request). */
+export interface DecisionDto {
+  id: string;
+  taskId: string;
+  taskKey: string;
+  taskTitle: string;
+  projectId: string;
+  executionId: string;
+  agent: string;
+  question: string;
+  options: string[];
+  context: string;
+  status: "pending" | "answered";
+  answer: string | null;
+  answeredBy: string | null;
+  createdAt: string;
+  answeredAt: string | null;
+}
+
 export interface MergePolicy {
   revalidateOnBaseChange: boolean;
   waitForChecks: boolean;
@@ -481,6 +503,8 @@ export interface ClaimResponse {
   plan?: PlanningContext;
   /** For critique tasks: the proposal to critique. */
   critique?: CritiqueContext;
+  /** Answers a person gave to the previous attempt's open questions (spec §61). */
+  decisions?: Array<{ question: string; answer: string; answeredBy: string | null }>;
   /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
   knowledge?: KnowledgeContext[];
 }

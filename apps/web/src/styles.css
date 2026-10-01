@@ -1066,3 +1066,19 @@ button.link:disabled {
   padding: 0 4px;
   font-size: inherit;
 }
+
+.decision {
+  margin-bottom: 10px;
+  display: grid;
+  gap: 8px;
+}
+.decision.pending {
+  border-left: 3px solid var(--attention-fg);
+}
+.decision-question {
+  font-weight: 600;
+  margin: 0;
+}
+.decision textarea {
+  width: 100%;
+}

@@ -38,6 +38,7 @@ function taskBrief({ task, project }: ClaimResponse): string {
     "## Handoff",
     "",
     "Finish with a handoff: a short summary, the concrete changes, decisions you made (and why), known issues, and remaining work.",
+    "If finishing correctly needs a decision only a person can make (a business rule, a product choice, missing access), put it in `openQuestions` with suggested options: the task waits for the answer and you continue afterwards. Decide everything else yourself.",
     "",
     "Also report in `knowledge` any durable fact about the project you had to work out and the next agent should not have to rediscover",
     "(architecture, business rules, API contracts, data model, conventions, decisions, known issues). Not a description of your change;",
@@ -244,6 +245,7 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
     "- Each objective must stand on its own: the agent sees only its task, the handoffs of the tasks it depends on and the code.",
     "- Add a dependency only when a task needs another one's merged result; independent tasks run in parallel.",
     "- Set `agent` to one of the available agents when it clearly fits, otherwise null with the skills in `requires`.",
+    "- Use the agent `human` for work only a person can do: a business or product decision, credentials or access, a manual step outside the repository. Its objective says what to decide or do; tasks that need the outcome depend on it.",
     "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
     "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
     "- If nothing is left to do, return no tasks and explain why in the summary.",
@@ -349,6 +351,16 @@ export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, struct
   ].join("\n\n");
 }
 
+function decisionsBrief(decisions: NonNullable<ClaimResponse["decisions"]>): string {
+  return [
+    "# Answers to your open questions",
+    "",
+    "A person answered the questions you asked on your previous attempt. Follow these answers; do not ask again.",
+    "",
+    ...decisions.flatMap((d) => [`## ${d.question}`, "", d.answer, "", d.answeredBy ? `_— ${d.answeredBy}_` : "", ""]),
+  ].join("\n");
+}
+
 /** Context files for the agent, written into the worktree before it starts. */
 export function contextFiles(claim: ClaimResponse, extras: ContextExtras = {}): WorkspaceFile[] {
   const file = (name: string, content: string): WorkspaceFile => ({ path: `${CONTEXT_DIR}/${name}`, content, mergeJson: false });
@@ -356,6 +368,7 @@ export function contextFiles(claim: ClaimResponse, extras: ContextExtras = {}): 
   if (claim.dependencies?.length) files.push(file("DEPENDENCIES.md", dependenciesBrief(claim.dependencies)));
   if (claim.rework) files.push(file("REWORK.md", reworkBrief(claim.rework, extras)));
   if (claim.approvals?.length) files.push(file("APPROVALS.md", approvalsBrief(claim.approvals)));
+  if (claim.decisions?.length) files.push(file("DECISIONS.md", decisionsBrief(claim.decisions)));
   return files;
 }
 
@@ -366,6 +379,10 @@ export function buildPrompt(claim: ClaimResponse, resuming: boolean): string {
     parts.push(
       `Your previous attempt was rejected (${claim.rework.reason}). ` +
         `Read ${CONTEXT_DIR}/REWORK.md, fix the problem and finish the task.`,
+    );
+  } else if (claim.decisions?.length) {
+    parts.push(
+      `A person answered the questions you raised; see ${CONTEXT_DIR}/DECISIONS.md. Continue the task with those answers.`,
     );
   } else if (claim.approvals?.length) {
     parts.push(

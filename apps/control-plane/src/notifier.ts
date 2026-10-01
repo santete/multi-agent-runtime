@@ -97,6 +97,9 @@ export class Notifier {
         };
       case "TaskStateChanged":
         if (!task) return null;
+        if (p.to === "READY" && task.agent === "human") {
+          return { kind: "approval", text: `:raising_hand: *Task for a person* — ${name}. ${taskLink}` };
+        }
         if (p.to === "REVIEW" && task.kind === "work") {
           const pr = task.pullRequestUrl ? ` <${task.pullRequestUrl}|PR #${task.pullRequestNumber}>` : "";
           return { kind: "review", text: `:eyes: *Review needed* — ${name} by \`${task.agent}\`.${pr} ${taskLink}` };
@@ -126,6 +129,11 @@ export class Notifier {
         return {
           kind: "quota",
           text: `:hourglass: Agent \`${p.agent}\` hit its quota; resting until ${p.until}. Its tasks move to other agents or wait. ${this.link("#/agents", "Agents")}`,
+        };
+      case "DecisionRequested":
+        return {
+          kind: "approval",
+          text: `:question: *Decision needed* — ${name}: \`${p.agent}\` asks: ${(p.questions ?? []).map((q: string) => `“${q}”`).join("; ")}. ${this.link("#/approvals", "Answer")}`,
         };
       case "TaskStuck":
         return { kind: "blocked", text: `:rotating_light: ${name} has not moved (${String(p.state).toLowerCase().replace(/_/g, " ")}): ${p.reason}. ${taskLink}` };

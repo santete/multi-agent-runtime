@@ -182,11 +182,14 @@ const capabilities = z.object({
   costReporting: z.boolean(),
 });
 
+/** "human" is the executor of tasks people do (spec §61); no runner may offer it. */
+const agentId = z.string().min(1).refine((id) => id !== "human", "\"human\" is reserved for tasks people do");
+
 const registerRunnerBody = z.object({
   name: z.string().min(1),
   agents: z.array(
     z.object({
-      id: z.string().min(1),
+      id: agentId,
       adapter: z.string().min(1),
       capabilities,
       skills: z.array(z.string().min(1)).max(50).optional(),
@@ -388,6 +391,20 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   );
 
   app.get("/projects/:id/queue", (req) => store.queue(idParams.parse(req.params).id));
+
+  // Human as executor (spec §61): agents' questions and tasks for people.
+  app.get("/human-tasks", () => store.humanTasks());
+  app.get("/decisions", (req) =>
+    store.listDecisions(
+      z.object({ status: z.enum(["pending", "answered"]).optional(), taskId: z.uuid().optional() }).parse(req.query),
+    ),
+  );
+  app.post("/decisions/:id/answer", role("member"), (req) =>
+    store.answerDecision(idParams.parse(req.params).id, z.object({ answer: z.string().trim().min(1).max(10_000) }).parse(req.body).answer, req.actor.name),
+  );
+  app.post("/tasks/:id/done", role("member"), (req) =>
+    store.completeHumanTask(idParams.parse(req.params).id, z.object({ summary: z.string().trim().min(1).max(20_000) }).parse(req.body).summary, req.actor.name),
+  );
   app.put("/tasks/:id/priority", role("member"), (req) =>
     store.setTaskPriority(
       idParams.parse(req.params).id,
