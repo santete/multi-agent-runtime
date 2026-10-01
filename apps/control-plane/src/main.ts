@@ -31,6 +31,8 @@ await new Store(db).ensureOrgs([...new Set(users.map((u) => u.org ?? "default").
 const githubToken = process.env.GITHUB_TOKEN || undefined;
 const store = new Store(db, {
   leaseSeconds: Number(process.env.MAR_LEASE_SECONDS ?? 60),
+  // Encrypts stored project secrets (spec §48); without it only runner-env secrets can be defined.
+  secretsKey: process.env.MAR_SECRETS_KEY || undefined,
   gitProvider: githubToken ? new GitHubProvider(githubToken, process.env.GITHUB_API_URL) : undefined,
 });
 const app = buildApp(store, {

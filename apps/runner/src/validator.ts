@@ -25,13 +25,15 @@ export interface ValidationOptions {
   sandbox?: ValidationSandbox | null | undefined;
   /** Container CLI (docker, or a compatible one such as podman). */
   containerRuntime?: string | undefined;
+  /** Project secrets for the validation (spec §48), as environment variables. */
+  env?: Record<string, string> | undefined;
 }
 
 /**
  * `<runtime> run` arguments for a step: no network unless asked, no
  * capabilities, no privilege escalation, the worktree mounted at /workspace.
  */
-export function containerArgs(step: ValidationStep, worktree: string, sandbox: ValidationSandbox, name: string): string[] {
+export function containerArgs(step: ValidationStep, worktree: string, sandbox: ValidationSandbox, name: string, envNames: string[] = []): string[] {
   const user = typeof process.getuid === "function" ? ["--user", `${process.getuid()}:${process.getgid?.() ?? 0}`] : [];
   return [
     "run",
@@ -53,6 +55,8 @@ export function containerArgs(step: ValidationStep, worktree: string, sandbox: V
     "/workspace",
     "-e",
     "CI=true",
+    // Secrets: `-e NAME` passes the value from the container CLI's environment, never on the command line.
+    ...envNames.flatMap((n) => ["-e", n]),
     sandbox.image,
     "sh",
     "-c",
@@ -70,11 +74,12 @@ function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal, option
     let killedReason: string | undefined;
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith("MAR_")) delete env[key];
+    Object.assign(env, options.env);
 
     const runtime = options.containerRuntime ?? "docker";
     const container = options.sandbox ? `mar-validate-${process.pid}-${++containerSeq}-${Date.now()}` : undefined;
     const child = options.sandbox
-      ? spawn(runtime, containerArgs(step, cwd, options.sandbox, container!), { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+      ? spawn(runtime, containerArgs(step, cwd, options.sandbox, container!, Object.keys(options.env ?? {})), { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
       : spawn(step.command, { cwd, shell: true, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const collect = (d: Buffer) => {
       output = (output + d.toString()).slice(-TAIL_CHARS * 4);

@@ -42,6 +42,20 @@ async function decide() {
   const call = d.parse(JSON.parse(await readStdin()));
   if (!call.tool) return { decision: "deny", reason: "policy hook: could not read the tool call" };
 
+  // Spec §48: secret values never leave this machine. The control plane gets the
+  // call without them, and is told when the call carried one (it never runs).
+  const secrets = (process.env.MAR_SECRET_NAMES ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((name) => ({ name, value: process.env[name] ?? "" }))
+    .filter((s) => s.value.length >= 4)
+    .sort((a, b) => b.value.length - a.value.length)
+    // As the value appears inside the JSON text.
+    .map((s) => ({ ...s, value: JSON.stringify(s.value).slice(1, -1) }));
+  let input = JSON.stringify(call.input ?? {});
+  const leaked = secrets.find((s) => input.includes(s.value));
+  for (const s of secrets) input = input.split(s.value).join(`[secret ${s.name}]`);
+
   // Ride out a short control plane outage (e.g. a restart) before failing
   // closed; the agents' hook timeout (120 s) is longer than this budget.
   const budgetMs = Number(process.env.MAR_POLICY_HOOK_BUDGET_MS ?? 90_000);
@@ -58,7 +72,7 @@ async function decide() {
           // Set by the runner when tracing is on: the check joins the execution's trace.
           ...(process.env.TRACEPARENT && { traceparent: process.env.TRACEPARENT }),
         },
-        body: JSON.stringify({ tool: call.tool, input: call.input ?? {} }),
+        body: JSON.stringify({ tool: call.tool, input: JSON.parse(input), ...(leaked && { containsSecret: leaked.name }) }),
         signal: AbortSignal.timeout(20_000),
       });
       if (res.ok) {

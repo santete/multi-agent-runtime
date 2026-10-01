@@ -22,6 +22,24 @@ export interface PolicyContext {
   workspace: string;
   /** The project's own rules on top of the built-in ones (spec §47). */
   policy?: ProjectPolicy | undefined;
+  /** Environment variables holding secrets the agent has (spec §48): it may use them, not print them. */
+  secretNames?: string[] | undefined;
+}
+
+/**
+ * Whether a shell command would show secret values to the agent (and so to
+ * its model and logs): dumping the environment, or echoing a secret variable.
+ */
+export function printsSecrets(command: string, names: string[]): boolean {
+  if (/(^|[;&|]\s*)(printenv|env|set|export\s+-p)\s*($|[;&|>])|\b(get-childitem|gci|dir|ls)\s+env:|\[environment\]::getenvironmentvariables/im.test(command)) {
+    return true;
+  }
+  const vars = names.map((n) => n.replace(/[^A-Z0-9_]/gi, "")).join("|");
+  const reference = `(\\$\\{?(?:env:)?(?:${vars})\\b|%(?:${vars})%)`;
+  return (
+    new RegExp(`\\b(echo|printf|print|write-output|write-host|cat|type)\\b[^;&|]*${reference}`, "i").test(command) ||
+    new RegExp(`\\bprintenv\\s+(${vars})\\b`, "i").test(command)
+  );
 }
 
 export type ApproverRole = "member" | "senior" | "owner";
@@ -256,7 +274,7 @@ function liftingRule(call: ToolCall, ctx: PolicyContext, allows: PolicyRule[]): 
 }
 
 /** Built-in verdicts a project rule may never lift. */
-const UNLIFTABLE = new Set(["accessing secrets", "writing inside .git", "writing outside the task workspace"]);
+const UNLIFTABLE = new Set(["accessing secrets", "printing a secret", "writing inside .git", "writing outside the task workspace"]);
 
 /** A rule's regular expression; an invalid one never matches (they are checked when saved). */
 function ruleRegExp(pattern: string): RegExp | null {
@@ -349,6 +367,9 @@ function builtinVerdict(call: ToolCall, ctx: PolicyContext): PolicyVerdict {
       if (rule.pattern.test(command) || segments(command).some((s) => rule.pattern.test(s))) {
         return verdict("deny", rule.risk, rule.reason, summary);
       }
+    }
+    if (ctx.secretNames?.length && printsSecrets(command, ctx.secretNames)) {
+      return verdict("deny", "HIGH", "printing a secret", summary);
     }
     if (MEDIUM_COMMANDS.test(command)) return verdict("allow", "MEDIUM", "dependency installation", summary);
     return verdict("allow", "LOW", "shell command inside the task workspace", summary);

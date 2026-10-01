@@ -72,6 +72,13 @@ describe("runValidation", () => {
     }
   });
 
+  it("gives the project's validation secrets as environment variables (spec §48)", async () => {
+    const report = await runValidation(worktree, [{ name: "env", command: node("process.exit(process.env.DB_URL === 'pg://x' ? 0 : 1)") }], undefined, {
+      env: { DB_URL: "pg://x" },
+    });
+    expect(report.passed).toBe(true);
+  });
+
   it("passes with no steps configured", async () => {
     expect(await runValidation(worktree, [])).toEqual({ passed: true, steps: [], changedFiles: [] });
   });

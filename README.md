@@ -111,6 +111,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/planning` | `{critics, maxRounds, autoApprove, maxAutoTasks}`: a critic agent debates each plan; small plans the critic approves can approve themselves ([ADR-0022](docs/adr/0022-plan-debate-and-autonomy.md)) |
 | PUT | `/projects/:id/self-healing` | `{onBrokenMain: "notify" | "revert" | "fix"}`: reaction when the base branch CI fails on a merge ([ADR-0021](docs/adr/0021-self-healing.md)) |
 | PUT | `/projects/:id/policy` | `{rules: [{kind: command\|write\|access, pattern, action: allow\|approve\|deny, reason}], allowedHosts, approveMedium, approvers: {MEDIUM, HIGH, CRITICAL}}`: the project's tool-call rules on top of the built-in policy (owner; [ADR-0027](docs/adr/0027-project-policy.md)) |
+| GET/PUT/DELETE | `/projects/:id/secrets[/:NAME]` | `{value \| fromRunnerEnv, exposeTo: [agent, validation]}`: secrets given at run time as environment variables, redacted everywhere; values are never returned; stored values need `MAR_SECRETS_KEY` ([ADR-0029](docs/adr/0029-secret-management.md)) |
 | PUT | `/projects/:id/budget` | `{dailyUsd?, perTaskUsd?}` or `null`: spending limits ([ADR-0019](docs/adr/0019-cost-and-quota.md)) |
 | GET | `/projects/:id/costs?days=` | spend per day and agent (reported, or estimated from runner `pricing`) |
 | GET | `/agents/cooldowns` | agents resting after a quota hit; `DELETE /runners/:id/cooldowns/:agent` makes one available again |
@@ -141,6 +142,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `DATABASE_URL` | – | Postgres; unset = embedded PGlite in `PGLITE_DIR` (`./.data/pglite`) |
 | `HOST` / `PORT` | `127.0.0.1` / `7700` | |
 | `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
+| `MAR_SECRETS_KEY` | — | key (≥ 16 chars) that encrypts stored project secrets; without it only `fromRunnerEnv` secrets can be defined |
 | `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING/REWORK → READY/BLOCKED |
 | `MAR_NOTIFY_WEBHOOKS` | – | comma-separated Slack-compatible incoming webhook URLs (Slack, Mattermost, Rocket.Chat, Discord `/slack`); unset = no notifications ([ADR-0016](docs/adr/0016-notifications.md)) |
 | `MAR_NOTIFY_EVENTS` | `approval,review,plan,blocked,budget,quota,main` | also `ci`, `merged` |

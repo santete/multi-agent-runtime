@@ -25,7 +25,22 @@ function projectRules(project: ClaimResponse["project"]): string[] {
   ];
 }
 
-function taskBrief({ task, project }: ClaimResponse): string {
+/** Spec §48: the agent knows which secrets it has, never their values. */
+function secretRules(secrets: ClaimResponse["secrets"]): string[] {
+  const names = (secrets ?? []).filter((s) => s.exposeTo.includes("agent")).map((s) => `\`$${s.name}\``);
+  const validation = (secrets ?? []).filter((s) => !s.exposeTo.includes("agent") && s.exposeTo.includes("validation")).map((s) => `\`${s.name}\``);
+  return [
+    ...(names.length
+      ? [
+          `- Secrets are available to you as environment variables: ${names.join(", ")}. Use them by reference in commands and configuration; never print them, write their values into files or commit them (such calls are refused).`,
+        ]
+      : []),
+    ...(validation.length ? [`- The validation runs with ${validation.join(", ")} set; you do not have them.`] : []),
+  ];
+}
+
+function taskBrief(claim: ClaimResponse): string {
+  const { task, project } = claim;
   const validation = project.validation.length
     ? project.validation.map((s) => `- **${s.name}**: \`${s.command}\``).join("\n")
     : "- _None configured._";
@@ -48,6 +63,7 @@ function taskBrief({ task, project }: ClaimResponse): string {
       : []),
     "- Every tool call is checked by the platform policy. Risky actions need a human approval: if one is denied as requiring approval, continue with what you can do and mention it in your handoff. The platform has already asked a person about it and you will resume once they decide, so do not also ask about it in `openQuestions`.",
     ...projectRules(project),
+    ...secretRules(claim.secrets),
     "",
     "## Validation",
     "",

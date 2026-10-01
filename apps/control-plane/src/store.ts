@@ -49,6 +49,14 @@ import {
   type HeartbeatResponse,
   type PolicyVerdict,
   type InstructionDto,
+  type ExecutionSecret,
+  type PutSecretRequest,
+  type Redactor,
+  type SecretDto,
+  type SecretScope,
+  containsSecret,
+  redactDeep,
+  redactor,
   type SendInstructionRequest,
   type ProjectPolicy,
   DEFAULT_PROJECT_POLICY,
@@ -99,6 +107,7 @@ import {
 } from "@mar/core";
 import { meter, withSpan } from "@mar/telemetry";
 import { type Actor, hasRole } from "./auth.js";
+import { SecretCipher } from "./secret-cipher.js";
 import type { Db, Queryable } from "./db.js";
 import type { GitProvider, MergeResult, PullRequestStatus } from "./git-provider.js";
 import { pullRequestBody } from "./pull-request.js";
@@ -143,6 +152,8 @@ export interface StoreOptions {
    * report any CI check before it merges without CI.
    */
   ciGraceSeconds?: number;
+  /** Encrypts stored project secrets (spec §48); without it only runner-env secrets can be defined. */
+  secretsKey?: string | undefined;
 }
 
 type Row = Record<string, any>;
@@ -187,6 +198,15 @@ const toProject = (r: Row): ProjectDto => ({
   orgId: r.org_id ?? "default",
   allowedAgents: r.allowed_agents ?? [],
   createdAt: iso(r.created_at),
+});
+
+const toSecret = (r: Row): SecretDto => ({
+  name: r.name,
+  source: r.source,
+  ref: r.ref ?? null,
+  exposeTo: r.expose_to,
+  updatedBy: r.updated_by,
+  updatedAt: iso(r.updated_at),
 });
 
 const toInstruction = (r: Row): InstructionDto => ({
@@ -443,6 +463,7 @@ export class Store {
   private readonly runnerOnlineSeconds: number;
   private readonly gitProvider: GitProvider | undefined;
   private readonly ciGraceSeconds: number;
+  private readonly cipher: SecretCipher | undefined;
 
   constructor(
     private readonly db: Db,
@@ -452,6 +473,7 @@ export class Store {
     this.runnerOnlineSeconds = options.runnerOnlineSeconds ?? 30;
     this.gitProvider = options.gitProvider;
     this.ciGraceSeconds = options.ciGraceSeconds ?? 120;
+    this.cipher = options.secretsKey ? new SecretCipher(options.secretsKey) : undefined;
   }
 
   // ---- projects -----------------------------------------------------------
@@ -1449,6 +1471,120 @@ export class Store {
     });
   }
 
+  // ---- secrets (spec §48) -------------------------------------------------
+
+  /** Names and where the values come from; never the values. */
+  listSecrets(projectId: string): Promise<SecretDto[]> {
+    return this.db.query("select * from secrets where project_id = $1 order by name", [projectId]).then((rows) => rows.map(toSecret));
+  }
+
+  async putSecret(projectId: string, name: string, req: PutSecretRequest, actor = "local"): Promise<SecretDto> {
+    await this.getProject(projectId);
+    const stored = req.value !== undefined;
+    if (stored && !this.cipher) {
+      throw new ConflictError("secret values cannot be stored: MAR_SECRETS_KEY is not set on the control plane (use fromRunnerEnv instead)");
+    }
+    const encrypted = stored ? this.cipher!.encrypt(req.value!) : null;
+    return this.db.tx(async (q) => {
+      const [row] = await q.query(
+        `insert into secrets (project_id, name, source, ciphertext, iv, auth_tag, ref, expose_to, updated_by, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9, now())
+         on conflict (project_id, name) do update set source = excluded.source, ciphertext = excluded.ciphertext, iv = excluded.iv,
+           auth_tag = excluded.auth_tag, ref = excluded.ref, expose_to = excluded.expose_to, updated_by = excluded.updated_by, updated_at = now()
+         returning *`,
+        [
+          projectId,
+          name,
+          stored ? "stored" : "runner-env",
+          encrypted?.ciphertext ?? null,
+          encrypted?.iv ?? null,
+          encrypted?.authTag ?? null,
+          req.fromRunnerEnv ?? null,
+          req.exposeTo,
+          actor,
+        ],
+      );
+      await appendEvent(q, { type: "SecretChanged", projectId, payload: { name, source: row!.source, exposeTo: req.exposeTo, actor } });
+      return toSecret(row!);
+    });
+  }
+
+  async deleteSecret(projectId: string, name: string, actor = "local"): Promise<void> {
+    await this.db.tx(async (q) => {
+      const deleted = await q.query("delete from secrets where project_id = $1 and name = $2 returning name", [projectId, name]);
+      if (!deleted.length) throw new NotFoundError("secret", name);
+      await appendEvent(q, { type: "SecretDeleted", projectId, payload: { name, actor } });
+    });
+  }
+
+  /**
+   * The secrets of a running work task, for its runner (spec §48: only at run
+   * time, only while the execution is active). Every hand-out is audited.
+   */
+  async executionSecrets(id: string): Promise<ExecutionSecret[]> {
+    const [row] = await this.db.query(
+      "select e.status, t.id as task_id, t.project_id, t.kind from executions e join tasks t on t.id = e.task_id where e.id = $1",
+      [id],
+    );
+    if (!row) throw new NotFoundError("execution", id);
+    if (!["assigned", "running", "validating"].includes(row.status)) throw new ConflictError(`execution ${id} is ${row.status}`);
+    if (row.kind !== "work") return [];
+    const secrets = await this.secretValues(this.db, row.project_id, true);
+    if (secrets.length) {
+      await appendEvent(this.db, {
+        type: "SecretsIssued",
+        projectId: row.project_id,
+        taskId: row.task_id,
+        executionId: id,
+        payload: { names: secrets.map((x) => x.name) },
+      });
+    }
+    return secrets.map((x) => ({
+      name: x.name,
+      exposeTo: x.exposeTo,
+      ...(x.value !== undefined && { value: x.value }),
+      ...(x.ref && { fromRunnerEnv: x.ref }),
+    }));
+  }
+
+  /** The project's secrets with stored values decrypted. */
+  private async secretValues(
+    q: Queryable,
+    projectId: string,
+    strict = false,
+  ): Promise<Array<{ name: string; exposeTo: SecretScope[]; value?: string; ref: string | null }>> {
+    const rows = await q.query("select * from secrets where project_id = $1 order by name", [projectId]);
+    return rows.flatMap((r) => {
+      if (r.source !== "stored") return [{ name: r.name, exposeTo: r.expose_to, ref: r.ref }];
+      try {
+        if (!this.cipher) throw new Error("MAR_SECRETS_KEY is not set");
+        return [{ name: r.name, exposeTo: r.expose_to, ref: null, value: this.cipher.decrypt(r.ciphertext, r.iv, r.auth_tag) }];
+      } catch (err) {
+        if (strict) throw new ConflictError(`secret ${r.name} cannot be decrypted: ${err instanceof Error ? err.message : String(err)}`);
+        return [];
+      }
+    });
+  }
+
+  /** Redacts the project's stored secret values (runner-env values are redacted by the runner). */
+  private async projectRedactor(q: Queryable, projectId: string): Promise<{ redact: Redactor; values: Array<{ name: string; value: string }> }> {
+    const values = (await this.secretValues(q, projectId)).flatMap((x) => (x.value !== undefined ? [{ name: x.name, value: x.value }] : []));
+    return { redact: redactor(values), values };
+  }
+
+  /** Names of the secrets the agent has in its environment (policy: it may use them, not print them). */
+  private async agentSecretNames(q: Queryable, projectId: string): Promise<string[]> {
+    const rows = await q.query<{ name: string }>("select name from secrets where project_id = $1 and 'agent' = any(expose_to)", [projectId]);
+    return rows.map((r) => r.name);
+  }
+
+  /** A tool call carrying a secret value (e.g. writing it into a file) never runs. */
+  private secretVerdict(call: ToolCheckRequest, values: Array<{ value: string }>, verdict: PolicyVerdict): PolicyVerdict {
+    return call.containsSecret || containsSecret(call.input, values)
+      ? { decision: "deny", risk: "CRITICAL", reason: "the call contains a secret value; use the environment variable instead", summary: verdict.summary }
+      : verdict;
+  }
+
   // ---- knowledge base (spec §20, §35) --------------------------------------
 
   listKnowledge(projectId: string, status?: KnowledgeStatus): Promise<KnowledgeDto[]> {
@@ -1872,6 +2008,13 @@ export class Store {
       const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
       const critique = task.kind === "critique" && task.planId ? await this.critiqueContext(q, task.planId, project) : undefined;
       const knowledge = await this.knowledgeContext(q, project.id);
+      const secrets =
+        task.kind === "work"
+          ? (await q.query("select name, expose_to from secrets where project_id = $1 order by name", [project.id])).map((r) => ({
+              name: r.name as string,
+              exposeTo: r.expose_to as SecretScope[],
+            }))
+          : [];
       let [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
          where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
@@ -1927,6 +2070,7 @@ export class Store {
         project,
         executionToken,
         ...(instructions.length > 0 && { instructions }),
+        ...(secrets.length > 0 && { secrets }),
         ...(lastSession && { resume: { sessionId: lastSession.session_id, runnerId: lastSession.runner_id } }),
         ...(rework && { rework }),
         ...(dependencies.length > 0 && { dependencies }),
@@ -2101,6 +2245,7 @@ export class Store {
     await this.db.tx(async (q) => {
       const { task, row } = await this.lockExecution(q, id, ["running"]);
       const audit = await this.auditsToolCalls(q, row.runner_id, task.agent);
+      const { redact } = await this.projectRedactor(q, task.projectId);
       for (const event of events) {
         if (event.kind === "session_started") {
           await q.query("update executions set session_id = $2 where id = $1", [id, event.sessionId]);
@@ -2110,7 +2255,7 @@ export class Store {
           projectId: task.projectId,
           taskId: task.id,
           executionId: id,
-          payload: event as unknown as Record<string, unknown>,
+          payload: redactDeep(event, redact) as unknown as Record<string, unknown>,
         });
         if (audit && event.kind === "tool_call") await this.auditToolCall(q, task, id, row.workspace, event);
       }
@@ -2135,9 +2280,13 @@ export class Store {
     workspace: string,
     event: Extract<AgentEvent, { kind: "tool_call" }>,
   ): Promise<void> {
-    const call = { tool: event.tool, input: event.input };
     const { policy } = await this.getProject(task.projectId, q);
-    let verdict = await this.ownershipVerdict(q, task, workspace, call, evaluateToolCall(call, { workspace, policy }));
+    const { redact, values } = await this.projectRedactor(q, task.projectId);
+    const raw = { tool: event.tool, input: event.input };
+    const secretNames = await this.agentSecretNames(q, task.projectId);
+    let verdict = await this.ownershipVerdict(q, task, workspace, raw, evaluateToolCall(raw, { workspace, policy, secretNames }));
+    verdict = redactDeep(this.secretVerdict(raw, values, verdict), redact);
+    const call = redactDeep(raw, redact);
     if (isApprovable(verdict, policy)) {
       const [approved] = await q.query(
         "select id from approvals where task_id = $1 and action_key = $2 and status = 'approved' limit 1",
@@ -2161,9 +2310,10 @@ export class Store {
     return execution;
   }
 
-  private async completeExecutionTx(id: string, req: CompleteExecutionRequest): Promise<ExecutionDto> {
+  private async completeExecutionTx(id: string, raw: CompleteExecutionRequest): Promise<ExecutionDto> {
     return this.db.tx(async (q) => {
       const { task, row: current } = await this.lockExecution(q, id, ["assigned", "running"]);
+      const req = redactDeep(raw, (await this.projectRedactor(q, task.projectId)).redact);
       const t = req.terminal;
       await this.recordCost(q, current, t);
       // Our own audit log is authoritative: an agent that reports success after
@@ -2462,9 +2612,10 @@ export class Store {
    * REVIEW and asks the runner to deliver; failing sends it to REWORK with the
    * results as context for the next attempt.
    */
-  async recordValidation(id: string, report: ValidationReport): Promise<ValidationResponse> {
+  async recordValidation(id: string, raw: ValidationReport): Promise<ValidationResponse> {
     return this.db.tx(async (q) => {
       const { task, row: current } = await this.lockExecution(q, id, ["validating"]);
+      const report = redactDeep(raw, (await this.projectRedactor(q, task.projectId)).redact);
       await this.addArtifact(q, task, id, "validation_result", report as unknown as Record<string, unknown>);
       await appendEvent(q, {
         type: report.passed ? "ValidationPassed" : "ValidationFailed",
@@ -2605,23 +2756,28 @@ export class Store {
    * Policy check for one tool call, authorized by the execution token that
    * only the agent's policy hook holds. Every decision is audited.
    */
-  async checkToolCall(id: string, token: string | undefined, call: ToolCheckRequest): Promise<PolicyVerdict> {
+  async checkToolCall(id: string, token: string | undefined, raw: ToolCheckRequest): Promise<PolicyVerdict> {
     const execution = (await this.db.query("select * from executions where id = $1", [id]))[0];
     if (!execution || !token || !execution.token_hash || !safeEqual(sha256(token), execution.token_hash)) {
       throw new UnauthorizedError("invalid execution token");
     }
     if (execution.status !== "running") {
-      return { decision: "deny", risk: "HIGH", reason: `execution is ${execution.status}`, summary: call.tool };
+      return { decision: "deny", risk: "HIGH", reason: `execution is ${execution.status}`, summary: raw.tool };
     }
     const task = await this.getTask(execution.task_id);
     const { policy } = await this.getProject(task.projectId);
+    const { redact, values } = await this.projectRedactor(this.db, task.projectId);
+    const secretNames = await this.agentSecretNames(this.db, task.projectId);
     let verdict = await this.ownershipVerdict(
       this.db,
       task,
       execution.workspace,
-      call,
-      evaluateToolCall(call, { workspace: execution.workspace, policy }),
+      raw,
+      evaluateToolCall(raw, { workspace: execution.workspace, policy, secretNames }),
     );
+    // Recorded (events, approvals) without secret values.
+    verdict = redactDeep(this.secretVerdict(raw, values, verdict), redact);
+    const call = redactDeep(raw, redact);
 
     // Approvable risks go through the approval gateway (spec §31-32); by default CRITICAL stays a hard deny.
     if (isApprovable(verdict, policy)) {
