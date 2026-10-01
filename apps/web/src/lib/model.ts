@@ -119,6 +119,11 @@ export function timeAgo(iso: string, now = Date.now()): string {
 }
 
 /** One line describing an event for timelines and the activity feed. */
+const oneLine = (s: string, max: number) => {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
 export function describeEvent(e: EventDto): string {
   const p = e.payload as Record<string, any>;
   const by = p.actor ? ` by ${p.actor}` : "";
@@ -127,6 +132,22 @@ export function describeEvent(e: EventDto): string {
       return `created "${p.title}" for ${p.agent === "auto" ? `the scheduler${p.requires?.length ? ` (needs ${p.requires.join(", ")})` : ""}` : p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
     case "TaskStateChanged":
       return `${stateLabel(p.from)} → ${stateLabel(p.to)}${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "InstructionSent":
+      return `instruction${by}: “${oneLine(String(p.text ?? ""), 120)}”${p.interrupt ? " (agent stopped to take it)" : ""}`;
+    case "TaskPauseRequested":
+      return `pause requested${by}; the agent stops at its next heartbeat`;
+    case "TaskWaitingForPaths":
+      return `waits for ${p.blockedBy}, which works on ${p.path}`;
+    case "SecretsIssued":
+      return `secrets given to the runner: ${(p.names ?? []).join(", ")}`;
+    case "SecretChanged":
+      return `secret ${p.name} set (${p.source}, for ${(p.exposeTo ?? []).join(" and ")})${by}`;
+    case "SecretDeleted":
+      return `secret ${p.name} removed${by}`;
+    case "ProjectPolicyChanged":
+      return `project policy changed (${(p.rules ?? []).length} rules)${by}`;
+    case "TaskStateCorrected":
+      return `state corrected ${stateLabel(p.from)} → ${stateLabel(p.to)}: ${p.reason}${by}`;
     case "PlanCritiqueRequested":
       return `plan sent to ${p.critic} for critique (round ${p.round})`;
     case "PlanCritiqued":

@@ -1110,8 +1110,13 @@ button.link:disabled {
   gap: 8px;
   margin-top: 12px;
 }
-.policy-rule input {
+.policy-rule input,
+.policy-rule select {
+  width: auto;
   flex: 1 1 160px;
+}
+.policy-rule select {
+  flex: 0 0 auto;
 }
 .policy-settings {
   display: grid;

@@ -28,7 +28,8 @@ export async function computeMetrics(
   const inScope = `($1::uuid is null or t.project_id = $1) and ($2::text is null or t.project_id in (select id from projects where org_id = $2))`;
   const params = [scope.projectId ?? null, scope.org ?? null];
 
-  const tasks = await q.query(`select t.* from tasks t where t.kind = 'work' and ${inScope}`, params);
+  // Work done by agents: tasks for people (agent "human", spec §61) are not part of what is measured.
+  const tasks = await q.query(`select t.* from tasks t where t.kind = 'work' and t.agent <> 'human' and ${inScope}`, params);
   const finished = tasks.filter((t) => ["COMPLETED", "BLOCKED"].includes(t.state) && ms(t.updated_at) >= since.getTime());
   const ids = tasks.map((t) => t.id as string);
 
@@ -56,8 +57,10 @@ export async function computeMetrics(
      where a.type in ('handoff', 'validation_result', 'review_result') and a.created_at >= $3 and ${inScope}`,
     [...params, since],
   );
-  // Human reviews carry `decision`; agent reviews carry `verdict`.
-  const humanReviewed = new Set(artifacts.filter((a) => a.type === "review_result" && "decision" in a.content).map((a) => a.task_id));
+  // Agent reviews carry a `verdict` (and a `decision` too); human reviews only a `decision`.
+  const humanReviewed = new Set(
+    artifacts.filter((a) => a.type === "review_result" && "decision" in a.content && !("verdict" in a.content)).map((a) => a.task_id),
+  );
 
   const visited = (taskId: string, state: string) =>
     (byTask.get(taskId) ?? []).some((e) => e.type === "TaskStateChanged" && e.payload.to === state);

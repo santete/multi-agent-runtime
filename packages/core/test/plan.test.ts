@@ -53,3 +53,10 @@ describe("checkPlan", () => {
     expect(checkPlan("no plan here")).toEqual({ ok: false, error: "the plan is not valid JSON" });
   });
 });
+
+describe("checkPlan: tasks for people", () => {
+  it("gives a human task no paths", () => {
+    const check = checkPlan({ tasks: [{ ref: "T1", title: "Decide", objective: "o", agent: "human", paths: [".orchestrator/context/DECISIONS.md"] }] });
+    expect(check.ok && check.plan.tasks[0]!.paths).toEqual([]);
+  });
+});

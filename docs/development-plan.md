@@ -191,11 +191,11 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 - [x] `validationSandbox` theo project: mỗi bước validation chạy trong `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges`, mount worktree; fail closed khi không có runtime
 - [x] agy `unattended` (opt-in theo runner): `--sandbox --dangerously-skip-permissions`, chỉ khi có policy hook
 - [x] **Chạy thật** agy unattended (LP-14, PR #24): agy tự chạy `npm test`/`git`, hook vẫn chặn `curl` thành approval
-- [ ] Chạy thật validation trong container: Docker Desktop trong môi trường hiện tại không start được container (đã có test tự chạy khi Docker hoạt động)
+- [x] **Chạy thật** validation trong container (LP-39, PR #39, ngày 2026-10-01, sau khi Docker được khởi động lại): `npm test` chạy trong `node:22-alpine`, 136 test và 0 skipped. Secret dành cho validation đi vào container qua `-e NAME`. Không còn container nào sót lại (`--rm`)
 
 ## Phase 2 — hoàn tất
 
-Đã xong toàn bộ các mục của Phase 2: Codex adapter, review agent chéo, scheduler theo capability + reassign, planner hỗ trợ, shared knowledge base, CI gate + re-validate, thông báo, OpenTelemetry, validation trong container + agy unattended. Mỗi mục đều có ADR, test, và (trừ validation trong container) đã chạy thật trên `mar-sandbox`.
+Đã xong toàn bộ các mục của Phase 2: Codex adapter, review agent chéo, scheduler theo capability + reassign, planner hỗ trợ, shared knowledge base, CI gate + re-validate, thông báo, OpenTelemetry, validation trong container + agy unattended. Mỗi mục đều có ADR, test, và đã chạy thật trên `mar-sandbox` (riêng validation trong container được chạy thật sau, ở LP-39).
 
 ## Phase 3
 
@@ -321,6 +321,19 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] **Cách ly config của agy:** agent agy chạy với `USERPROFILE`/`HOME` riêng (`<home>/profiles/<agent>`, mặc định bật, tắt bằng `isolateConfig: false`). agy vẫn đăng nhập được vì thông tin đăng nhập không nằm trong `~/.gemini`, nhưng không đọc settings, hook, plugin hay MCP cá nhân. Đã chạy thật (LP-38): agy chạy trong profile riêng và đọc repo bình thường. `ANTIGRAVITY_APP_DATA_DIR` đã thử nhưng làm agy treo nên không dùng
 - [x] **Dữ liệu LP-9:** task bị ghi CANCELLED dù PR #21 đã merge (lỗi cancel khi đang MERGING, đã sửa trước đó). Đã sửa thành COMPLETED, có event `TaskStateCorrected` để audit
 - [x] **Temporal:** đã đánh giá, chưa dùng ([ADR-0032](adr/0032-temporal-evaluation.md)); giới hạn đã biết là các vòng lặp nền chỉ nên chạy trên một instance control plane
+
+### Chạy end-to-end đủ tính năng trên GitHub — trạng thái ✅
+
+Cấu hình LP: review chéo do agent, agent duyệt là merge; Codex làm critic, plan tự duyệt; budget; validation trong container; CI gate.
+
+- Goal "refund report": Claude lập plan 3 task, Codex critique (approve), plan tự duyệt trong khoảng 2 phút.
+- Planner nhận ra payment chưa có currency, nên giao T1 cho **người** để quyết. Người trả lời một lần trong Inbox.
+- Codex làm LP-43 và LP-44 (chạy lần lượt vì chung path và có dependency). Claude review chéo cả hai (approve), agent duyệt nên tự merge, CI xanh. Kết quả là PR #40 và #41, không cần người review.
+- Kiểm tra trên `main`: 148/149 test pass (test còn lại skip vì CI không có secret). `summarizeRefunds()` và `formatRefundSummary()` cho ra đúng như quyết định của T1.
+- Lần chạy này lộ ra và đã sửa 3 vấn đề:
+  - metric "autonomous" coi review của agent là review của người, và tính cả task do người làm;
+  - planner bảo người ghi câu trả lời vào `DECISIONS.md` (đúng ra là handoff), và khai `paths` cho task của người; `checkPlan` giờ bỏ các path đó;
+  - timeline của UI hiện tên thô cho các event mới, và layout tab Policy bị vỡ.
 
 ## Rủi ro đang theo dõi
 

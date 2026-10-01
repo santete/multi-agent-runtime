@@ -69,6 +69,14 @@ describe.skipIf(!dockerReady())("validation in a container (docker)", () => {
     const report = await runValidation(dir.path, [{ name: "fails", command: "echo boom >&2; exit 3" }], undefined, { sandbox: { image: IMAGE } });
     expect(report.steps[0]).toMatchObject({ passed: false, exitCode: 3, outputTail: expect.stringContaining("boom") });
   }, 120_000);
+
+  it("gives the project's validation secrets to the container (spec §48)", async () => {
+    const report = await runValidation(dir.path, [{ name: "secret", command: 'test "$DB_URL" = "pg://in-container"' }], undefined, {
+      sandbox: { image: IMAGE },
+      env: { DB_URL: "pg://in-container" },
+    });
+    expect(report.passed).toBe(true);
+  }, 120_000);
 });
 
 describe("validation without a container runtime", () => {

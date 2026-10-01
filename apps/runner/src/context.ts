@@ -281,7 +281,7 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
     "- Each objective must stand on its own: the agent sees only its task, the handoffs of the tasks it depends on and the code.",
     "- Add a dependency only when a task needs another one's merged result; independent tasks run in parallel.",
     "- Set `agent` to one of the available agents when it clearly fits, otherwise null with the skills in `requires`.",
-    "- Use the agent `human` for work only a person can do: a business or product decision, credentials or access, a manual step outside the repository. Its objective says what to decide or do; tasks that need the outcome depend on it.",
+    "- Use the agent `human` for work only a person can do: a business or product decision, credentials or access, a manual step outside the repository. Its objective says what to decide or do; tasks that need the outcome depend on it. The person answers in the platform, not in a file: their answer reaches the dependent tasks as that task's handoff (in their DEPENDENCIES.md), so give `human` tasks no `paths` and point dependent tasks to the handoff of the deciding task.",
     "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
     "- List in `paths` the files or globs each task will change (`src/payments/**`, `README.md`). Tasks whose paths overlap run one after the other, so keep areas narrow; leave it empty only when you cannot tell.",
     "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
