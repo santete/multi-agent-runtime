@@ -138,6 +138,11 @@ function Board({ tasks, projectId }: { tasks: TaskDto[]; projectId: string }) {
                     #{rank.get(t.id)!.i + 1} · score {rank.get(t.id)!.e.score}
                   </span>
                 )}
+                {rank.get(t.id)?.e.blockedBy && t.state === "READY" && (
+                  <span className="badge tone-neutral" title={`works on ${rank.get(t.id)!.e.blockedBy!.path} like an unmerged task`}>
+                    waits for {rank.get(t.id)!.e.blockedBy!.key}
+                  </span>
+                )}
               </div>
             </a>
           ))}

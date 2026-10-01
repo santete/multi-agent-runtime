@@ -9,3 +9,4 @@ export * from "./plan.js";
 export * from "./knowledge.js";
 export * from "./cost.js";
 export * from "./priority.js";
+export * from "./paths.js";

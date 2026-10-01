@@ -14,6 +14,8 @@ export interface PlannedTask {
   requires: string[];
   /** Refs of planned tasks, or keys of existing tasks of the project. */
   dependsOn: string[];
+  /** Files or globs the task will change (path ownership, spec §27). */
+  paths: string[];
 }
 
 export interface PlanProposal {
@@ -44,8 +46,13 @@ export const PLAN_SCHEMA = {
           agent: { type: ["string", "null"], description: "One of the available agent ids, or null to route by requires." },
           requires: { type: "array", items: { type: "string" }, description: "Skills the agent needs (from the available agents)." },
           dependsOn: { type: "array", items: { type: "string" }, description: "Refs of tasks that must be merged first." },
+          paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "Files or globs the task will change (e.g. src/payments.js, src/export/**); tasks whose paths overlap run one after the other.",
+          },
         },
-        required: ["ref", "title", "objective", "agent", "requires", "dependsOn"],
+        required: ["ref", "title", "objective", "agent", "requires", "dependsOn", "paths"],
         additionalProperties: false,
       },
     },
@@ -107,6 +114,7 @@ export function checkPlan(result: unknown, options: { allowEmpty?: boolean } = {
       agent: str(o.agent) || null,
       requires: strings(o.requires),
       dependsOn: [...new Set(strings(o.dependsOn))],
+      paths: [...new Set(strings(o.paths))].slice(0, 50),
     };
     if (!task.title || !task.objective) return { ok: false, error: `task ${task.ref} needs a title and an objective` };
     if (tasks.some((x) => x.ref === task.ref)) return { ok: false, error: `duplicate task ref ${task.ref}` };

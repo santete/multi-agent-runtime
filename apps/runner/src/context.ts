@@ -27,6 +27,11 @@ function taskBrief({ task, project }: ClaimResponse): string {
     "- Work only inside this repository checkout (it is a dedicated git worktree for this task).",
     "- Do **not** commit, push, open pull requests or change git remotes. The platform commits, pushes and opens the pull request after validation.",
     "- Do not read or print secrets (.env files, keys, credentials).",
+    ...(task.paths?.length
+      ? [
+          `- Your area of the repository: ${task.paths.map((p) => `\`${p}\``).join(", ")}. Other files may belong to tasks that are not merged yet: writing to those needs a human approval, so stay in your area unless the objective needs more.`,
+        ]
+      : []),
     "- Every tool call is checked by the platform policy. Risky actions need a human approval: if one is denied as requiring approval, continue with what you can do and mention it in your handoff.",
     "",
     "## Validation",
@@ -247,6 +252,7 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
     "- Set `agent` to one of the available agents when it clearly fits, otherwise null with the skills in `requires`.",
     "- Use the agent `human` for work only a person can do: a business or product decision, credentials or access, a manual step outside the repository. Its objective says what to decide or do; tasks that need the outcome depend on it.",
     "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
+    "- List in `paths` the files or globs each task will change (`src/payments/**`, `README.md`). Tasks whose paths overlap run one after the other, so keep areas narrow; leave it empty only when you cannot tell.",
     "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
     "- If nothing is left to do, return no tasks and explain why in the summary.",
     "",
@@ -328,6 +334,7 @@ function critiqueBrief(c: NonNullable<ClaimResponse["critique"]>): string {
     "- Does the plan reach the goal? Is anything missing, wrong or already done?",
     "- Is every objective self-contained and testable? Is any task too big for one agent session and one pull request?",
     "- Are the dependencies right (nothing starts before what it needs; independent work in parallel)?",
+    "- Do the `paths` cover what each task changes, without making unrelated tasks overlap?",
     "- Are agents or required skills sensible for each task?",
     "- Answer `revise` only for real problems, with one issue per problem and what to change. Style preferences are not a reason.",
     "",
@@ -356,7 +363,7 @@ export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, struct
   return [
     `You are planning work for a team of coding agents. Read ${CONTEXT_DIR}/PLAN.md, inspect the repository as needed, and do not modify any file.` +
       (claim ? knowledgeHint(claim) : ""),
-    "Answer with a summary, the list of tasks (ref, title, objective, agent, requires, dependsOn) and any durable project facts you established (knowledge).",
+    "Answer with a summary, the list of tasks (ref, title, objective, agent, requires, dependsOn, paths) and any durable project facts you established (knowledge).",
     ...(structured ? [] : ['Reply with only that JSON object: {"summary": ..., "tasks": [...], "knowledge": [...]}.']),
   ].join("\n\n");
 }

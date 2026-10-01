@@ -346,6 +346,10 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                         Depends on
                         <input value={t.dependsOn.join(", ")} onChange={(e) => update(i, { dependsOn: list(e.target.value) })} />
                       </label>
+                      <label>
+                        Area
+                        <input value={(t.paths ?? []).join(", ")} onChange={(e) => update(i, { paths: list(e.target.value) })} />
+                      </label>
                     </div>
                   </div>
                 ) : (
@@ -355,6 +359,7 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                     <div className="task-meta">
                       <span className="chip">{t.agent ?? "auto"}</span>
                       {t.requires.length > 0 && <span className="muted small">needs {t.requires.join(", ")}</span>}
+                      {(t.paths ?? []).length > 0 && <span className="muted small mono">{t.paths.join(", ")}</span>}
                     </div>
                   </>
                 )}

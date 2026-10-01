@@ -57,6 +57,16 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             ) : (
               `${priorityLabel(task.priority)} (${task.priority})`
             )}{" "}
+            {task.paths.length > 0 && (
+              <>
+                · area{" "}
+                {task.paths.map((p) => (
+                  <span key={p} className="chip mono">
+                    {p}
+                  </span>
+                ))}{" "}
+              </>
+            )}
             · created {timeAgo(task.createdAt)} · updated{" "}
             {timeAgo(task.updatedAt)}
             {task.pullRequestUrl && (

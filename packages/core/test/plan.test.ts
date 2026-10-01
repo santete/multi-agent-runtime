@@ -41,7 +41,7 @@ describe("checkPlan", () => {
     const check = checkPlan({ tasks: [{ title: " T ", objective: "O", agent: "", requires: ["ts", 3, " "], dependsOn: "x" }] });
     expect(check).toEqual({
       ok: true,
-      plan: { summary: "", tasks: [{ ref: "T1", title: "T", objective: "O", agent: null, requires: ["ts"], dependsOn: [] }], knowledge: [] },
+      plan: { summary: "", tasks: [{ ref: "T1", title: "T", objective: "O", agent: null, requires: ["ts"], dependsOn: [], paths: [] }], knowledge: [] },
     });
   });
 
