@@ -13,11 +13,18 @@ const CAPABILITY_LABELS: Record<string, (v: unknown) => string | null> = {
   pause: (v) => (v === "none" ? null : `pause: ${v}`),
 };
 
+/** "3/4 (75%)", or a dash without data. */
+function rate(part: number | undefined, whole: number | undefined): string {
+  return whole ? `${part ?? 0}/${whole} (${Math.round(((part ?? 0) / whole) * 100)}%)` : "—";
+}
+
 /** Agent registry and what every runner is doing (spec §14, §42). */
 export function AgentsPage({ actor }: { actor: ActorDto }) {
   const [cooldowns, , reloadCooldowns] = useLiveQuery(api.cooldowns, [], (e) => e.type.startsWith("AgentCooldown"));
   const canClear = actor.role === "senior" || actor.role === "owner";
-  const [stats] = useLiveQuery(api.agentStats, [], (e) => ["AgentFinished", "ExecutionLost", "ValidationFailed", "AgentReviewCompleted"].includes(e.type));
+  const statEvents = (e: { type: string }) => ["AgentFinished", "ExecutionLost", "ValidationFailed", "AgentReviewCompleted", "TaskMerged"].includes(e.type);
+  const [stats] = useLiveQuery(api.agentStats, [], statEvents);
+  const [skills] = useLiveQuery(api.skillStats, [], statEvents);
   const [runners, error] = useLiveQuery(
     api.runners,
     [],
@@ -43,7 +50,11 @@ export function AgentsPage({ actor }: { actor: ActorDto }) {
                   <th>Failed</th>
                   <th>Running</th>
                   <th>Avg duration</th>
-                  <th>Rework rate</th>
+                  <th title="share of delivered work sent back by validation or review">Rework</th>
+                  <th title="validations of its work that passed">Validation pass</th>
+                  <th title="reviews of its work that asked for changes">Review rejects</th>
+                  <th title="runs that needed a person to approve a blocked action">Needed a person</th>
+                  <th title="work tasks it finished last: merged / blocked">Tasks merged</th>
                   <th>Cost</th>
                 </tr>
               </thead>
@@ -59,12 +70,51 @@ export function AgentsPage({ actor }: { actor: ActorDto }) {
                     <td>{s.active}</td>
                     <td>{s.avgDurationMs == null ? "—" : `${Math.round(s.avgDurationMs / 1000)}s`}</td>
                     <td>{Math.round(s.reworkRate * 100)}%</td>
-                    <td>{s.costUsd ? `$${s.costUsd.toFixed(2)}` : "—"}</td>
+                    <td>{rate(s.validationsPassed, s.validations)}</td>
+                    <td>{rate(s.reviewRejections, s.reviews)}</td>
+                    <td>{rate(s.humanInterventions, s.executions)}</td>
+                    <td>
+                      {s.tasksMerged ?? 0}
+                      {s.tasksBlocked ? <span className="muted"> / {s.tasksBlocked} blocked</span> : null}
+                    </td>
+                    <td>{s.costUsd ? `${s.costUsd.toFixed(2)}` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {skills && skills.length > 0 && (
+            <>
+              <h4>By skill</h4>
+              <p className="muted small">What the scheduler learns from: runs of tasks that required the skill (spec §40).</p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Skill</th>
+                      <th>Agent</th>
+                      <th>Succeeded</th>
+                      <th>Failed</th>
+                      <th>Reworked</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {skills.map((k) => (
+                      <tr key={`${k.skill}-${k.agent}`}>
+                        <td>{k.skill}</td>
+                        <td>
+                          <span className="chip">{k.agent}</span>
+                        </td>
+                        <td>{k.succeeded}</td>
+                        <td>{k.failed}</td>
+                        <td>{k.reworked}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
       <div className="runner-grid">

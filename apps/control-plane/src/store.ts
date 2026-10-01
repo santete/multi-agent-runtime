@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import {
   type AgentDescriptor,
   type AgentCooldown,
+  type AgentSkillStats,
   type AgentStats,
   type Budget,
   type CostReport,
@@ -13,6 +14,7 @@ import {
   type KnowledgeNote,
   type KnowledgeStatus,
   type MergePolicy,
+  type RoutingPolicy,
   type UpdateKnowledgeRequest,
   type PlanDto,
   type PlanningContext,
@@ -1032,6 +1034,7 @@ export class Store {
           { requires: candidate.requires, excluded: candidate.excludedAgents },
           await this.agentStats(candidate.projectId, q),
           policy,
+          await this.agentSkillStats(candidate.projectId, q),
         );
         if (choice) {
           picked = { task: candidate, routed: choice };
@@ -2301,12 +2304,36 @@ export class Store {
          coalesce(sum(e.input_tokens), 0) as input_tokens, coalesce(sum(e.output_tokens), 0) as output_tokens,
          coalesce(sum(e.cost_usd), 0) as cost_usd,
          count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and a.type = 'validation_result'))::int as validations,
+         count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and a.type = 'validation_result'
+             and a.content->>'passed' = 'true'))::int as validations_passed,
+         count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and a.type = 'review_result'
+             and a.content ? 'decision'))::int as reviews,
+         count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and a.type = 'review_result'
+             and a.content->>'decision' = 'reject'))::int as review_rejections,
+         count(*) filter (where e.status = 'needs_approval'
+           or exists (select 1 from approvals ap where ap.execution_id = e.id))::int as human_interventions,
+         count(*) filter (where exists (
            select 1 from artifacts a where a.execution_id = e.id and (
              (a.type = 'validation_result' and a.content->>'passed' = 'false') or
              (a.type = 'review_result' and a.content->>'decision' = 'reject'))))::int as reworked
        from executions e join tasks t on t.id = e.task_id
        where e.agent is not null and ($1::uuid is null or t.project_id = $1)
        group by e.agent order by e.agent`,
+      [projectId ?? null],
+    );
+    // Who finished each work task last: merged, or given up on.
+    const outcomes = await q.query<{ agent: string; merged: number; blocked: number }>(
+      `select last.agent, count(*) filter (where t.state = 'COMPLETED')::int as merged,
+         count(*) filter (where t.state = 'BLOCKED')::int as blocked
+       from tasks t join lateral (
+         select agent from executions e where e.task_id = t.id and e.agent is not null order by attempt desc limit 1
+       ) last on true
+       where t.kind = 'work' and t.state in ('COMPLETED', 'BLOCKED') and ($1::uuid is null or t.project_id = $1)
+       group by last.agent`,
       [projectId ?? null],
     );
     return rows.map((r) => ({
@@ -2320,7 +2347,46 @@ export class Store {
       inputTokens: Number(r.input_tokens),
       outputTokens: Number(r.output_tokens),
       costUsd: Math.round(Number(r.cost_usd) * 1e4) / 1e4,
+      validations: r.validations,
+      validationsPassed: r.validations_passed,
+      reviews: r.reviews,
+      reviewRejections: r.review_rejections,
+      humanInterventions: r.human_interventions,
+      tasksMerged: outcomes.find((o) => o.agent === r.agent)?.merged ?? 0,
+      tasksBlocked: outcomes.find((o) => o.agent === r.agent)?.blocked ?? 0,
     }));
+  }
+
+  /** Per agent and required skill (spec §40): what the scheduler learns from. */
+  async agentSkillStats(projectId?: string, q: Queryable = this.db): Promise<AgentSkillStats[]> {
+    const rows = await q.query(
+      `select e.agent, lower(sk.skill) as skill,
+         count(*) filter (where e.status = 'succeeded')::int as succeeded,
+         count(*) filter (where e.status in ('failed', 'lost'))::int as failed,
+         count(*) filter (where exists (
+           select 1 from artifacts a where a.execution_id = e.id and (
+             (a.type = 'validation_result' and a.content->>'passed' = 'false') or
+             (a.type = 'review_result' and a.content->>'decision' = 'reject'))))::int as reworked
+       from executions e join tasks t on t.id = e.task_id
+         cross join lateral jsonb_array_elements_text(t.requires) as sk(skill)
+       where e.agent is not null and ($1::uuid is null or t.project_id = $1)
+       group by 1, 2 order by 1, 2`,
+      [projectId ?? null],
+    );
+    return rows.map((r) => ({ agent: r.agent, skill: r.skill, succeeded: r.succeeded, failed: r.failed, reworked: r.reworked }));
+  }
+
+  async setRoutingPolicy(id: string, routingPolicy: RoutingPolicy): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set routing_policy = $2 where id = $1 returning *", [id, routingPolicy]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectRoutingPolicyChanged", projectId: id, payload: { routingPolicy } });
+      return project;
+    });
   }
 
   // ---- events -------------------------------------------------------------

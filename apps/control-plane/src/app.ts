@@ -79,7 +79,7 @@ const createProjectBody = z.object({
   maxParallel: z.number().int().min(1).max(100).optional(),
   reviewAgents: z.array(z.string().min(1)).max(10).optional(),
   autoApproveOnAgentReview: z.boolean().optional(),
-  routingPolicy: z.enum(["balanced", "reliability", "cost"]).optional(),
+  routingPolicy: z.enum(["balanced", "reliability", "cost", "speed"]).optional(),
   revalidateOnBaseChange: z.boolean().optional(),
   waitForChecks: z.boolean().optional(),
   validationSandbox: validationSandbox.nullable().optional(),
@@ -458,6 +458,15 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     await store.clearCooldown(id, agent, req.actor.name);
     reply.status(204);
   });
+  app.get("/agents/skill-stats", (req) =>
+    store.agentSkillStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId),
+  );
+  app.put("/projects/:id/routing-policy", role("owner"), (req) =>
+    store.setRoutingPolicy(
+      idParams.parse(req.params).id,
+      z.object({ routingPolicy: z.enum(["balanced", "reliability", "cost", "speed"]) }).parse(req.body).routingPolicy,
+    ),
+  );
   app.get("/agents/stats", (req) => store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId));
 
   app.post("/runners/register", role("runner"), async (req, reply) => {

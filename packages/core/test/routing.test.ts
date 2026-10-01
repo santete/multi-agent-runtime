@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AgentStats, chooseAgent, hasSkills, isAgentUnavailable, reliabilityOf } from "../src/index.js";
+import { type AgentSkillStats, type AgentStats, chooseAgent, hasSkills, isAgentUnavailable, qualityOf, reliabilityOf } from "../src/index.js";
 
 const claude = { id: "claude-code", skills: ["typescript", "backend", "review"], cost: "high" as const };
 const codex = { id: "codex", skills: ["typescript", "backend", "review"], cost: "medium" as const };
@@ -56,5 +56,52 @@ describe("helpers", () => {
     expect(isAgentUnavailable("quota exceeded")).toBe(true);
     expect(isAgentUnavailable("Rate limit hit")).toBe(true);
     expect(isAgentUnavailable("process exited with code 1 without a result")).toBe(false);
+  });
+});
+
+describe("selection by measured results (spec §40)", () => {
+  const skill = (agent: string, name: string, succeeded: number, failed: number): AgentSkillStats => ({
+    agent,
+    skill: name,
+    succeeded,
+    failed,
+    reworked: 0,
+  });
+
+  it("prefers the agent that does well on the task's skill, even if it is weaker overall", () => {
+    const history = [stats("claude-code", 8, 2), stats("codex", 7, 3)];
+    const skills = [skill("claude-code", "frontend", 0, 4), skill("codex", "frontend", 5, 0)];
+    const both = [
+      { ...claude, skills: [...claude.skills, "frontend"] },
+      { ...codex, cost: "high" as const, skills: [...codex.skills, "frontend"] },
+    ];
+    const choice = chooseAgent(both, { requires: ["frontend"], excluded: [] }, history, "reliability", skills)!;
+    expect(choice.agent).toBe("codex");
+    expect(choice.reason).toContain("5/5 on frontend");
+    // Without a skill record, the overall record decides.
+    expect(chooseAgent(both, { requires: ["frontend"], excluded: [] }, history, "reliability")!.agent).toBe("claude-code");
+  });
+
+  it("anchors a thin skill record to the overall one", () => {
+    const s = stats("codex", 18, 2);
+    const one = qualityOf(s, [skill("codex", "sql", 0, 1)], ["sql"]).quality;
+    expect(one).toBeGreaterThan(0.6);
+    expect(qualityOf(s, [skill("codex", "sql", 0, 10)], ["sql"]).quality).toBeLessThan(0.3);
+  });
+
+  it("counts rework and human interventions against an agent", () => {
+    const clean = { ...stats("a", 9, 1), reworkRate: 0, humanInterventions: 0 };
+    const sloppy = { ...stats("a", 9, 1), reworkRate: 0.6, humanInterventions: 5 };
+    expect(qualityOf(sloppy, [], []).quality).toBeLessThan(qualityOf(clean, [], []).quality * 0.65);
+  });
+
+  it("weighs speed under the speed policy", () => {
+    const fast = { ...stats("codex", 9, 1), avgDurationMs: 60_000 };
+    const slow = { ...stats("claude-code", 9, 1), avgDurationMs: 600_000 };
+    const pair = [claude, { ...codex, cost: "high" as const }];
+    expect(chooseAgent(pair, { requires: [], excluded: [] }, [fast, slow], "speed")!).toMatchObject({
+      agent: "codex",
+      reason: expect.stringContaining("avg 60s"),
+    });
   });
 });
