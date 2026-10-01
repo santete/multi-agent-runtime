@@ -11,6 +11,20 @@ export interface ContextExtras {
 
 const bullets = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : "- _None._");
 
+const RULE_ACTIONS = { allow: "allowed", approve: "needs a human approval", deny: "forbidden" } as const;
+const RULE_KINDS = { command: "commands matching", write: "writing files in", access: "reading or writing files in" } as const;
+
+/** The project's own policy (spec §47), so the agent does not run into it blindly. */
+function projectRules(project: ClaimResponse["project"]): string[] {
+  const policy = project.policy;
+  if (!policy) return [];
+  return [
+    ...policy.rules.map((r) => `- Project rule: ${RULE_KINDS[r.kind]} \`${r.pattern}\` is ${RULE_ACTIONS[r.action]} (${r.reason}).`),
+    ...(policy.allowedHosts.length ? [`- Network access is allowed to: ${policy.allowedHosts.join(", ")} (use full https:// URLs); other hosts need an approval.`] : []),
+    ...(policy.approveMedium ? ["- Installing dependencies needs a human approval in this project."] : []),
+  ];
+}
+
 function taskBrief({ task, project }: ClaimResponse): string {
   const validation = project.validation.length
     ? project.validation.map((s) => `- **${s.name}**: \`${s.command}\``).join("\n")
@@ -32,7 +46,8 @@ function taskBrief({ task, project }: ClaimResponse): string {
           `- Your area of the repository: ${task.paths.map((p) => `\`${p}\``).join(", ")}. Other files may belong to tasks that are not merged yet: writing to those needs a human approval, so stay in your area unless the objective needs more.`,
         ]
       : []),
-    "- Every tool call is checked by the platform policy. Risky actions need a human approval: if one is denied as requiring approval, continue with what you can do and mention it in your handoff.",
+    "- Every tool call is checked by the platform policy. Risky actions need a human approval: if one is denied as requiring approval, continue with what you can do and mention it in your handoff. The platform has already asked a person about it and you will resume once they decide, so do not also ask about it in `openQuestions`.",
+    ...projectRules(project),
     "",
     "## Validation",
     "",

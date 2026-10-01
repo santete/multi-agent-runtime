@@ -108,6 +108,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/runners` | agent registry: runners, their agents and capabilities, online status, active executions |
 | PUT | `/projects/:id/planning` | `{critics, maxRounds, autoApprove, maxAutoTasks}`: a critic agent debates each plan; small plans the critic approves can approve themselves ([ADR-0022](docs/adr/0022-plan-debate-and-autonomy.md)) |
 | PUT | `/projects/:id/self-healing` | `{onBrokenMain: "notify" | "revert" | "fix"}`: reaction when the base branch CI fails on a merge ([ADR-0021](docs/adr/0021-self-healing.md)) |
+| PUT | `/projects/:id/policy` | `{rules: [{kind: command\|write\|access, pattern, action: allow\|approve\|deny, reason}], allowedHosts, approveMedium, approvers: {MEDIUM, HIGH, CRITICAL}}`: the project's tool-call rules on top of the built-in policy (owner; [ADR-0027](docs/adr/0027-project-policy.md)) |
 | PUT | `/projects/:id/budget` | `{dailyUsd?, perTaskUsd?}` or `null`: spending limits ([ADR-0019](docs/adr/0019-cost-and-quota.md)) |
 | GET | `/projects/:id/costs?days=` | spend per day and agent (reported, or estimated from runner `pricing`) |
 | GET | `/agents/cooldowns` | agents resting after a quota hit; `DELETE /runners/:id/cooldowns/:agent` makes one available again |

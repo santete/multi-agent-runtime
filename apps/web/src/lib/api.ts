@@ -15,6 +15,7 @@ import type {
   KnowledgeStatus,
   PlanDto,
   PlanningPolicy,
+  ProjectPolicy,
   QueueEntry,
   PlannedTask,
   EventDto,
@@ -157,6 +158,7 @@ export const api = {
   costs: (projectId: string) => get<CostReport>(`/projects/${projectId}/costs`),
   setBudget: (projectId: string, budget: Budget | null) => put<ProjectDto>(`/projects/${projectId}/budget`, budget),
   setPlanning: (projectId: string, planning: PlanningPolicy) => put<ProjectDto>(`/projects/${projectId}/planning`, planning),
+  setPolicy: (projectId: string, policy: ProjectPolicy) => put<ProjectDto>(`/projects/${projectId}/policy`, policy),
   recentEvents: (limit = 50, projectId?: string) =>
     get<EventDto[]>(`/events/recent?limit=${limit}${projectId ? `&projectId=${projectId}` : ""}`),
 };

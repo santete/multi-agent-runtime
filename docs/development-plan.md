@@ -275,6 +275,15 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
   - LP-32 ghi vào `src/payments.js` thì bị chặn thành approval. Claude hỏi người thay vì ép ghi.
   - LP-31 chạy sau khi LP-30 merge. Cả 3 PR (#32, #34, #33) đều merge.
 
+### Policy theo project — trạng thái ✅ ([ADR-0027](adr/0027-project-policy.md))
+
+- [x] Rule `command`, `write` và `access` của project với các action allow, approve, deny. `allow` chỉ có tác dụng khi phủ mọi phần bị chặn của call, và không bao giờ gỡ được secret, `.git`, file ngoài worktree hay CRITICAL
+- [x] `allowedHosts` cho network; `approveMedium`; vai trò duyệt theo mức rủi ro, và CRITICAL có thể cho owner duyệt (spec §32)
+- [x] Áp dụng ở cả hook lẫn audit; `TASK.md` liệt kê rule; tab Policy trên trang project
+- [x] **Chạy thật** (LP-33, PR #35):
+  - Lệnh curl tới host được phép thì chạy luôn, còn sửa `package.json` thì bị chặn chờ duyệt. Owner duyệt, Claude hoàn tất.
+  - Lộ ra một vấn đề: agent vừa bị chặn vừa hỏi lại đúng chuyện đó, nên người phải trả lời hai lần. Đã sửa brief.
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

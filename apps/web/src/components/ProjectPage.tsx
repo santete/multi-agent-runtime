@@ -9,6 +9,7 @@ import { Graph } from "./Graph.js";
 import { CostsTab } from "./CostsTab.js";
 import { KnowledgeTab } from "./KnowledgeTab.js";
 import { NewTaskDialog } from "./NewTaskDialog.js";
+import { PolicyTab } from "./PolicyTab.js";
 import { NewPlanDialog, PlansList } from "./PlansPage.js";
 import { Empty, ErrorBox, Loading, StateBadge } from "./ui.js";
 
@@ -63,6 +64,9 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <a className={tab === "costs" ? "active" : ""} href={href.project(id, "costs")}>
           Costs
         </a>
+        <a className={tab === "policy" ? "active" : ""} href={href.project(id, "policy")}>
+          Policy
+        </a>
         <a className={tab === "activity" ? "active" : ""} href={href.project(id, "activity")}>
           Activity
         </a>
@@ -81,6 +85,8 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <KnowledgeTab projectId={id} actor={actor} />
       ) : tab === "costs" ? (
         <CostsTab project={project} actor={actor} />
+      ) : tab === "policy" ? (
+        <PolicyTab project={project} actor={actor} />
       ) : (
         <ActivityFeed projectId={id} limit={100} />
       )}

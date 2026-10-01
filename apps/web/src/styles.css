@@ -1099,3 +1099,25 @@ button.link:disabled {
 .profile.deprecated {
   opacity: 0.6;
 }
+
+.policy {
+  display: grid;
+  gap: 16px;
+}
+.policy-rule {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.policy-rule input {
+  flex: 1 1 160px;
+}
+.policy-settings {
+  display: grid;
+  gap: 12px;
+}
+.policy-settings label:not(.check) {
+  display: grid;
+  gap: 4px;
+}

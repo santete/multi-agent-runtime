@@ -3,6 +3,7 @@ import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
 import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
 import type { PlanCritique, PlannedTask, PlanProposal } from "./plan.js";
 import type { Budget, Pricing } from "./cost.js";
+import type { ProjectPolicy } from "./policy.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
@@ -57,6 +58,8 @@ export interface ProjectDto {
   onBrokenMain: BrokenMainPolicy;
   /** Debate and autonomy of assisted planning (spec §53). */
   planning: PlanningPolicy;
+  /** Tool-call rules, allowed hosts and approvers of this project (spec §47). */
+  policy: ProjectPolicy;
   /** The organization the project belongs to (spec §49). */
   orgId: string;
   /** Agents allowed to work on the project (project-level agents); empty = any. */
