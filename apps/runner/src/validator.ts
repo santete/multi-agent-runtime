@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ValidationReport, ValidationStep, ValidationStepResult } from "@mar/core";
+import type { ValidationReport, ValidationSandbox, ValidationStep, ValidationStepResult } from "@mar/core";
 import { SpanStatusCode, withSpan } from "@mar/telemetry";
 import { killTree } from "./process.js";
 import { changedFiles, conflictedFiles } from "./worktree.js";
@@ -20,7 +20,49 @@ function tail(text: string): string {
  * from the project configuration (like CI jobs), never from the agent. The
  * agent's execution token is not passed on.
  */
-function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal): Promise<ValidationStepResult> {
+export interface ValidationOptions {
+  /** Run each step in a container from this image (ADR-0018). */
+  sandbox?: ValidationSandbox | null | undefined;
+  /** Container CLI (docker, or a compatible one such as podman). */
+  containerRuntime?: string | undefined;
+}
+
+/**
+ * `<runtime> run` arguments for a step: no network unless asked, no
+ * capabilities, no privilege escalation, the worktree mounted at /workspace.
+ */
+export function containerArgs(step: ValidationStep, worktree: string, sandbox: ValidationSandbox, name: string): string[] {
+  const user = typeof process.getuid === "function" ? ["--user", `${process.getuid()}:${process.getgid?.() ?? 0}`] : [];
+  return [
+    "run",
+    "--rm",
+    "--name",
+    name,
+    "--network",
+    sandbox.network ? "bridge" : "none",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    ...(sandbox.memory ? ["--memory", sandbox.memory] : []),
+    ...(sandbox.cpus ? ["--cpus", String(sandbox.cpus)] : []),
+    ...user,
+    "-v",
+    `${worktree}:/workspace`,
+    "-w",
+    "/workspace",
+    "-e",
+    "CI=true",
+    sandbox.image,
+    "sh",
+    "-c",
+    step.command,
+  ];
+}
+
+let containerSeq = 0;
+
+function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal, options: ValidationOptions = {}): Promise<ValidationStepResult> {
   const started = Date.now();
   const timeoutMs = (step.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000;
   return new Promise((resolve) => {
@@ -29,7 +71,11 @@ function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal): Promi
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith("MAR_")) delete env[key];
 
-    const child = spawn(step.command, { cwd, shell: true, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const runtime = options.containerRuntime ?? "docker";
+    const container = options.sandbox ? `mar-validate-${process.pid}-${++containerSeq}-${Date.now()}` : undefined;
+    const child = options.sandbox
+      ? spawn(runtime, containerArgs(step, cwd, options.sandbox, container!), { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+      : spawn(step.command, { cwd, shell: true, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const collect = (d: Buffer) => {
       output = (output + d.toString()).slice(-TAIL_CHARS * 4);
     };
@@ -39,6 +85,8 @@ function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal): Promi
     const kill = (reason: string) => {
       if (killedReason || child.exitCode !== null) return;
       killedReason = reason;
+      // Killing the CLI does not stop the container itself.
+      if (container) spawn(runtime, ["kill", container], { windowsHide: true, stdio: "ignore" }).on("error", () => undefined);
       killTree(child.pid, () => child.kill());
     };
     const timer = setTimeout(() => kill(`timed out after ${timeoutMs / 1000}s`), timeoutMs);
@@ -84,6 +132,7 @@ export async function runValidation(
   worktree: string,
   steps: ValidationStep[],
   signal?: AbortSignal,
+  options: ValidationOptions = {},
 ): Promise<ValidationReport> {
   const unresolved = await unresolvedConflicts(worktree);
   if (unresolved.length) {
@@ -106,12 +155,16 @@ export async function runValidation(
   const results: ValidationStepResult[] = [];
   for (const step of steps) {
     if (signal?.aborted) break;
-    const result = await withSpan(`validation.step ${step.name}`, { "mar.validation.step": step.name }, async (span) => {
-      const r = await runStep(step, worktree, signal);
+    const result = await withSpan(
+      `validation.step ${step.name}`,
+      { "mar.validation.step": step.name, ...(options.sandbox && { "mar.validation.image": options.sandbox.image }) },
+      async (span) => {
+      const r = await runStep(step, worktree, signal, options);
       span.setAttributes({ "mar.validation.passed": r.passed, "process.exit.code": r.exitCode ?? -1 });
       if (!r.passed) span.setStatus({ code: SpanStatusCode.ERROR, message: `${step.name} failed` });
       return r;
-    });
+      },
+    );
     results.push(result);
     if (!result.passed) break;
   }

@@ -5,6 +5,21 @@ import type { PlannedTask, PlanProposal } from "./plan.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
+/**
+ * Runs the validation steps in a throwaway container instead of on the
+ * runner's host (ADR-0018): the worktree is mounted at /workspace.
+ */
+export interface ValidationSandbox {
+  /** Container image with the project's toolchain, e.g. "node:22-alpine". */
+  image: string;
+  /** Network access during validation (default: none). */
+  network?: boolean | undefined;
+  /** Memory limit, e.g. "2g". */
+  memory?: string | undefined;
+  /** CPU limit, e.g. 2. */
+  cpus?: number | undefined;
+}
+
 /** A validation command run by the runner in the task worktree (spec §28). */
 export interface ValidationStep {
   name: string;
@@ -33,6 +48,8 @@ export interface ProjectDto {
   revalidateOnBaseChange: boolean;
   /** Wait for the pull request's CI checks to pass before merging (spec §34). */
   waitForChecks: boolean;
+  /** Run validation in a container (null: on the runner's host). */
+  validationSandbox: ValidationSandbox | null;
   createdAt: string;
 }
 
@@ -135,6 +152,7 @@ export interface CreateProjectRequest {
   routingPolicy?: RoutingPolicy | undefined;
   revalidateOnBaseChange?: boolean | undefined;
   waitForChecks?: boolean | undefined;
+  validationSandbox?: ValidationSandbox | null | undefined;
 }
 
 export interface MergePolicy {

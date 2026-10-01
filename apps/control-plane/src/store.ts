@@ -48,6 +48,7 @@ import {
   type ToolCheckRequest,
   type ValidationReport,
   type ValidationResponse,
+  type ValidationSandbox,
   type ValidationStep,
   ACTIVE_EXECUTION_STATUSES,
   approvalKey,
@@ -137,6 +138,7 @@ const toProject = (r: Row): ProjectDto => ({
   routingPolicy: r.routing_policy ?? "balanced",
   revalidateOnBaseChange: r.revalidate_on_base_change ?? true,
   waitForChecks: Boolean(r.wait_for_checks),
+  validationSandbox: r.validation_sandbox ?? null,
   createdAt: iso(r.created_at),
 });
 
@@ -358,8 +360,9 @@ export class Store {
       if (existing.length) throw new ConflictError(`project key already exists: ${req.key}`);
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
-           review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
+           review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks,
+           validation_sandbox)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning *`,
         [
           randomUUID(),
           req.key,
@@ -373,6 +376,7 @@ export class Store {
           req.routingPolicy ?? "balanced",
           req.revalidateOnBaseChange ?? true,
           req.waitForChecks ?? false,
+          req.validationSandbox ? JSON.stringify(req.validationSandbox) : null,
         ],
       );
       const project = toProject(row!);
@@ -417,6 +421,19 @@ export class Store {
         id,
       );
       await appendEvent(q, { type: "ProjectMergePolicyChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
+  }
+
+  async setValidationSandbox(id: string, sandbox: ValidationSandbox | null): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set validation_sandbox = $2 where id = $1 returning *", [id, sandbox ? JSON.stringify(sandbox) : null]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectValidationSandboxChanged", projectId: id, payload: { sandbox } });
       return project;
     });
   }
