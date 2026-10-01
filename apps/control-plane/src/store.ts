@@ -75,6 +75,7 @@ import {
   cooldownUntil,
   executionCost,
   isAgentUnavailable,
+  failureText,
   isCiConfigPath,
   isSessionLost,
   evaluateToolCall,
@@ -2672,7 +2673,7 @@ export class Store {
       // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
       // queue until maxAttempts is used up.
       const retrying = await q.query(
-        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation)::int as attempts
+        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable)::int as attempts
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {
@@ -2728,7 +2729,7 @@ export class Store {
     );
     const last = recent[0];
     if (!last?.agent || last.agent !== task.agent) return task;
-    const reason = String(last.result?.reason ?? "");
+    const reason = failureText(last.result);
     const unavailable = isAgentUnavailable(reason);
     const repeated = recent.length === 2 && recent.every((e) => e.agent === last.agent && ["failed", "lost"].includes(e.status));
     if (!unavailable && !repeated) return task;
@@ -2759,21 +2760,33 @@ export class Store {
     const [runner] = await q.query<{ agents: AgentDescriptor[] }>("select agents from runners where id = $1", [execution.runner_id]);
     const descriptor = runner?.agents.find((a) => a.id === execution.agent);
     const cost = executionCost(terminal, descriptor?.pricing);
+    // A resumed session reports its running total (Claude): count only what this run added.
+    if (cost.costUsd !== null && !cost.estimated && terminal.sessionId) {
+      const [before] = await q.query<{ total: string | null }>(
+        `select (result->>'costUsd') as total from executions
+         where task_id = $1 and id <> $2 and session_id = $3 and result ? 'costUsd' order by attempt desc limit 1`,
+        [execution.task_id, execution.id, terminal.sessionId],
+      );
+      const previous = Number(before?.total ?? Number.NaN);
+      if (Number.isFinite(previous) && previous <= cost.costUsd) cost.costUsd = Math.round((cost.costUsd - previous) * 1e6) / 1e6;
+    }
+    const failure = failureText(terminal);
+    const unavailable = Boolean(execution.agent && failure && isAgentUnavailable(failure));
     await q.query(
-      "update executions set input_tokens = $2, output_tokens = $3, cost_usd = $4, cost_estimated = $5 where id = $1",
-      [execution.id, cost.inputTokens, cost.outputTokens, cost.costUsd, cost.estimated],
+      "update executions set input_tokens = $2, output_tokens = $3, cost_usd = $4, cost_estimated = $5, agent_unavailable = $6 where id = $1",
+      [execution.id, cost.inputTokens, cost.outputTokens, cost.costUsd, cost.estimated, unavailable],
     );
-    if (terminal.kind === "failed" && execution.agent && isAgentUnavailable(terminal.reason)) {
-      const until = cooldownUntil(terminal.reason);
+    if (unavailable) {
+      const until = cooldownUntil(failure);
       await q.query(
         `insert into agent_cooldowns (runner_id, agent, until, reason) values ($1, $2, $3, $4)
          on conflict (runner_id, agent) do update set until = excluded.until, reason = excluded.reason, created_at = now()`,
-        [execution.runner_id, execution.agent, until, terminal.reason.slice(0, 500)],
+        [execution.runner_id, execution.agent, until, failure.slice(0, 500)],
       );
       await appendEvent(q, {
         type: "AgentCooldown",
         executionId: execution.id,
-        payload: { runnerId: execution.runner_id, agent: execution.agent, until: until.toISOString(), reason: terminal.reason.slice(0, 300) },
+        payload: { runnerId: execution.runner_id, agent: execution.agent, until: until.toISOString(), reason: failure.slice(0, 300) },
       });
     }
   }

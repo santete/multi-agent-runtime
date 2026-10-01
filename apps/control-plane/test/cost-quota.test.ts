@@ -135,7 +135,8 @@ describe("budgets", () => {
     await finish((await claim())!, unsuccessful);
     await store.sweep();
     expect((await call<TaskDto>("GET", `/tasks/${t.id}`)).body.state).toBe("READY");
-    await finish((await claim())!, unsuccessful);
+    // The resumed session reports its running total: 0.6 means this run cost 0.3 more.
+    await finish((await claim())!, { ...unsuccessful, costUsd: 0.6 });
     await store.sweep();
     expect((await call<TaskDto>("GET", `/tasks/${t.id}`)).body.state).toBe("BLOCKED");
     const types = (await call<EventsPage>("GET", `/tasks/${t.id}/events?limit=1000`)).body.events.map((e) => e.type);
@@ -146,5 +147,34 @@ describe("budgets", () => {
     await setup([agent("claude")]);
     expect((await call("PUT", `/projects/${project.id}/budget`, { dailyUsd: -1 })).status).toBe(400);
     expect((await call<ProjectDto>("PUT", `/projects/${project.id}/budget`, null)).body.budget).toBeNull();
+  });
+});
+
+describe("found live with Claude (LP-28)", () => {
+  const sessionLimit = (cost: number) =>
+    succeeded({ success: false, result: "You've hit your session limit · resets 12:20pm (Asia/Ho_Chi_Minh)", costUsd: cost });
+
+  it("treats an unsuccessful result naming a session limit as a quota hit that does not use up attempts", async () => {
+    await setup([agent("claude")]);
+    const t = await task("claude", { maxAttempts: 1 });
+    await finish((await claim())!, sessionLimit(0.3));
+    expect((await call<AgentCooldown[]>("GET", "/agents/cooldowns")).body).toEqual([
+      expect.objectContaining({ agent: "claude", reason: expect.stringContaining("session limit") }),
+    ]);
+    await store.sweep();
+    // maxAttempts is 1, but a quota hit is not the task's fault.
+    expect((await call<TaskDto>("GET", `/tasks/${t.id}`)).body.state).toBe("READY");
+  });
+
+  it("records only what a resumed session added to its running cost", async () => {
+    await setup([agent("claude")]);
+    const t = await task("claude", { maxAttempts: 3 });
+    await finish((await claim())!, succeeded({ success: false, result: "tests broke", costUsd: 0.298 }));
+    await store.sweep();
+    const again = (await claim())!;
+    expect(again.resume?.sessionId).toBe("s");
+    await finish(again, succeeded({ success: false, result: "still broken", costUsd: 0.325 }));
+    const costs = (await call<{ costUsd: number }[]>("GET", `/tasks/${t.id}/executions`)).body.map((e) => e.costUsd);
+    expect(costs).toEqual([0.298, 0.027]);
   });
 });
