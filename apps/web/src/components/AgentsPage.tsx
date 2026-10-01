@@ -77,7 +77,7 @@ export function AgentsPage({ actor }: { actor: ActorDto }) {
                       {s.tasksMerged ?? 0}
                       {s.tasksBlocked ? <span className="muted"> / {s.tasksBlocked} blocked</span> : null}
                     </td>
-                    <td>{s.costUsd ? `${s.costUsd.toFixed(2)}` : "—"}</td>
+                    <td>{s.costUsd ? `$${s.costUsd.toFixed(2)}` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
