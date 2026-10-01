@@ -1,3 +1,4 @@
+import { HUMAN_EXECUTOR } from "./api.js";
 import { KNOWLEDGE_NOTE_SCHEMA, type KnowledgeNote, toKnowledgeNotes } from "./knowledge.js";
 
 /**
@@ -114,7 +115,8 @@ export function checkPlan(result: unknown, options: { allowEmpty?: boolean } = {
       agent: str(o.agent) || null,
       requires: strings(o.requires),
       dependsOn: [...new Set(strings(o.dependsOn))],
-      paths: [...new Set(strings(o.paths))].slice(0, 50),
+      // A person's task changes nothing in the repository itself, so it owns no paths.
+      paths: str(o.agent) === HUMAN_EXECUTOR ? [] : [...new Set(strings(o.paths))].slice(0, 50),
     };
     if (!task.title || !task.objective) return { ok: false, error: `task ${task.ref} needs a title and an objective` };
     if (tasks.some((x) => x.ref === task.ref)) return { ok: false, error: `duplicate task ref ${task.ref}` };

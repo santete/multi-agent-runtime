@@ -133,6 +133,30 @@ describe("success metrics", () => {
     expect(m.platform.meanDispatchMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("counts work merged on an agent review as autonomous, and leaves tasks for people out", async () => {
+    const project = (await call<ProjectDto>("POST", "/projects", { key: "PAY", name: "p", repoUrl: "https://github.com/o/r.git" })).body;
+    await app.inject({ method: "PUT", url: `/projects/${project.id}/review`, payload: { reviewAgents: ["other"], autoApproveOnAgentReview: true } });
+    runnerId = (await call<{ runnerId: string }>("POST", "/runners/register", { name: "r", agents: [agent("dev"), agent("other")] })).body.runnerId;
+    const decide = (await call<TaskDto>("POST", `/projects/${project.id}/tasks`, { title: "Decide", objective: "o", agent: "human" })).body;
+    await call("POST", `/tasks/${decide.id}/done`, { summary: "EUR by default" });
+    await call("POST", `/projects/${project.id}/tasks`, { title: "Build", objective: "o", agent: "dev", dependsOn: [decide.id] });
+
+    await run(await claim());
+    const review = await claim();
+    expect(review.task.kind).toBe("review");
+    await call("POST", `/executions/${review.execution.id}/start`, { workspace: "/ws", branch: "b" });
+    await call("POST", `/executions/${review.execution.id}/complete`, {
+      exitCode: 0,
+      terminal: { kind: "completed", sessionId: "r", success: true, deniedActions: [], result: { verdict: "approve", summary: "fine", findings: [] } },
+    });
+    await store.processMergeQueue();
+
+    const m = (await call<ProductMetrics>("GET", `/metrics?projectId=${project.id}`)).body;
+    expect(m.engineering.taskSuccess).toMatchObject({ numerator: 1, denominator: 1 });
+    expect(m.automation.autonomousCompletion).toMatchObject({ numerator: 1, denominator: 1 });
+    expect(m.automation.humanIntervention).toMatchObject({ numerator: 0, denominator: 1 });
+  });
+
   it("reports null rates when nothing was measured", async () => {
     const m = (await call<ProductMetrics>("GET", "/metrics")).body;
     expect(m.engineering.taskSuccess).toEqual({ value: null, numerator: 0, denominator: 0 });

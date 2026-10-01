@@ -125,7 +125,9 @@ export function PolicyTab({ project, actor }: { project: ProjectDto; actor: Acto
       <section className="card policy-settings">
         <h3>Network and approvals</h3>
         <label>
-          Hosts agents may reach without an approval (one per line, <span className="mono">*.example.com</span> for subdomains)
+          <span>
+            Hosts agents may reach without an approval (one per line, <span className="mono">*.example.com</span> for subdomains)
+          </span>
           <textarea rows={3} value={hosts} disabled={!editable} onChange={(e) => (setHosts(e.target.value), setSaved(false))} />
         </label>
         <label className="check">
