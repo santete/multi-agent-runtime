@@ -19,6 +19,8 @@ export const TASK_STATES = [
   "REWORK",
   "RETRYING",
   "BLOCKED",
+  /** Stopped by a person (spec §43); resuming continues the agent session. */
+  "PAUSED",
   "CANCELLED",
 ] as const;
 
@@ -50,6 +52,9 @@ export type TaskTransitionTrigger =
   | "base_changed"
   | "ci_failed"
   | "human_completed"
+  | "paused"
+  | "resumed"
+  | "interrupted"
   | "cancelled";
 
 type TransitionTable = Partial<Record<TaskState, Partial<Record<TaskTransitionTrigger, TaskState>>>>;
@@ -59,13 +64,15 @@ const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(["COMPLETED", "CANCE
 const TRANSITIONS: TransitionTable = {
   CREATED: { dependencies_satisfied: "READY" },
   // human_completed: a person did a task assigned to "human" (spec §61).
-  READY: { assigned: "ASSIGNED", human_completed: "COMPLETED" },
+  READY: { assigned: "ASSIGNED", human_completed: "COMPLETED", paused: "PAUSED" },
   ASSIGNED: {
     agent_started: "RUNNING",
     unassigned: "READY",
     agent_unavailable: "WAITING_FOR_AGENT",
     // e.g. the runner could not prepare the workspace
     agent_failed: "RETRYING",
+    paused: "PAUSED",
+    interrupted: "READY",
   },
   RUNNING: {
     // Review tasks produce a review, not code: no validation, delivery or merge.
@@ -74,6 +81,9 @@ const TRANSITIONS: TransitionTable = {
     agent_completed: "VALIDATING",
     agent_failed: "RETRYING",
     agent_unavailable: "WAITING_FOR_AGENT",
+    // Spec §43: a person paused the agent, or interrupted it with a new instruction.
+    paused: "PAUSED",
+    interrupted: "READY",
   },
   // unassigned: approvals decided (or a human asked to retry), back to the queue.
   WAITING_FOR_HUMAN: { approval_resolved: "RUNNING", unassigned: "READY" },
@@ -92,8 +102,9 @@ const TRANSITIONS: TransitionTable = {
     limit_exceeded: "BLOCKED",
   },
   // Requeued ("unassigned") so any runner offering the agent can pick it up again.
-  REWORK: { rework_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
-  RETRYING: { retry_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED" },
+  REWORK: { rework_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED", paused: "PAUSED" },
+  RETRYING: { retry_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED", paused: "PAUSED" },
+  PAUSED: { resumed: "READY" },
   BLOCKED: { unblocked: "READY" },
 };
 

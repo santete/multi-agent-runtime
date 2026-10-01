@@ -350,9 +350,21 @@ export class Runner {
 
     try {
       const { outcome, restore, revalidation } = await this.runAgent(claim, adapter, request, workspace.path, abort.signal, reviewDiff);
+      // What the agent changed so far, for people to look at (spec §43); also after a pause.
+      let diff: string | undefined;
+      if (task.kind === "work") {
+        diff = await this.worktrees.workingDiff(workspace.path, project.defaultBranch, restore).catch((err) => {
+          this.log.error("could not compute the diff", { ...log, error: String(err) });
+          return undefined;
+        });
+      }
       let after;
       try {
-        after = await this.client.complete(execution.id, { ...outcome, ...(revalidation && { revalidation }) });
+        after = await this.client.complete(execution.id, {
+          ...outcome,
+          ...(revalidation && { revalidation }),
+          ...(diff !== undefined && { diff }),
+        });
       } catch (err) {
         // 409: the control plane already gave up on this execution (lease expired).
         if (err instanceof ControlPlaneError && err.status === 409) {

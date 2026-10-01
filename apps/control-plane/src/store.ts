@@ -48,6 +48,8 @@ import {
   type Handoff,
   type HeartbeatResponse,
   type PolicyVerdict,
+  type InstructionDto,
+  type SendInstructionRequest,
   type ProjectPolicy,
   DEFAULT_PROJECT_POLICY,
   approverFor,
@@ -186,6 +188,18 @@ const toProject = (r: Row): ProjectDto => ({
   allowedAgents: r.allowed_agents ?? [],
   createdAt: iso(r.created_at),
 });
+
+const toInstruction = (r: Row): InstructionDto => ({
+  id: r.id,
+  taskId: r.task_id,
+  text: r.text,
+  author: r.author,
+  createdAt: iso(r.created_at),
+  executionId: r.execution_id ?? null,
+});
+
+/** Files named in a unified diff. */
+const diffFiles = (diff: string) => [...diff.matchAll(/^diff --git a\/(.+?) b\//gm)].map((m) => m[1]!);
 
 const toArtifact = (r: Row): ArtifactDto => ({
   id: r.id,
@@ -700,7 +714,7 @@ export class Store {
     if (!task.paths.length) return null;
     const rows = await q.query(
       `select * from tasks where project_id = $1 and id <> $2 and jsonb_array_length(paths) > 0
-         and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING')
+         and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING', 'PAUSED')
        order by created_at`,
       [task.projectId, task.id],
     );
@@ -723,7 +737,7 @@ export class Store {
     const owners = (
       await q.query(
         `select * from tasks where project_id = $1 and id <> $2 and jsonb_array_length(paths) > 0
-           and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING')`,
+           and state in ('ASSIGNED', 'RUNNING', 'VALIDATING', 'WAITING_FOR_HUMAN', 'WAITING_FOR_AGENT', 'REVIEW', 'APPROVED', 'MERGING', 'REWORK', 'RETRYING', 'PAUSED')`,
         [task.projectId, task.id],
       )
     ).map(toTask);
@@ -1591,6 +1605,77 @@ export class Store {
     });
   }
 
+  /**
+   * Spec §43: stops the task. A running agent is told to stop on its next
+   * heartbeat and the task becomes PAUSED once it has; work not started yet
+   * pauses at once. Resuming continues the agent's session.
+   */
+  async pauseTask(id: string, actor = "local"): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      if (task.state === "ASSIGNED" || task.state === "RUNNING") {
+        const stopped = await q.query(
+          "update executions set stop_reason = 'pause' where task_id = $1 and status in ('assigned', 'running') returning id",
+          [id],
+        );
+        if (stopped.length) {
+          await appendEvent(q, { type: "TaskPauseRequested", projectId: task.projectId, taskId: id, payload: { actor } });
+          return task;
+        }
+      }
+      if (!["READY", "REWORK", "RETRYING"].includes(task.state)) {
+        throw new ConflictError(`task ${task.key} is ${task.state} and cannot be paused`);
+      }
+      return changeTaskState(q, task, "paused", { actor });
+    });
+  }
+
+  async resumeTask(id: string, actor = "local"): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      if (task.state !== "PAUSED") throw new ConflictError(`task ${task.key} is ${task.state}, not PAUSED`);
+      return changeTaskState(q, task, "resumed", { actor });
+    });
+  }
+
+  /**
+   * Spec §43: a message for the task's agent, given at its next run. By
+   * default a running agent is stopped and resumed at once with it.
+   */
+  async sendInstruction(id: string, req: SendInstructionRequest, actor = "local"): Promise<InstructionDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      if (task.kind !== "work" || task.agent === HUMAN_EXECUTOR) throw new ConflictError(`task ${task.key} has no agent to instruct`);
+      if (isTerminal(task.state) || task.state === "MERGING") throw new ConflictError(`task ${task.key} is ${task.state}`);
+      const [row] = await q.query("insert into instructions (id, task_id, text, author) values ($1, $2, $3, $4) returning *", [
+        randomUUID(),
+        id,
+        req.text,
+        actor,
+      ]);
+      const interrupt = req.interrupt !== false && (task.state === "ASSIGNED" || task.state === "RUNNING");
+      if (interrupt) {
+        await q.query(
+          "update executions set stop_reason = coalesce(stop_reason, 'instruction') where task_id = $1 and status in ('assigned', 'running')",
+          [id],
+        );
+      }
+      await appendEvent(q, {
+        type: "InstructionSent",
+        projectId: task.projectId,
+        taskId: id,
+        payload: { instructionId: row!.id, text: req.text.slice(0, 500), actor, interrupt },
+      });
+      return toInstruction(row!);
+    });
+  }
+
+  listInstructions(taskId: string): Promise<InstructionDto[]> {
+    return this.db
+      .query("select * from instructions where task_id = $1 order by created_at", [taskId])
+      .then((rows) => rows.map(toInstruction));
+  }
+
   listExecutions(taskId: string): Promise<ExecutionDto[]> {
     return this.db
       .query("select * from executions where task_id = $1 order by attempt", [taskId])
@@ -1825,11 +1910,23 @@ export class Store {
           approvals: approvals.length,
         },
       });
+      const instructions =
+        task.kind === "work"
+          ? (
+              await q.query("update instructions set execution_id = $2 where task_id = $1 and execution_id is null returning *", [
+                task.id,
+                execution.id,
+              ])
+            )
+              .map(toInstruction)
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          : [];
       return {
         execution,
         task,
         project,
         executionToken,
+        ...(instructions.length > 0 && { instructions }),
         ...(lastSession && { resume: { sessionId: lastSession.session_id, runnerId: lastSession.runner_id } }),
         ...(rework && { rework }),
         ...(dependencies.length > 0 && { dependencies }),
@@ -1989,13 +2086,14 @@ export class Store {
       if (!ACTIVE.includes(row.status)) {
         return { cancel: true, leaseExpiresAt: isoOrNull(row.lease_expires_at) ?? iso(new Date()) };
       }
-      const [updated] = await q.query<{ lease_expires_at: Date; cancel_requested: boolean }>(
+      const [updated] = await q.query<{ lease_expires_at: Date; cancel_requested: boolean; stop_reason: string | null }>(
         `update executions set lease_expires_at = now() + make_interval(secs => $2)
-         where id = $1 returning lease_expires_at, cancel_requested`,
+         where id = $1 returning lease_expires_at, cancel_requested, stop_reason`,
         [id, this.leaseSeconds],
       );
       await q.query("update runners set last_seen_at = now() where id = $1", [row.runner_id]);
-      return { cancel: updated!.cancel_requested, leaseExpiresAt: iso(updated!.lease_expires_at) };
+      // A pause or a new instruction (spec §43) stops the agent like a cancel; completion tells them apart.
+      return { cancel: updated!.cancel_requested || updated!.stop_reason !== null, leaseExpiresAt: iso(updated!.lease_expires_at) };
     });
   }
 
@@ -2080,7 +2178,9 @@ export class Store {
       const openQuestions = task.kind === "work" && t.kind === "completed" ? toHandoff(t.result).openQuestions : [];
       const status: ExecutionStatus = current.cancel_requested
         ? "cancelled"
-        : t.kind === "completed" && (denied || openQuestions.length > 0)
+        : current.stop_reason
+          ? "interrupted"
+          : t.kind === "completed" && (denied || openQuestions.length > 0)
           ? "needs_approval"
           : t.kind === "completed" && t.success
             ? "validating"
@@ -2121,7 +2221,10 @@ export class Store {
         executionId: id,
         payload: { status, exitCode: req.exitCode },
       });
-      if (t.kind === "completed" && status !== "cancelled") {
+      if (req.diff !== undefined && task.kind === "work") {
+        await this.addArtifact(q, task, id, "diff", { text: req.diff, files: diffFiles(req.diff) });
+      }
+      if (t.kind === "completed" && status !== "cancelled" && status !== "interrupted") {
         const handoff = toHandoff(t.result);
         await this.addArtifact(q, task, id, "handoff", handoff as unknown as Record<string, unknown>);
         if (status === "validating") await this.proposeKnowledge(q, task, handoff.knowledge);
@@ -2142,6 +2245,12 @@ export class Store {
         });
       }
 
+      // Spec §43: paused, or back to the queue to resume the session with the new instruction.
+      if (status === "interrupted" && !isTerminal(task.state)) {
+        const pausing = current.stop_reason === "pause";
+        await changeTaskState(q, task, pausing ? "paused" : "interrupted", { executionId: id, ...(!pausing && { reason: "new instruction" }) });
+        return toExecution(row!);
+      }
       // A task cancelled while running keeps its terminal state.
       if (!isTerminal(task.state) && status !== "cancelled") {
         const trigger: TaskTransitionTrigger =
@@ -2993,7 +3102,7 @@ export class Store {
       // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
       // queue until maxAttempts is used up.
       const retrying = await q.query(
-        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable)::int as attempts
+        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable and e.status <> 'interrupted')::int as attempts
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {

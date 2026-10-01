@@ -200,6 +200,19 @@ export class WorktreeManager {
   }
 
   /** The change a review is about: base...HEAD, capped to keep the context small. */
+  /**
+   * Everything the task changed so far, committed or not, new files included
+   * (spec §43 "Open diff"), against where it branched off the base.
+   * `exclude`: paths the runner itself touched (merged agent config).
+   */
+  async workingDiff(worktree: string, baseBranch: string, exclude: string[] = [], maxBytes = 300_000): Promise<string> {
+    // Intent-to-add makes new files show up; git-excluded files (context, hooks) stay out.
+    await gitRaw(worktree, "add", "--intent-to-add", "--all");
+    const base = (await git(worktree, "merge-base", `origin/${baseBranch}`, "HEAD")) || `origin/${baseBranch}`;
+    const diff = await gitRaw(worktree, "diff", "--no-color", base, "--", ".", ...exclude.map((p) => `:(exclude)${p}`));
+    return diff.length > maxBytes ? `${diff.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes]\n` : diff;
+  }
+
   async diffAgainst(worktree: string, baseBranch: string, maxBytes = 150_000): Promise<string> {
     const diff = await gitRaw(worktree, "diff", "--no-color", `origin/${baseBranch}...HEAD`);
     return diff.length > maxBytes ? `${diff.slice(0, maxBytes)}\n\n[diff truncated at ${maxBytes} bytes]\n` : diff;

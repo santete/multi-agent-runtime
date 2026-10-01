@@ -48,6 +48,20 @@ describe("WorktreeManager", () => {
     expect(existsSync(ws.path)).toBe(false);
   });
 
+  it("diffs everything the task changed, new files included, but not runner files (spec §43)", async () => {
+    const manager = new WorktreeManager(home.path);
+    const ws = await manager.prepare(project, "PAY-1");
+    await writeFile(join(ws.path, "README.md"), "changed\n");
+    await writeFile(join(ws.path, "new.js"), "export const x = 1;\n");
+    await writeFile(join(ws.path, "runner.json"), "{}\n");
+    await manager.writeFiles(ws.path, [{ path: ".orchestrator/context/TASK.md", content: "brief", mergeJson: false }]);
+    const diff = await manager.workingDiff(ws.path, "main", ["runner.json"]);
+    expect(diff).toContain("diff --git a/README.md b/README.md");
+    expect(diff).toContain("+export const x = 1;");
+    expect(diff).not.toContain("runner.json");
+    expect(diff).not.toContain(".orchestrator");
+  });
+
   it("fails clearly for an unreachable repository", async () => {
     const manager = new WorktreeManager(home.path);
     await expect(manager.prepare({ ...project, repoUrl: join(home.path, "missing") }, "PAY-1")).rejects.toThrow();

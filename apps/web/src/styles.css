@@ -1121,3 +1121,41 @@ button.link:disabled {
   display: grid;
   gap: 4px;
 }
+
+.instructions {
+  display: grid;
+  gap: 10px;
+}
+.instruction {
+  border-left: 3px solid var(--border);
+  padding-left: 8px;
+}
+.instructions textarea {
+  width: 100%;
+}
+.diff {
+  max-height: 480px;
+  overflow: auto;
+  font-size: 12px;
+  margin: 0;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.diff > div {
+  white-space: pre;
+}
+.diff-file {
+  font-weight: 600;
+  margin-top: 8px;
+}
+.diff-hunk {
+  color: var(--muted);
+}
+.diff-add {
+  background: rgba(46, 160, 67, 0.15);
+}
+.diff-del {
+  background: rgba(248, 81, 73, 0.15);
+}

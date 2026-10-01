@@ -281,6 +281,7 @@ const completeExecutionBody = z.object({
     z.looseObject({ kind: z.literal("failed"), reason: z.string(), sessionId: z.string().optional() }),
   ]),
   revalidation: z.boolean().optional(),
+  diff: z.string().max(400_000).optional(),
 });
 
 const toolCheckBody = z.object({ tool: z.string().min(1), input: z.unknown() });
@@ -528,6 +529,15 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", role("member"), (req) => store.cancelTask(idParams.parse(req.params).id, req.actor.name));
   app.post("/tasks/:id/retry", role("member"), (req) => store.retryTask(idParams.parse(req.params).id, req.actor.name));
+  // Agent console controls (spec §43).
+  app.post("/tasks/:id/pause", role("member"), (req) => store.pauseTask(idParams.parse(req.params).id, req.actor.name));
+  app.post("/tasks/:id/resume", role("member"), (req) => store.resumeTask(idParams.parse(req.params).id, req.actor.name));
+  app.get("/tasks/:id/instructions", (req) => store.listInstructions(idParams.parse(req.params).id));
+  app.post("/tasks/:id/instructions", role("member"), async (req, reply) => {
+    const body = z.object({ text: z.string().trim().min(1).max(10_000), interrupt: z.boolean().optional() }).parse(req.body);
+    reply.code(201);
+    return store.sendInstruction(idParams.parse(req.params).id, body, req.actor.name);
+  });
   app.post("/tasks/:id/review", role("member"), (req) =>
     store.reviewTask(idParams.parse(req.params).id, reviewBody.parse(req.body), req.actor.name),
   );

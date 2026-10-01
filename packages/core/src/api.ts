@@ -124,6 +124,8 @@ export type ExecutionStatus =
   | "failed"
   | "needs_approval"
   | "cancelled"
+  /** Stopped by a person to pause the task or give it a new instruction (spec §43); not a failed attempt. */
+  | "interrupted"
   | "lost";
 
 export const ACTIVE_EXECUTION_STATUSES: readonly ExecutionStatus[] = ["assigned", "running", "validating", "delivering"];
@@ -345,7 +347,7 @@ export interface ReviewPolicy {
   autoApproveOnAgentReview: boolean;
 }
 
-export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal" | "plan_critique" | "ci_result";
+export type ArtifactType = "handoff" | "validation_result" | "review_result" | "merge_result" | "plan_proposal" | "plan_critique" | "ci_result" | "diff";
 
 /** An entry of the project's shared knowledge base (spec §20, §35). */
 export interface KnowledgeDto {
@@ -576,6 +578,8 @@ export interface ClaimResponse {
   agentInstructions?: string;
   /** Answers a person gave to the previous attempt's open questions (spec §61). */
   decisions?: Array<{ question: string; answer: string; answeredBy: string | null }>;
+  /** What people told the agent since its last run (spec §43), oldest first. */
+  instructions?: InstructionDto[];
   /** The project's accepted knowledge (spec §21: no agent re-analyses the project). */
   knowledge?: KnowledgeContext[];
 }
@@ -718,6 +722,25 @@ export interface CompleteExecutionRequest {
    * once it validates, the task goes back to the merge queue without a new review.
    */
   revalidation?: boolean | undefined;
+  /** The worktree's changes against the base branch after the run (spec §43 "Open diff"). */
+  diff?: string | undefined;
+}
+
+/** A message a person sent to a task's agent (spec §43 "Send instruction"). */
+export interface InstructionDto {
+  id: string;
+  taskId: string;
+  text: string;
+  author: string;
+  createdAt: string;
+  /** The execution it was given to; null until the agent receives it. */
+  executionId: string | null;
+}
+
+export interface SendInstructionRequest {
+  text: string;
+  /** Stop a running agent now and resume it with the instruction (default true); otherwise it is given at the next run. */
+  interrupt?: boolean | undefined;
 }
 
 export interface EventsPage {

@@ -401,12 +401,32 @@ export function contextFiles(claim: ClaimResponse, extras: ContextExtras = {}): 
   if (claim.rework) files.push(file("REWORK.md", reworkBrief(claim.rework, extras)));
   if (claim.approvals?.length) files.push(file("APPROVALS.md", approvalsBrief(claim.approvals)));
   if (claim.decisions?.length) files.push(file("DECISIONS.md", decisionsBrief(claim.decisions)));
+  if (claim.instructions?.length) files.push(file("INSTRUCTIONS.md", instructionsBrief(claim.instructions)));
   return files;
+}
+
+function instructionsBrief(instructions: NonNullable<ClaimResponse["instructions"]>): string {
+  return [
+    "# Instructions from people",
+    "",
+    "Sent while you were working on this task, oldest first. They take precedence over the original objective where they differ.",
+    "",
+    ...instructions.flatMap((i) => [`## From ${i.author} (${i.createdAt})`, "", i.text, ""]),
+  ].join("\n");
 }
 
 /** The prompt given to the agent. The details live in the context files. */
 export function buildPrompt(claim: ClaimResponse, resuming: boolean): string {
   const parts: string[] = [];
+  // Spec §43: a person's instruction comes first, in full; an interrupted session resumes with it.
+  if (claim.instructions?.length) {
+    parts.push(
+      `${claim.instructions.length === 1 ? "A person sent you an instruction" : "People sent you instructions"} for this task ` +
+        `(also in ${CONTEXT_DIR}/INSTRUCTIONS.md). They take precedence over the original objective where they differ:\n\n` +
+        claim.instructions.map((i) => `> ${i.text.replace(/\n/g, "\n> ")}\n> — ${i.author}`).join("\n\n"),
+    );
+    if (resuming) parts.push("You were stopped to receive this. Check the current state of the workspace, then continue the task with it.");
+  }
   if (claim.rework) {
     parts.push(
       `Your previous attempt was rejected (${claim.rework.reason}). ` +
@@ -421,7 +441,7 @@ export function buildPrompt(claim: ClaimResponse, resuming: boolean): string {
       `A human has decided on the actions you were blocked from taking; see ${CONTEXT_DIR}/APPROVALS.md. ` +
         "Continue the task accordingly.",
     );
-  } else if (resuming) {
+  } else if (resuming && !claim.instructions?.length) {
     parts.push(
       "Your previous run on this task was interrupted before it finished. " +
         "Check the current state of the workspace, then continue and complete the task.",

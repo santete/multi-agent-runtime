@@ -1,4 +1,4 @@
-import type { ActorDto, ApprovalDto, ArtifactDto, ExecutionDto, TaskDto, ValidationReport } from "@mar/core";
+import type { ActorDto, ApprovalDto, ArtifactDto, ExecutionDto, InstructionDto, TaskDto, ValidationReport } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
@@ -11,6 +11,7 @@ import { DecisionCard, HumanTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section, StateBadge } from "./ui.js";
 
 const TERMINAL = new Set(["COMPLETED", "CANCELLED"]);
+const PAUSABLE = new Set(["READY", "ASSIGNED", "RUNNING", "REWORK", "RETRYING"]);
 const roleRank = { viewer: 0, member: 1, senior: 2, owner: 3, runner: -1 } as const;
 
 export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
@@ -21,6 +22,11 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
   const [approvals] = useLiveQuery(() => api.taskApprovals(id), [id], (e) => forTask(e) && e.type.startsWith("Approval"));
   const [events] = useLiveQuery(() => api.taskEvents(id), [id], (e) => forTask(e) && e.type !== "AgentEvent");
   const [selected, setSelected] = useState<string>();
+  const [instructions] = useLiveQuery(
+    () => api.instructions(id),
+    [id],
+    (e) => forTask(e) && (e.type === "InstructionSent" || e.type === "ExecutionAssigned"),
+  );
   const [decisions] = useLiveQuery(() => api.decisions({ taskId: id }), [id], (e) => forTask(e) && e.type.startsWith("Decision"));
 
   if (error) return <ErrorBox error={error} />;
@@ -29,6 +35,7 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
   const latest = <T extends ArtifactDto["type"]>(type: T) => artifacts?.filter((a) => a.type === type).at(-1);
   const handoff = latest("handoff");
   const validation = latest("validation_result");
+  const diff = latest("diff");
   const current = executions?.find((e) => e.id === selected) ?? executions?.at(-1);
   const canAct = roleRank[actor.role] >= roleRank.member;
 
@@ -132,6 +139,12 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             </Section>
           )}
 
+          {diff && (
+            <Section title={`Diff · ${(diff.content.files as string[]).length} files`}>
+              <DiffView text={diff.content.text as string} />
+            </Section>
+          )}
+
           <Section title="Validation">
             {validation ? (
               <ValidationView report={validation.content as unknown as ValidationReport} />
@@ -173,6 +186,11 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
               </ul>
             )}
           </Section>
+          {task.kind === "work" && task.agent !== "human" && (canAct || (instructions ?? []).length > 0) && (
+            <Section title="Instructions">
+              <Instructions task={task} instructions={instructions ?? []} canAct={canAct} />
+            </Section>
+          )}
           {current && (
             <Section title={`Agent console · attempt ${current.attempt}`}>
               <AgentConsole execution={current} />
@@ -216,6 +234,12 @@ function TaskActions({ task, onDone }: { task: TaskDto; onDone: () => void }) {
         {(task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && (
           <button onClick={run(() => api.retry(task.id))}>Retry</button>
         )}
+        {task.kind === "work" && PAUSABLE.has(task.state) && <button onClick={run(() => api.pause(task.id))}>Pause</button>}
+        {task.state === "PAUSED" && (
+          <button className="primary" onClick={run(() => api.resume(task.id))}>
+            Resume
+          </button>
+        )}
         {!TERMINAL.has(task.state) && task.state !== "MERGING" && (
           <button className="danger-outline" onClick={run(() => api.cancel(task.id))}>
             Cancel task
@@ -249,7 +273,7 @@ function ExecutionRow({ execution, selected, onSelect }: { execution: ExecutionD
         ? "danger"
         : execution.status === "needs_approval"
           ? "attention"
-          : execution.status === "cancelled"
+          : execution.status === "cancelled" || execution.status === "interrupted"
             ? "neutral"
             : "active";
   return (
@@ -354,5 +378,86 @@ function ValidationView({ report }: { report: ValidationReport }) {
         </details>
       )}
     </div>
+  );
+}
+
+const INTERRUPTIBLE = new Set(["ASSIGNED", "RUNNING"]);
+
+/** Spec §43 "Send instruction": what people told the agent, and a box to tell it more. */
+function Instructions({ task, instructions, canAct }: { task: TaskDto; instructions: InstructionDto[]; canAct: boolean }) {
+  const [text, setText] = useState("");
+  const [interrupt, setInterrupt] = useState(true);
+  const [error, setError] = useState<string>();
+  const running = INTERRUPTIBLE.has(task.state);
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(undefined);
+    try {
+      await api.sendInstruction(task.id, text, running && interrupt);
+      setText("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div className="instructions">
+      {instructions.map((i) => (
+        <div key={i.id} className="instruction">
+          <div className="muted small">
+            {i.author} · {timeAgo(i.createdAt)} · {i.executionId ? "received" : "waiting for the next run"}
+          </div>
+          <div className="prose">{i.text}</div>
+        </div>
+      ))}
+      {canAct && !TERMINAL.has(task.state) && task.state !== "MERGING" && (
+        <form onSubmit={send}>
+          <textarea
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Tell the agent something: a correction, a hint, a change of plan"
+          />
+          <div className="actions">
+            {running && (
+              <label className="check small">
+                <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} /> stop the agent now and resume it
+                with this
+              </label>
+            )}
+            <button className="primary" disabled={!text.trim()}>
+              Send
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+        </form>
+      )}
+    </div>
+  );
+}
+
+/** Spec §43 "Open diff": the task's changes so far, as a unified diff. */
+function DiffView({ text }: { text: string }) {
+  if (!text.trim()) return <Empty>No changes.</Empty>;
+  return (
+    <pre className="diff">
+      {text.split("\n").map((line, i) => (
+        <div
+          key={i}
+          className={
+            line.startsWith("diff --git")
+              ? "diff-file"
+              : line.startsWith("@@")
+                ? "diff-hunk"
+                : line.startsWith("+") && !line.startsWith("+++")
+                  ? "diff-add"
+                  : line.startsWith("-") && !line.startsWith("---")
+                    ? "diff-del"
+                    : ""
+          }
+        >
+          {line || " "}
+        </div>
+      ))}
+    </pre>
   );
 }

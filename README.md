@@ -86,6 +86,8 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
 | POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `priority?` (0..100, default 50), `maxAttempts?`, `dependsOn?: [id or key]`, `paths?: [file or glob]` — tasks with overlapping paths run one after the other, [ADR-0026](docs/adr/0026-path-ownership.md)); see [ADR-0012](docs/adr/0012-capability-routing.md) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
+| POST | `/tasks/:id/pause`, `/tasks/:id/resume` | pause a task (a running agent stops at its next heartbeat) and resume its session later ([ADR-0028](docs/adr/0028-console-controls.md)) |
+| GET/POST | `/tasks/:id/instructions` | `{text, interrupt?}`: tell the agent something; by default a running agent is stopped and resumed with it |
 | GET | `/projects/:id/queue` | READY tasks in the order the scheduler takes them, with reasons and `blockedBy` (an unmerged task working on the same paths) ([ADR-0023](docs/adr/0023-automatic-reprioritization.md)) |
 | PUT | `/tasks/:id/priority` | `{priority: 0..100}` |
 | POST | `/projects/:id/plans` | `{goal, agent}`: a planner agent proposes a task DAG ([ADR-0013](docs/adr/0013-assisted-planning.md)) |
