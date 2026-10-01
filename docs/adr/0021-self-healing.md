@@ -42,3 +42,6 @@ Retry, resume, reassign và quota đã có (ADR-0006, ADR-0012, ADR-0019). Còn 
 - Rollback cần người merge PR revert. Đây là quyết định có chủ ý: một revert tự động có thể xóa mất công việc hợp lệ của task khác đã merge sau đó.
 - Lỗi CI được gắn cho task tạo ra commit đó. Nếu nhiều merge diễn ra liên tiếp trước khi CI chạy xong, lỗi có thể đến từ sự kết hợp giữa chúng. Merge queue (ADR-0015) làm giảm khả năng này vì mỗi task đều được validate trên base mới nhất.
 - `fix` và `revert` loại trừ nhau theo project, vì làm cả hai cùng lúc sẽ gây conflict.
+- Diễn tập thật:
+  - Một status lỗi giả lập trên merge commit của LP-19 dẫn đến `MainBroken` và PR revert #28 do GitHub tạo; PR được đóng, không merge.
+  - Task không runner nào nhận được bị escalate với đúng lý do.

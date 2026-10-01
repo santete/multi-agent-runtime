@@ -225,6 +225,10 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] Theo dõi CI của base sau mỗi merge (`commitChecks`): `MainHealthy` / `MainBroken`; policy `onBrokenMain`: notify, revert (mở PR revert qua `revertPullRequest` của GitHub, người merge), hoặc fix (tạo task fix-forward kèm lỗi CI)
 - [x] Escalate việc bị kẹt (`TaskStuck`) kèm lý do: không runner nào nhận, agent đang cooldown, hết budget, chờ người, chờ review
 - [x] Workspace hỏng thì tạo lại worktree, nếu vẫn lỗi thì tạo lại clone; mất session thì bắt đầu session mới (`SessionDiscarded`)
+- [x] **Diễn tập thật** trên `mar-sandbox`:
+  - Gắn một status lỗi giả lập lên merge commit của LP-19, với policy revert. Platform ghi `MainBroken` và mở PR revert #28 qua GitHub (đã đóng PR, không merge, vì `main` không hỏng thật). Các task merge khác được ghi `MainHealthy`.
+  - Task cho agent `gemini` (không runner nào có) bị escalate sau 1 phút với lý do "no online runner offers gemini".
+  - Cả hai đều có thông báo.
 
 ## Rủi ro đang theo dõi
 
