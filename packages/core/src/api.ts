@@ -88,6 +88,8 @@ export interface TaskDto {
   planId: string | null;
   /** Ids of tasks that must be COMPLETED (merged) before this one becomes READY. */
   dependsOn: string[];
+  /** 0 (whenever) … 100 (urgent); the scheduler adds the critical path and waiting time. */
+  priority: number;
   /** Set once the task's branch has been delivered as a pull request. */
   pullRequestUrl: string | null;
   pullRequestNumber: number | null;
@@ -227,6 +229,17 @@ export interface CostReport {
     /** Some of the cost is estimated from pricing. */
     estimated: boolean;
   }>;
+}
+
+/** A READY task in the order the scheduler takes them (spec §53). */
+export interface QueueEntry {
+  taskId: string;
+  key: string;
+  title: string;
+  agent: string;
+  priority: number;
+  score: number;
+  reasons: string[];
 }
 
 export interface MergePolicy {
@@ -389,6 +402,7 @@ export interface CreateTaskRequest {
   agent: string;
   requires?: string[] | undefined;
   fallbackAgents?: string[] | undefined;
+  priority?: number | undefined;
   maxAttempts?: number | undefined;
   /** Ids or keys of tasks in the same project that must be merged first. */
   dependsOn?: string[] | undefined;

@@ -131,6 +131,7 @@ const createTaskBody = z.object({
   agent: z.string().min(1),
   requires: z.array(z.string().min(1)).max(20).optional(),
   fallbackAgents: z.array(z.string().min(1)).max(10).optional(),
+  priority: z.number().int().min(0).max(100).optional(),
   maxAttempts: z.number().int().min(1).max(10).optional(),
   dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
@@ -386,6 +387,14 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     store.updateKnowledge(idParams.parse(req.params).id, updateKnowledgeBody.parse(req.body), req.actor.name),
   );
 
+  app.get("/projects/:id/queue", (req) => store.queue(idParams.parse(req.params).id));
+  app.put("/tasks/:id/priority", role("member"), (req) =>
+    store.setTaskPriority(
+      idParams.parse(req.params).id,
+      z.object({ priority: z.number().int().min(0).max(100) }).parse(req.body).priority,
+      req.actor.name,
+    ),
+  );
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", role("member"), (req) => store.cancelTask(idParams.parse(req.params).id, req.actor.name));
   app.post("/tasks/:id/retry", role("member"), (req) => store.retryTask(idParams.parse(req.params).id, req.actor.name));

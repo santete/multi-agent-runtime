@@ -237,6 +237,11 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] UI: trạng thái critic reviewing, phần Critique, form cài đặt planning
 - [x] **Chạy thật** trên `mar-sandbox`: từ goal "CSV tổng hợp refund theo lý do", Claude lập plan 1 task; Codex critique (approve, 0 issue); plan tự duyệt bởi `platform`; Codex làm LP-23 và tạo PR #29. Từ goal đến lúc PR được mở, không bước nào cần người. Người chỉ review code trước khi merge.
 
+### Tự động ưu tiên lại task — trạng thái ✅ ([ADR-0023](adr/0023-automatic-reprioritization.md))
+
+- [x] `priority` cho mỗi task (do người đặt); scheduler sắp theo priority, cộng thêm theo số task đang chờ nó (trực tiếp hoặc gián tiếp), thời gian chờ, và loại việc gỡ chặn (review, critique, plan)
+- [x] `GET /projects/:id/queue` kèm lý do; board xếp cột Ready theo thứ tự đó; chỉnh priority ngay trên trang task
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |
