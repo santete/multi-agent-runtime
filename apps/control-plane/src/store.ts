@@ -211,6 +211,22 @@ const toSecret = (r: Row): SecretDto => ({
   updatedAt: iso(r.updated_at),
 });
 
+/** A webhook URL is a credential: show where it goes, not the token in its path. */
+const maskWebhook = (url: string) => {
+  try {
+    return `${new URL(url).host}/…`;
+  } catch {
+    return "…";
+  }
+};
+
+const toOrg = (r: Row): OrgDto => ({
+  id: r.id,
+  name: r.name,
+  notifications: { webhooks: (r.notifications?.webhooks ?? []).map(maskWebhook), kinds: r.notifications?.kinds ?? [] },
+  createdAt: iso(r.created_at),
+});
+
 const toInstruction = (r: Row): InstructionDto => ({
   id: r.id,
   taskId: r.task_id,
@@ -528,7 +544,25 @@ export class Store {
   listOrgs(org?: string): Promise<OrgDto[]> {
     return this.db
       .query("select * from orgs where ($1::text is null or id = $1) order by id", [org ?? null])
-      .then((rows) => rows.map((r) => ({ id: r.id, name: r.name, createdAt: iso(r.created_at) })));
+      .then((rows) => rows.map(toOrg));
+  }
+
+  /** The organization's webhooks and notification kinds, unmasked (for the notifier). */
+  async orgNotifications(org: string): Promise<{ webhooks: string[]; kinds: string[] }> {
+    const [row] = await this.db.query("select notifications from orgs where id = $1", [org]);
+    return { webhooks: row?.notifications?.webhooks ?? [], kinds: row?.notifications?.kinds ?? [] };
+  }
+
+  async setOrgNotifications(org: string, notifications: { webhooks: string[]; kinds: string[] }, actor = "local"): Promise<OrgDto> {
+    return this.db.tx(async (q) => {
+      const [row] = await q.query("update orgs set notifications = $2 where id = $1 returning *", [org, JSON.stringify(notifications)]);
+      if (!row) throw new NotFoundError("organization", org);
+      await appendEvent(q, {
+        type: "OrgNotificationsChanged",
+        payload: { orgId: org, webhooks: notifications.webhooks.map(maskWebhook), kinds: notifications.kinds, actor },
+      });
+      return toOrg(row);
+    });
   }
 
   async createOrg(id: string, name: string, actor?: string): Promise<OrgDto> {
@@ -536,7 +570,7 @@ export class Store {
       if ((await q.query("select 1 from orgs where id = $1", [id])).length) throw new ConflictError(`organization already exists: ${id}`);
       const [row] = await q.query("insert into orgs (id, name) values ($1, $2) returning *", [id, name]);
       await appendEvent(q, { type: "OrgCreated", payload: { orgId: id, name, actor: actor ?? null } });
-      return { id: row!.id, name: row!.name, createdAt: iso(row!.created_at) };
+      return toOrg(row!);
     });
   }
 

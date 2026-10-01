@@ -80,22 +80,21 @@ const sweeper = setInterval(async () => {
 
 // Slack-compatible notifications: MAR_NOTIFY_WEBHOOKS (comma separated), MAR_NOTIFY_EVENTS, MAR_PUBLIC_URL.
 const notifyOptions = notifierOptionsFromEnv(process.env, `http://${host}:${port}`);
-const notifier = notifyOptions ? new Notifier(store, { ...notifyOptions, log: app.log }) : undefined;
+const notifier = new Notifier(store, { ...notifyOptions, log: app.log });
 let notifying = false;
-const notifyTimer = notifier
-  ? setInterval(async () => {
-      if (notifying) return;
-      notifying = true;
-      try {
-        await notifier.poll();
-      } catch (err) {
-        app.log.error(err, "notifications failed");
-      } finally {
-        notifying = false;
-      }
-    }, Number(process.env.MAR_NOTIFY_INTERVAL_MS ?? 3000))
-  : undefined;
-if (notifyOptions) app.log.info({ webhooks: notifyOptions.webhooks.length, kinds: notifyOptions.kinds ?? "default" }, "notifications on");
+// Always on: organizations can configure their own webhooks (PUT /orgs/:id/notifications).
+const notifyTimer = setInterval(async () => {
+  if (notifying) return;
+  notifying = true;
+  try {
+    await notifier.poll();
+  } catch (err) {
+    app.log.error(err, "notifications failed");
+  } finally {
+    notifying = false;
+  }
+}, Number(process.env.MAR_NOTIFY_INTERVAL_MS ?? 3000));
+if (notifyOptions.webhooks.length) app.log.info({ webhooks: notifyOptions.webhooks.length, kinds: notifyOptions.kinds ?? "default" }, "platform notifications on");
 
 const shutdown = async () => {
   clearInterval(sweeper);

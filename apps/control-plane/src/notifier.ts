@@ -9,6 +9,8 @@ import type { Store } from "./store.js";
  */
 export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "budget" | "quota" | "main" | "ci" | "merged";
 
+export const NOTIFICATION_KINDS = ["approval", "review", "plan", "blocked", "budget", "quota", "main", "ci", "merged"] as const satisfies readonly NotificationKind[];
+
 export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "main"];
 
 export interface NotifierOptions {
@@ -72,14 +74,26 @@ export class Notifier {
         this.options.log?.error({ err: String(err), event: event.seq }, "notification skipped");
         return null;
       });
-      if (notification && this.kinds.has(notification.kind)) {
-        await Promise.all(this.options.webhooks.map((url) => this.post(url, notification, event)));
-        sent++;
+      if (notification) {
+        // Platform-wide webhooks, then those of the organization the event belongs to (spec §49).
+        const targets = new Set(this.kinds.has(notification.kind) ? this.options.webhooks : []);
+        for (const url of await this.orgWebhooks(event, notification.kind)) targets.add(url);
+        await Promise.all([...targets].map((url) => this.post(url, notification, event)));
+        if (targets.size) sent++;
       }
       cursor = event.seq;
       await this.store.setEventCursor(CURSOR, cursor);
     }
     return sent;
+  }
+
+  /** The webhooks of the event's organization that want this kind of notification. */
+  private async orgWebhooks(event: EventDto, kind: NotificationKind): Promise<string[]> {
+    if (!event.projectId) return [];
+    const org = await this.store.orgOf("project", event.projectId).catch(() => null);
+    if (!org) return [];
+    const { webhooks, kinds } = await this.store.orgNotifications(org);
+    return (kinds.length ? kinds : DEFAULT_NOTIFICATIONS).includes(kind) ? webhooks : [];
   }
 
   /** The notification for an event, or null when nobody needs to hear about it. */
@@ -208,13 +222,13 @@ function safeHost(url: string): string {
 }
 
 /** Reads MAR_NOTIFY_WEBHOOKS / MAR_NOTIFY_EVENTS; null when notifications are off. */
-export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string): NotifierOptions | null {
+export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string): NotifierOptions {
   const webhooks = (env.MAR_NOTIFY_WEBHOOKS ?? "")
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (!webhooks.length) return null;
-  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "main", "ci", "merged"];
+  // Without platform-wide webhooks the notifier still serves organizations' own webhooks.
+  const all: readonly NotificationKind[] = NOTIFICATION_KINDS;
   const kinds = env.MAR_NOTIFY_EVENTS
     ? env.MAR_NOTIFY_EVENTS.split(",")
         .map((s) => s.trim())

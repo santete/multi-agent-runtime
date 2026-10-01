@@ -32,6 +32,12 @@ export interface AntigravityAdapterOptions {
    * hook, which still decides every tool call.
    */
   unattended?: boolean;
+  /**
+   * A profile directory of its own (HOME / USERPROFILE): agy then reads no
+   * personal settings, hooks, plugins or MCP servers of the machine user.
+   * Its sign-in is not stored there, so it keeps working.
+   */
+  profileDir?: string;
 }
 
 /**
@@ -78,6 +84,7 @@ export class AntigravityAdapter implements AgentAdapter {
 
     const env = {
       ...request.env,
+      ...(this.options.profileDir && { USERPROFILE: this.options.profileDir, HOME: this.options.profileDir }),
       ...(request.policyHook && this.windows && { [HOOK_ENV_VAR]: hookCommandLine(request.policyHook, "agy") }),
     };
     return {

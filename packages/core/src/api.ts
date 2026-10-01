@@ -195,6 +195,8 @@ export interface CreateProjectRequest {
 export interface OrgDto {
   id: string;
   name: string;
+  /** Where the organization's notifications go; webhook URLs are secrets, so only their host is shown. */
+  notifications: { webhooks: string[]; kinds: string[] };
   createdAt: string;
 }
 

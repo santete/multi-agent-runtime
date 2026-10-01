@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AgentAdapter,
@@ -18,7 +20,7 @@ import {
 } from "@mar/core";
 import { activeTraceparent, meter, SpanKind, SpanStatusCode, withSpan } from "@mar/telemetry";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
-import { type RunnerConfig, type RunnerConfigInput, createAdapter, runnerConfig } from "./config.js";
+import { type RunnerConfig, type RunnerConfigInput, createAdapter, profileDirOf, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
 import {
   type ContextExtras,
@@ -154,8 +156,11 @@ export class Runner {
       this.config.apiToken ?? process.env.MAR_API_TOKEN,
     );
     this.worktrees = new WorktreeManager(this.config.home);
+    // Agents with an isolated configuration get a profile directory of their own here.
+    const profiles = join(this.config.home, "profiles");
     for (const [agentId, agentConfig] of Object.entries(this.config.agents)) {
-      this.adapters.set(agentId, createAdapter(agentConfig));
+      this.adapters.set(agentId, createAdapter(agentConfig, profiles, agentId));
+      if (agentConfig.adapter === "antigravity" && agentConfig.isolateConfig) mkdirSync(profileDirOf(profiles, agentId), { recursive: true });
     }
   }
 

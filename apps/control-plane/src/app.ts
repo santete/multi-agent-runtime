@@ -14,6 +14,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { type Actor, ALL_ORGS, Authenticator, DEFAULT_ORG, type Role, type UserConfig, hasRole } from "./auth.js";
+import { NOTIFICATION_KINDS } from "./notifier.js";
 import { ConflictError, ForbiddenError, NotFoundError, type Store, UnauthorizedError } from "./store.js";
 
 export const EXECUTION_TOKEN_HEADER = "x-mar-execution-token";
@@ -430,6 +431,19 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   // Organizations (spec §49): platform admins create them; people see their own.
   app.get("/orgs", (req) => store.listOrgs(scope(req)));
+  // Each organization's own notification webhooks (spec §31, §49): its owners, or platform admins.
+  app.put("/orgs/:id/notifications", role("owner"), (req) => {
+    const id = z.object({ id: z.string().min(1) }).parse(req.params).id;
+    const org = scope(req);
+    if (org && org !== id) throw new NotFoundError("organization", id);
+    const body = z
+      .object({
+        webhooks: z.array(z.url({ protocol: /^https?$/ })).max(10),
+        kinds: z.array(z.enum(NOTIFICATION_KINDS)).max(NOTIFICATION_KINDS.length).default([]),
+      })
+      .parse(req.body);
+    return store.setOrgNotifications(id, body, req.actor.name);
+  });
   app.post("/orgs", role("owner"), async (req, reply) => {
     if (scope(req)) throw new ForbiddenError("only platform admins create organizations");
     const body = orgBody.parse(req.body);

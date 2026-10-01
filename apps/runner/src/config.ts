@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { AntigravityAdapter } from "@mar/adapter-antigravity";
 import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
 import { CodexAdapter } from "@mar/adapter-codex";
@@ -27,6 +28,8 @@ const agentConfig = z.discriminatedUnion("adapter", [
     defaultTimeoutSeconds: z.number().int().positive().optional(),
     /** agy --sandbox without permission prompts, policed by the hook (ADR-0018). */
     unattended: z.boolean().default(false),
+    /** Run agy with a profile of its own under the runner home, without the machine user's settings (default). */
+    isolateConfig: z.boolean().default(true),
     ...routing,
   }),
   z.object({
@@ -71,7 +74,11 @@ export async function loadConfig(path: string): Promise<RunnerConfigInput> {
   return JSON.parse(await readFile(path, "utf8")) as RunnerConfigInput;
 }
 
-export function createAdapter(config: AgentConfig): AgentAdapter {
+/** The isolated profile directory of an agent. */
+export const profileDirOf = (profilesDir: string, agentId: string) => join(profilesDir, agentId.replace(/[^\w.-]/g, "_"));
+
+/** `profilesDir`: where agents with an isolated configuration keep their profiles (one per agent id). */
+export function createAdapter(config: AgentConfig, profilesDir?: string, agentId = "agent"): AgentAdapter {
   switch (config.adapter) {
     case "codex":
       return new CodexAdapter({ ...(config.executable && { executable: config.executable }) });
@@ -82,6 +89,7 @@ export function createAdapter(config: AgentConfig): AgentAdapter {
         ...(config.executable && { executable: config.executable }),
         ...(config.defaultTimeoutSeconds && { defaultTimeoutSeconds: config.defaultTimeoutSeconds }),
         unattended: config.unattended,
+        ...(config.isolateConfig && profilesDir && { profileDir: profileDirOf(profilesDir, agentId) }),
       });
     case "generic-cli":
       return new GenericCliAdapter({
