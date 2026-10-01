@@ -38,3 +38,4 @@ Tự duyệt chỉ áp dụng cho plan. Code của các task vẫn đi qua valid
 
 - Mỗi round tốn thêm một lượt chạy của planner và một của critic. `maxRounds` giới hạn chi phí này, và budget (ADR-0019) vẫn áp dụng.
 - Giới hạn `maxAutoTasks` giữ cho các plan lớn vẫn có người xem. Owner chủ động nâng mức này khi đã tin vào chất lượng plan.
+- Đã kiểm chứng thật: Claude lập plan, Codex critique (approve), plan tự duyệt, rồi Codex thực hiện và mở PR #29 mà không bước nào cần người, cho tới lần review code.

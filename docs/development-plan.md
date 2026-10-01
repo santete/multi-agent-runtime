@@ -235,6 +235,7 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] Critic agent (khác planner) chạy read-only, critique plan theo `CRITIQUE_SCHEMA`; `revise` dẫn đến vòng sửa mới (tối đa `maxRounds`); critic bỏ cuộc thì người quyết định
 - [x] Tự duyệt (opt-in): critic approve, không có blocker, tối đa `maxAutoTasks` task, mọi task có agent online nhận được; nếu không thì ghi lý do và để người duyệt
 - [x] UI: trạng thái critic reviewing, phần Critique, form cài đặt planning
+- [x] **Chạy thật** trên `mar-sandbox`: từ goal "CSV tổng hợp refund theo lý do", Claude lập plan 1 task; Codex critique (approve, 0 issue); plan tự duyệt bởi `platform`; Codex làm LP-23 và tạo PR #29. Từ goal đến lúc PR được mở, không bước nào cần người. Người chỉ review code trước khi merge.
 
 ## Rủi ro đang theo dõi
 
