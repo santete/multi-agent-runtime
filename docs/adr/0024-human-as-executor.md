@@ -29,3 +29,6 @@ Trước ADR này, agent gặp chỗ mơ hồ chỉ có hai lựa chọn: tự �
 
 - Trong lúc chờ người, agent dừng hẳn và không giữ session mở. Khi resume, agent tiếp tục với ngữ cảnh cũ, nên phần việc đã làm không bị mất.
 - Câu trả lời của người chỉ áp dụng cho task đó. Nếu là quy tắc chung, người hoặc agent nên ghi thêm vào knowledge base (ADR-0014).
+- Đã kiểm chứng thật (LP-28):
+  - Claude hỏi đúng chỗ còn thiếu, tức độ dài refund window và ranh giới ngày cuối, kèm các option.
+  - Câu hỏi được trả lời trong Inbox, rồi Claude resume session và làm đúng câu trả lời (PR #30).
