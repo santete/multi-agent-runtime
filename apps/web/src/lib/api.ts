@@ -15,6 +15,7 @@ import type {
   KnowledgeStatus,
   PlanDto,
   PlanningPolicy,
+  InstructionDto,
   ProjectPolicy,
   QueueEntry,
   PlannedTask,
@@ -138,6 +139,11 @@ export const api = {
     post<TaskDto>(`/tasks/${taskId}/review`, { decision, ...(comment && { comment }) }),
   retry: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/retry`),
   cancel: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/cancel`),
+  pause: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/pause`),
+  resume: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/resume`),
+  instructions: (taskId: string) => get<InstructionDto[]>(`/tasks/${taskId}/instructions`),
+  sendInstruction: (taskId: string, text: string, interrupt: boolean) =>
+    post<InstructionDto>(`/tasks/${taskId}/instructions`, { text, interrupt }),
 
   executionEvents: (executionId: string, after = 0) =>
     get<EventsPage>(`/executions/${executionId}/events?after=${after}&limit=1000`),

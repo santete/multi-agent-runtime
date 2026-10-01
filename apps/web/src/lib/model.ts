@@ -5,7 +5,7 @@ export const COLUMNS = [
   { id: "waiting", title: "Waiting", states: ["CREATED"] },
   { id: "ready", title: "Ready", states: ["READY"] },
   { id: "working", title: "Working", states: ["ASSIGNED", "RUNNING", "VALIDATING", "WAITING_FOR_AGENT"] },
-  { id: "human", title: "Needs you", states: ["WAITING_FOR_HUMAN", "REVIEW", "BLOCKED"] },
+  { id: "human", title: "Needs you", states: ["WAITING_FOR_HUMAN", "REVIEW", "BLOCKED", "PAUSED"] },
   { id: "rework", title: "Rework", states: ["REWORK", "RETRYING"] },
   { id: "merging", title: "Merging", states: ["APPROVED", "MERGING"] },
   { id: "done", title: "Done", states: ["COMPLETED", "CANCELLED"] },
@@ -54,6 +54,7 @@ export function toneOf(state: TaskState): Tone {
       return "active";
     case "WAITING_FOR_HUMAN":
     case "REVIEW":
+    case "PAUSED":
       return "attention";
     case "REWORK":
     case "RETRYING":

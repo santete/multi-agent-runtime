@@ -284,6 +284,15 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
   - Lệnh curl tới host được phép thì chạy luôn, còn sửa `package.json` thì bị chặn chờ duyệt. Owner duyệt, Claude hoàn tất.
   - Lộ ra một vấn đề: agent vừa bị chặn vừa hỏi lại đúng chuyện đó, nên người phải trả lời hai lần. Đã sửa brief.
 
+### Điều khiển agent từ console — trạng thái ✅ ([ADR-0028](adr/0028-console-controls.md))
+
+- [x] Pause / Resume (state PAUSED): agent đang chạy được dừng qua heartbeat; resume tiếp tục đúng session, và lần chạy bị ngắt không tính là attempt
+- [x] Send instruction: giao ở lần chạy sau (`INSTRUCTIONS.md`, nằm đầu prompt); mặc định ngắt agent đang chạy rồi resume ngay với instruction
+- [x] Open diff: runner gửi diff của worktree sau mỗi lần chạy, kể cả khi bị ngắt; trang task có Diff, Instructions, Pause/Resume
+- [x] **Chạy thật** (LP-34, PR #36):
+  - Instruction giữa chừng ("đổi thành `formatMoney`, mã tiền tệ đứng trước"): agent bị dừng sau khoảng 6 giây, rồi resume cùng session và làm theo.
+  - Pause: diff lúc pause đúng như instruction. Resume thì task hoàn tất và merge.
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

@@ -83,6 +83,19 @@ describe("task context", () => {
     );
     expect(prompt).toMatch(/^A human has decided on the actions you were blocked from taking/);
   });
+
+  it("puts a person's instructions first, in full, and in INSTRUCTIONS.md (spec §43)", () => {
+    const instructions = [
+      { id: "i1", taskId: "t", text: "Use cents,\nnot floats.", author: "lan", createdAt: "2026-10-01T00:00:00.000Z", executionId: "e" },
+    ];
+    const prompt = buildPrompt(claim({ instructions }), true);
+    expect(prompt).toMatch(/^A person sent you an instruction for this task/);
+    expect(prompt).toContain("> Use cents,\n> not floats.\n> — lan");
+    expect(prompt).toContain("You were stopped to receive this.");
+    expect(prompt).not.toContain("Your previous run on this task was interrupted");
+    const file = contextFiles(claim({ instructions })).find((f) => f.path.endsWith("INSTRUCTIONS.md"));
+    expect(String(file?.content)).toContain("## From lan");
+  });
 });
 
 describe("project knowledge", () => {

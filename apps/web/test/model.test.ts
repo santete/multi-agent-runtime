@@ -1,4 +1,5 @@
 import type { EventDto, TaskDto, TaskState } from "@mar/core";
+import { TASK_STATES } from "@mar/core";
 import { describe, expect, it } from "vitest";
 import { COLUMNS, columnOf, countByState, describeEvent, groupByColumn, layoutGraph, timeAgo, toneOf } from "../src/lib/model.js";
 
@@ -9,7 +10,7 @@ describe("board columns", () => {
   it("places every task state in exactly one column", () => {
     const all = COLUMNS.flatMap((c) => c.states);
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(15);
+    expect(all).toHaveLength(TASK_STATES.length);
   });
 
   it("groups tasks", () => {
