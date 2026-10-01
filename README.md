@@ -84,8 +84,10 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/validation-sandbox` | `{image, network?, memory?, cpus?}` or `null`: run validation steps in a container ([ADR-0018](docs/adr/0018-sandboxed-validation-and-agy-unattended.md)) |
 | PUT | `/projects/:id/merge-policy` | `{revalidateOnBaseChange, waitForChecks}`: re-validate on a moved base and wait for CI before merging ([ADR-0015](docs/adr/0015-ci-and-revalidation.md)) |
 | PUT | `/projects/:id/review` | `{reviewAgents: [agent ids], autoApproveOnAgentReview}`: cross-agent review of every delivery ([ADR-0011](docs/adr/0011-cross-agent-review.md)) |
-| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `maxAttempts?`, `dependsOn?: [id or key]`); see [ADR-0012](docs/adr/0012-capability-routing.md) |
+| POST | `/projects/:id/tasks` | create task (`title`, `objective`, `agent` — an agent id or `"auto"`, `requires?: [skills]`, `fallbackAgents?`, `priority?` (0..100, default 50), `maxAttempts?`, `dependsOn?: [id or key]`); see [ADR-0012](docs/adr/0012-capability-routing.md) |
 | GET | `/projects/:id/tasks`, `/tasks/:id` | list / get tasks |
+| GET | `/projects/:id/queue` | READY tasks in the order the scheduler takes them, with reasons ([ADR-0023](docs/adr/0023-automatic-reprioritization.md)) |
+| PUT | `/tasks/:id/priority` | `{priority: 0..100}` |
 | POST | `/projects/:id/plans` | `{goal, agent}`: a planner agent proposes a task DAG ([ADR-0013](docs/adr/0013-assisted-planning.md)) |
 | GET | `/projects/:id/plans`, `/plans/:id` | plans with their proposal and status |
 | GET | `/projects/:id/knowledge?status=` | shared project knowledge: facts agents reported (accepted when their work merges) and people wrote ([ADR-0014](docs/adr/0014-shared-knowledge-base.md)) |

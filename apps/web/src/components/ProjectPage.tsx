@@ -2,7 +2,7 @@ import type { ActorDto, TaskDto } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
-import { COLUMNS, groupByColumn } from "../lib/model.js";
+import { COLUMNS, groupByColumn, priorityLabel } from "../lib/model.js";
 import { href, type ProjectTab } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { Graph } from "./Graph.js";
@@ -72,7 +72,7 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
       {!tasks ? (
         <Loading />
       ) : tab === "board" ? (
-        <Board tasks={tasks} />
+        <Board tasks={tasks} projectId={id} />
       ) : tab === "graph" ? (
         tasks.length ? <Graph tasks={tasks} /> : <Empty>No tasks yet.</Empty>
       ) : tab === "plans" ? (
@@ -93,8 +93,12 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
   );
 }
 
-function Board({ tasks }: { tasks: TaskDto[] }) {
+function Board({ tasks, projectId }: { tasks: TaskDto[]; projectId: string }) {
   const groups = groupByColumn(tasks);
+  // READY work in the order the scheduler will take it (spec §53).
+  const [queue] = useLiveQuery(() => api.queue(projectId), [projectId, tasks], () => false);
+  const rank = new Map((queue ?? []).map((e, i) => [e.taskId, { i, e }]));
+  groups.ready.sort((a, b) => (rank.get(a.id)?.i ?? 999) - (rank.get(b.id)?.i ?? 999));
   const byId = new Map(tasks.map((t) => [t.id, t]));
   return (
     <div className="board">
@@ -128,6 +132,12 @@ function Board({ tasks }: { tasks: TaskDto[] }) {
                   </span>
                 )}
                 {t.pullRequestNumber && <span className="muted small">PR #{t.pullRequestNumber}</span>}
+                {t.priority > 50 && <span className="badge tone-warning">{priorityLabel(t.priority)}</span>}
+                {rank.get(t.id) && t.state === "READY" && (
+                  <span className="muted small" title={rank.get(t.id)!.e.reasons.join(", ")}>
+                    #{rank.get(t.id)!.i + 1} · score {rank.get(t.id)!.e.score}
+                  </span>
+                )}
               </div>
             </a>
           ))}

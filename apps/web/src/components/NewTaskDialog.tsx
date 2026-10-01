@@ -1,6 +1,7 @@
 import type { ProjectDto, TaskDto } from "@mar/core";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.js";
+import { PRIORITIES } from "../lib/model.js";
 import { href } from "../lib/router.js";
 
 const AUTO = "auto";
@@ -13,6 +14,7 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
   const [dependsOn, setDependsOn] = useState<string[]>([]);
   const [requires, setRequires] = useState("");
   const [fallbackAgents, setFallbackAgents] = useState<string[]>([]);
+  const [priority, setPriority] = useState(50);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -41,6 +43,7 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
         objective,
         agent,
         ...(dependsOn.length && { dependsOn }),
+        ...(priority !== 50 && { priority }),
         ...(agent === AUTO && skills.length && { requires: skills }),
         ...(agent !== AUTO && fallbackAgents.length && { fallbackAgents: fallbackAgents.filter((a) => a !== agent) }),
       });
@@ -103,6 +106,16 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
             </fieldset>
           )
         )}
+        <label>
+          Priority
+          <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+            {PRIORITIES.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
         {candidates.length > 0 && (
           <fieldset>
             <legend>Depends on (starts after these are merged)</legend>

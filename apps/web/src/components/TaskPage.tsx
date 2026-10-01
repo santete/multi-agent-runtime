@@ -2,7 +2,7 @@ import type { ActorDto, ApprovalDto, ArtifactDto, ExecutionDto, TaskDto, Validat
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
-import { timeAgo } from "../lib/model.js";
+import { PRIORITIES, priorityLabel, timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
 import { EventRow } from "./ActivityFeed.js";
 import { AgentConsole } from "./AgentConsole.js";
@@ -43,7 +43,19 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             <StateBadge state={task.state} />
           </div>
           <p className="muted small">
-            agent <span className="chip">{task.agent}</span> · created {timeAgo(task.createdAt)} · updated{" "}
+            agent <span className="chip">{task.agent}</span> · priority{" "}
+            {canAct && !TERMINAL.has(task.state) ? (
+              <select className="inline-select" value={task.priority} onChange={(e) => api.setPriority(task.id, Number(e.target.value)).then(reload)}>
+                {[...new Set([...PRIORITIES.map((p) => p.value), task.priority])].sort((a, b) => a - b).map((v) => (
+                  <option key={v} value={v}>
+                    {priorityLabel(v)} ({v})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              `${priorityLabel(task.priority)} (${task.priority})`
+            )}{" "}
+            · created {timeAgo(task.createdAt)} · updated{" "}
             {timeAgo(task.updatedAt)}
             {task.pullRequestUrl && (
               <>

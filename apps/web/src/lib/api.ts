@@ -12,6 +12,7 @@ import type {
   KnowledgeStatus,
   PlanDto,
   PlanningPolicy,
+  QueueEntry,
   PlannedTask,
   EventDto,
   EventsPage,
@@ -89,7 +90,15 @@ export const api = {
     get<EventsPage>(`/projects/${projectId}/events?after=${after}&limit=${limit}`),
   createTask: (
     projectId: string,
-    body: { title: string; objective: string; agent: string; dependsOn?: string[]; requires?: string[]; fallbackAgents?: string[] },
+    body: {
+      title: string;
+      objective: string;
+      agent: string;
+      dependsOn?: string[];
+      requires?: string[];
+      fallbackAgents?: string[];
+      priority?: number;
+    },
   ) =>
     post<TaskDto>(`/projects/${projectId}/tasks`, body),
 
@@ -105,6 +114,9 @@ export const api = {
     post<KnowledgeDto>(`/projects/${projectId}/knowledge`, body),
   updateKnowledge: (id: string, body: { kind?: KnowledgeKind; title?: string; body?: string; status?: KnowledgeStatus }) =>
     put<KnowledgeDto>(`/knowledge/${id}`, body),
+
+  queue: (projectId: string) => get<QueueEntry[]>(`/projects/${projectId}/queue`),
+  setPriority: (taskId: string, priority: number) => put<TaskDto>(`/tasks/${taskId}/priority`, { priority }),
 
   task: (id: string) => get<TaskDto>(`/tasks/${id}`),
   taskEvents: (id: string) => get<EventsPage>(`/tasks/${id}/events?limit=1000`),

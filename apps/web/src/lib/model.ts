@@ -23,6 +23,18 @@ export function groupByColumn(tasks: TaskDto[]): Record<ColumnId, TaskDto[]> {
   return groups;
 }
 
+/** Named priority levels (spec §53); the scheduler adds critical path and waiting time. */
+export const PRIORITIES = [
+  { value: 25, label: "low" },
+  { value: 50, label: "normal" },
+  { value: 75, label: "high" },
+  { value: 100, label: "urgent" },
+] as const;
+
+export function priorityLabel(priority: number): string {
+  return [...PRIORITIES].reverse().find((p) => priority >= p.value)?.label ?? "low";
+}
+
 /** Colour family per state, used by badges, cards and graph nodes. */
 export type Tone = "neutral" | "info" | "active" | "attention" | "warning" | "success" | "danger";
 
@@ -154,6 +166,8 @@ export function describeEvent(e: EventDto): string {
       return `fix task ${p.fixTask} created`;
     case "SessionDiscarded":
       return `agent session could not be resumed; starting a new one`;
+    case "TaskReprioritized":
+      return `priority ${p.from} → ${p.to}${by}`;
     case "AgentCooldown":
       return `${p.agent} hit its quota; resting until ${new Date(p.until).toLocaleString()}`;
     case "AgentCooldownCleared":

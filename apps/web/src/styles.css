@@ -1061,3 +1061,8 @@ button.link:disabled {
   display: grid;
   gap: 8px;
 }
+
+.inline-select {
+  padding: 0 4px;
+  font-size: inherit;
+}
