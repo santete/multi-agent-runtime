@@ -130,6 +130,16 @@ export function describeEvent(e: EventDto): string {
       return `knowledge accepted: ${p.title}${p.actor && p.actor !== "platform" ? ` by ${p.actor}` : ""}`;
     case "KnowledgeUpdated":
       return `knowledge ${p.status}: ${p.title}${by}`;
+    case "AgentCooldown":
+      return `${p.agent} hit its quota; resting until ${new Date(p.until).toLocaleString()}`;
+    case "AgentCooldownCleared":
+      return `${p.agent} made available again${by}`;
+    case "BudgetExceeded":
+      return `daily budget used up ($${Number(p.spentUsd).toFixed(2)} of $${p.dailyUsd}); work waits`;
+    case "TaskBudgetExceeded":
+      return `task budget used up ($${Number(p.spentUsd).toFixed(2)} of $${p.budgetUsd})`;
+    case "ProjectBudgetChanged":
+      return `budget set to ${p.budget ? JSON.stringify(p.budget) : "unlimited"}`;
     case "AgentSelected":
       return `routed to ${p.agent} — ${p.reason}`;
     case "TaskReassigned":

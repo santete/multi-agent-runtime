@@ -2,6 +2,7 @@
 import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
 import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
 import type { PlannedTask, PlanProposal } from "./plan.js";
+import type { Budget, Pricing } from "./cost.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
 import type { TaskState } from "./task-state.js";
 
@@ -50,6 +51,8 @@ export interface ProjectDto {
   waitForChecks: boolean;
   /** Run validation in a container (null: on the runner's host). */
   validationSandbox: ValidationSandbox | null;
+  /** Spending limits (spec §39); null: unlimited. */
+  budget: Budget | null;
   createdAt: string;
 }
 
@@ -114,6 +117,12 @@ export interface ExecutionDto {
   attempt: number;
   /** Agent that ran this attempt. */
   agent: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** USD; null when unknown. */
+  costUsd: number | null;
+  /** costUsd was estimated from token usage and the agent's pricing. */
+  costEstimated: boolean;
   status: ExecutionStatus;
   sessionId: string | null;
   workspace: string | null;
@@ -153,6 +162,34 @@ export interface CreateProjectRequest {
   revalidateOnBaseChange?: boolean | undefined;
   waitForChecks?: boolean | undefined;
   validationSandbox?: ValidationSandbox | null | undefined;
+  budget?: Budget | null | undefined;
+}
+
+/** An agent resting after it hit its quota on a runner (spec §39, §46). */
+export interface AgentCooldown {
+  runnerId: string;
+  runnerName: string;
+  agent: string;
+  until: string;
+  reason: string;
+}
+
+/** Spend of a project, per day and agent. */
+export interface CostReport {
+  projectId: string;
+  budget: Budget | null;
+  /** Spent since midnight (UTC). */
+  todayUsd: number;
+  rows: Array<{
+    day: string;
+    agent: string;
+    executions: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    /** Some of the cost is estimated from pricing. */
+    estimated: boolean;
+  }>;
 }
 
 export interface MergePolicy {
@@ -331,6 +368,10 @@ export interface AgentDescriptor {
   skills?: string[] | undefined;
   /** Relative cost of using the agent. */
   cost?: CostTier | undefined;
+  /** List price, to estimate cost when the CLI does not report it. */
+  pricing?: Pricing | undefined;
+  /** At most this many executions of the agent at once on the runner (subscription limits). */
+  maxConcurrent?: number | undefined;
 }
 
 export interface RegisterRunnerRequest {

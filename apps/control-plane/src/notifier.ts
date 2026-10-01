@@ -7,9 +7,9 @@ import type { Store } from "./store.js";
  * Slack-compatible incoming webhooks (Slack, Mattermost, Rocket.Chat,
  * Discord's /slack endpoint, or anything that accepts `{text}`).
  */
-export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "ci" | "merged";
+export type NotificationKind = "approval" | "review" | "plan" | "blocked" | "budget" | "quota" | "ci" | "merged";
 
-export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked"];
+export const DEFAULT_NOTIFICATIONS: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota"];
 
 export interface NotifierOptions {
   webhooks: string[];
@@ -104,6 +104,20 @@ export class Notifier {
           text: `:clipboard: *Plan ready for review* — ${p.tasks} task(s) for “${oneLine(plan.goal, 120)}”. ${this.link(`#/plans/${plan.id}`, "Open plan")}`,
         };
       }
+      case "BudgetExceeded": {
+        const project = e.projectId ? await this.store.getProject(e.projectId) : undefined;
+        return {
+          kind: "budget",
+          text: `:money_with_wings: *${project?.key ?? "A project"}* used its daily budget ($${Number(p.spentUsd).toFixed(2)} of $${p.dailyUsd}); its tasks wait until tomorrow or a higher budget. ${this.link(`#/projects/${e.projectId}/costs`, "Costs")}`,
+        };
+      }
+      case "TaskBudgetExceeded":
+        return { kind: "budget", text: `:money_with_wings: ${name} used up its budget ($${Number(p.spentUsd).toFixed(2)} of $${p.budgetUsd}) and stopped. ${taskLink}` };
+      case "AgentCooldown":
+        return {
+          kind: "quota",
+          text: `:hourglass: Agent \`${p.agent}\` hit its quota; resting until ${p.until}. Its tasks move to other agents or wait. ${this.link("#/agents", "Agents")}`,
+        };
       case "CiFailed":
         return { kind: "ci", text: `:x: CI failed for ${name}: ${(p.checks ?? []).join(", ")}. The agent is reworking it. ${taskLink}` };
       case "TaskMerged":
@@ -165,7 +179,7 @@ export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string
     .map((s) => s.trim())
     .filter(Boolean);
   if (!webhooks.length) return null;
-  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "ci", "merged"];
+  const all: NotificationKind[] = ["approval", "review", "plan", "blocked", "budget", "quota", "ci", "merged"];
   const kinds = env.MAR_NOTIFY_EVENTS
     ? env.MAR_NOTIFY_EVENTS.split(",")
         .map((s) => s.trim())

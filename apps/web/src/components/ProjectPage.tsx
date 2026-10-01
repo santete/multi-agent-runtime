@@ -6,6 +6,7 @@ import { COLUMNS, groupByColumn } from "../lib/model.js";
 import { href, type ProjectTab } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { Graph } from "./Graph.js";
+import { CostsTab } from "./CostsTab.js";
 import { KnowledgeTab } from "./KnowledgeTab.js";
 import { NewTaskDialog } from "./NewTaskDialog.js";
 import { NewPlanDialog, PlansList } from "./PlansPage.js";
@@ -59,6 +60,9 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <a className={tab === "knowledge" ? "active" : ""} href={href.project(id, "knowledge")}>
           Knowledge
         </a>
+        <a className={tab === "costs" ? "active" : ""} href={href.project(id, "costs")}>
+          Costs
+        </a>
         <a className={tab === "activity" ? "active" : ""} href={href.project(id, "activity")}>
           Activity
         </a>
@@ -75,6 +79,8 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <PlansList projectId={id} />
       ) : tab === "knowledge" ? (
         <KnowledgeTab projectId={id} actor={actor} />
+      ) : tab === "costs" ? (
+        <CostsTab project={project} actor={actor} />
       ) : (
         <ActivityFeed projectId={id} limit={100} />
       )}

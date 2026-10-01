@@ -102,6 +102,9 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/tasks/:id/artifacts` | `handoff` (agent's structured report) and `validation_result` artifacts |
 | GET | `/projects/:id/events`, `/tasks/:id/events`, `/executions/:id/events` | event log (`?after=<seq>&limit=`), incl. `ToolCallChecked` audit |
 | GET | `/runners` | agent registry: runners, their agents and capabilities, online status, active executions |
+| PUT | `/projects/:id/budget` | `{dailyUsd?, perTaskUsd?}` or `null`: spending limits ([ADR-0019](docs/adr/0019-cost-and-quota.md)) |
+| GET | `/projects/:id/costs?days=` | spend per day and agent (reported, or estimated from runner `pricing`) |
+| GET | `/agents/cooldowns` | agents resting after a quota hit; `DELETE /runners/:id/cooldowns/:agent` makes one available again |
 | GET | `/agents/stats?projectId=` | per-agent track record: runs, succeeded, failed, running, average duration, rework rate |
 | GET | `/me` | the calling user and role |
 | GET | `/stream?projectId=&after=` | live events (server-sent events) |
@@ -126,7 +129,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | `MAR_LEASE_SECONDS` | `60` | execution lease; a runner silent for longer is considered lost |
 | `MAR_SWEEP_INTERVAL_MS` | `5000` | lost-execution detection and RETRYING/REWORK → READY/BLOCKED |
 | `MAR_NOTIFY_WEBHOOKS` | – | comma-separated Slack-compatible incoming webhook URLs (Slack, Mattermost, Rocket.Chat, Discord `/slack`); unset = no notifications ([ADR-0016](docs/adr/0016-notifications.md)) |
-| `MAR_NOTIFY_EVENTS` | `approval,review,plan,blocked` | also `ci`, `merged` |
+| `MAR_NOTIFY_EVENTS` | `approval,review,plan,blocked,budget,quota` | also `ci`, `merged` |
 | `MAR_PUBLIC_URL` | `http://HOST:PORT` | dashboard base URL used in notification links |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | – | OTLP/HTTP collector for traces and metrics (control plane and runner); one trace per execution ([ADR-0017](docs/adr/0017-opentelemetry.md)) |
 | `GITHUB_TOKEN` | – | opens pull requests for delivered tasks (e.g. `GITHUB_TOKEN=$(gh auth token)`); without it the branch is pushed and the PR is skipped |

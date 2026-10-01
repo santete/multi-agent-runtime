@@ -1030,3 +1030,24 @@ button.link:disabled {
   gap: 8px;
   margin-bottom: 16px;
 }
+
+.costs .stats {
+  margin-bottom: 16px;
+}
+.budget-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+.budget-form label {
+  display: grid;
+  gap: 4px;
+}
+.cooldown {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
