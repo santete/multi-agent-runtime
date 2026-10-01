@@ -156,5 +156,5 @@ describe("M4: DAG, merge queue and conflict rework", () => {
     expect(await runner.worktrees.listTaskKeys()).toEqual([]);
     const repo = runner.worktrees.repoPath({ key: "M4", repoUrl: origin.path, defaultBranch: "main" });
     expect(await git(repo, "branch", "--list", "task/*")).toBe("");
-  }, 120_000); // many git operations; slow when the whole suite runs in parallel
+  }, 240_000); // many git operations; slow when the whole suite runs in parallel
 });

@@ -77,7 +77,7 @@ describe("plans", () => {
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ status: "planning", goal: "Add refunds", plannerTaskKey: "PAY-2", plannerAgent: "claude" });
 
-    await claim(runnerId); // the existing work task
+    // Planning unblocks people, so it goes before older ordinary work (ADR-0023).
     const c = await claim(runnerId);
     expect(c.task).toMatchObject({ kind: "plan", title: "Plan: Add refunds", planId: created.body.id });
     expect(c.plan).toMatchObject({
@@ -87,7 +87,7 @@ describe("plans", () => {
         { id: "claude", skills: ["backend", "planning"], cost: "medium" },
         { id: "agy", skills: ["frontend"], cost: "medium" },
       ],
-      openTasks: [{ key: "PAY-1", title: "Existing", state: "ASSIGNED" }],
+      openTasks: [{ key: "PAY-1", title: "Existing", state: "READY" }],
     });
   });
 

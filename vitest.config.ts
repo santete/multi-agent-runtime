@@ -7,5 +7,7 @@ export default defineConfig({
     hookTimeout: 60_000,
     // End-to-end tests run many git and process operations and slow down when files run in parallel.
     testTimeout: 90_000,
+    // Each control-plane test file runs its own PGlite (WASM Postgres); too many at once exhaust the machine.
+    maxWorkers: 6,
   },
 });
