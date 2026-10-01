@@ -24,6 +24,8 @@ if (!users.length && !["127.0.0.1", "localhost", "::1"].includes(host)) {
 
 const db = databaseUrl ? createPgDb(databaseUrl) : await createPgliteDb(process.env.PGLITE_DIR ?? "./.data/pglite");
 const applied = await migrate(db);
+// Organizations named in the users file exist (spec §49).
+await new Store(db).ensureOrgs([...new Set(users.map((u) => u.org ?? "default").filter((o) => o !== "*"))]);
 
 // GitHub token for opening and merging pull requests, e.g. GITHUB_TOKEN=$(gh auth token).
 const githubToken = process.env.GITHUB_TOKEN || undefined;

@@ -24,6 +24,7 @@ import {
   contextFiles,
   critiqueFiles,
   knowledgeFiles,
+  agentFiles,
   planFiles,
   reviewFiles,
 } from "./context.js";
@@ -120,6 +121,7 @@ export class Runner {
       cost: this.config.agents[id]!.cost,
       ...(this.config.agents[id]!.pricing && { pricing: this.config.agents[id]!.pricing }),
       ...(this.config.agents[id]!.maxConcurrent && { maxConcurrent: this.config.agents[id]!.maxConcurrent }),
+      ...(this.config.agents[id]!.profile && { profile: this.config.agents[id]!.profile }),
     }));
   }
 
@@ -434,7 +436,7 @@ export class Runner {
           : claim.critique
             ? critiqueFiles(claim.critique)
             : contextFiles(claim, extras);
-      const files = [...context, ...knowledgeFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
+      const files = [...context, ...knowledgeFiles(claim), ...agentFiles(claim), ...(adapter.workspaceFiles?.(request) ?? [])];
       restore = (await this.worktrees.writeFiles(worktree, files)).modifiedTracked;
       if (restore.length) {
         shipper.push({ kind: "diagnostic", text: `runner merged its config into tracked files: ${restore.join(", ")}` });

@@ -14,6 +14,8 @@ const routing = {
   pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
   /** At most this many executions of this agent at once (subscription concurrency). */
   maxConcurrent: z.number().int().min(1).optional(),
+  /** Marketplace profile ("name" or "name@version"): skills, cost, pricing and instructions come from it. */
+  profile: z.string().min(1).optional(),
 };
 
 const agentConfig = z.discriminatedUnion("adapter", [

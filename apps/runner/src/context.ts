@@ -286,9 +286,19 @@ export function knowledgeFiles(claim: ClaimResponse): WorkspaceFile[] {
   return claim.knowledge?.length ? [{ path: KNOWLEDGE_FILE, content: knowledgeBrief(claim.knowledge), mergeJson: false }] : [];
 }
 
-/** The sentence pointing the agent at the knowledge file. */
+/** The agent's standing instructions from its marketplace profile (spec §53), for every task kind. */
+export function agentFiles(claim: ClaimResponse): WorkspaceFile[] {
+  return claim.agentInstructions
+    ? [{ path: `${CONTEXT_DIR}/AGENT.md`, content: `# Your standing instructions\n\n${claim.agentInstructions}\n`, mergeJson: false }]
+    : [];
+}
+
+/** The sentences pointing the agent at the knowledge and instruction files. */
 function knowledgeHint(claim: ClaimResponse): string {
-  return claim.knowledge?.length ? ` What the team already knows about the project is in ${KNOWLEDGE_FILE}.` : "";
+  return (
+    (claim.knowledge?.length ? ` What the team already knows about the project is in ${KNOWLEDGE_FILE}.` : "") +
+    (claim.agentInstructions ? ` Follow your standing instructions in ${CONTEXT_DIR}/AGENT.md.` : "")
+  );
 }
 
 function critiqueBrief(c: NonNullable<ClaimResponse["critique"]>): string {

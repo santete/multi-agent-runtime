@@ -199,7 +199,7 @@ Codex adapter · planner hỗ trợ (LLM đề xuất DAG, người duyệt) · 
 
 ## Phase 3
 
-Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn agent theo kết quả thực tế → (3) self-healing → (4) planner tự động + multi-agent debate → (5) tự động ưu tiên lại task → (6) human as executor (§61) → (7) multi-org + agent marketplace.
+Thứ tự đã thực hiện: (1) cost & quota → (2) agent performance + chọn agent theo kết quả thực tế → (3) self-healing → (4) planner tự động + multi-agent debate → (5) tự động ưu tiên lại task → (6) human as executor (§61) → (7) multi-org + agent marketplace.
 
 ### Cost · quota · budget — trạng thái ✅ ([ADR-0019](adr/0019-cost-and-quota.md))
 
@@ -249,6 +249,16 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] UI Inbox (câu hỏi, task cho người, approval); thông báo
 - [x] **Chạy thật** (LP-28, PR #30): với task "áp dụng refund window của công ty", Claude không tự đoán mà hỏi: độ dài window là bao nhiêu, và có tính ngày cuối không (kèm 4 option). Câu hỏi được trả lời bằng một click trong Inbox. Claude resume đúng session và làm đúng câu trả lời (30 ngày, ngày thứ 30 vẫn được refund).
 - [x] Trong lần chạy đó, Claude chạm giới hạn session thật, và lộ ra 4 lỗi của phần quota, đều đã sửa (xem ADR-0019).
+
+### Multi-org · agent marketplace — trạng thái ✅ ([ADR-0025](adr/0025-organizations-and-marketplace.md))
+
+- [x] Org cho project, runner và user (`*` = platform admin); API trả 404 cho tài nguyên của org khác; các danh sách và event được lọc theo org; runner chỉ nhận việc của org mình
+- [x] Agent theo project (`allowedAgents`)
+- [x] Marketplace: profile có version (adapter, skills, cost, pricing, instructions), publish theo org hoặc public; runner build agent từ `profile`; mọi task của agent nhận `AGENT.md`; thống kê usage; trang Marketplace
+
+## Phase 3 — hoàn tất
+
+Đã xong cả 7 mục: cost và quota, performance kèm chọn agent theo kết quả, self-healing, planner tự động với debate, tự động ưu tiên lại task, human as executor, multi-org và marketplace.
 
 ## Rủi ro đang theo dõi
 

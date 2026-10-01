@@ -1,6 +1,8 @@
 import type {
   ActorDto,
   AgentCooldown,
+  AgentProfileDto,
+  PublishAgentProfileRequest,
   AgentSkillStats,
   AgentStats,
   Budget,
@@ -145,6 +147,9 @@ export const api = {
     post<ApprovalDto>(`/approvals/${id}/${decision}`, comment ? { comment } : {}),
 
   runners: () => get<RunnerDto[]>("/runners"),
+  profiles: () => get<AgentProfileDto[]>("/agent-profiles"),
+  publishProfile: (body: PublishAgentProfileRequest) => post<AgentProfileDto>("/agent-profiles", body),
+  deprecateProfile: (id: string) => post<AgentProfileDto>(`/agent-profiles/${id}/deprecate`),
   agentStats: () => get<AgentStats[]>("/agents/stats"),
   cooldowns: () => get<AgentCooldown[]>("/agents/cooldowns"),
   skillStats: () => get<AgentSkillStats[]>("/agents/skill-stats"),

@@ -1,6 +1,6 @@
 import type { ClaimResponse } from "@mar/core";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, contextFiles, knowledgeFiles } from "../src/context.js";
+import { agentFiles, buildPrompt, contextFiles, knowledgeFiles } from "../src/context.js";
 
 const claim = (extra: Partial<ClaimResponse> = {}): ClaimResponse =>
   ({
@@ -113,5 +113,14 @@ describe("answers from a person", () => {
     const file = files.find((f) => f.path.endsWith("DECISIONS.md"));
     expect(String(file?.content)).toContain("## How long is the refund window?\n\n30 days from the charge");
     expect(buildPrompt(claim({ decisions }), true)).toMatch(/^A person answered the questions you raised/);
+  });
+});
+
+describe("agent profile instructions", () => {
+  it("writes AGENT.md and points the agent at it", () => {
+    const c = claim({ agentInstructions: "Keep diffs small." });
+    expect(agentFiles(c)).toEqual([{ path: ".orchestrator/context/AGENT.md", content: "# Your standing instructions\n\nKeep diffs small.\n", mergeJson: false }]);
+    expect(buildPrompt(c, false)).toContain("AGENT.md");
+    expect(agentFiles(claim())).toEqual([]);
   });
 });
