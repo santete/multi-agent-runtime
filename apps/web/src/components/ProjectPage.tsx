@@ -76,7 +76,7 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
       ) : tab === "graph" ? (
         tasks.length ? <Graph tasks={tasks} /> : <Empty>No tasks yet.</Empty>
       ) : tab === "plans" ? (
-        <PlansList projectId={id} />
+        <PlansList project={project} actor={actor} />
       ) : tab === "knowledge" ? (
         <KnowledgeTab projectId={id} actor={actor} />
       ) : tab === "costs" ? (

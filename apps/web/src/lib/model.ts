@@ -114,6 +114,16 @@ export function describeEvent(e: EventDto): string {
       return `created "${p.title}" for ${p.agent === "auto" ? `the scheduler${p.requires?.length ? ` (needs ${p.requires.join(", ")})` : ""}` : p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
     case "TaskStateChanged":
       return `${stateLabel(p.from)} → ${stateLabel(p.to)}${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "PlanCritiqueRequested":
+      return `plan sent to ${p.critic} for critique (round ${p.round})`;
+    case "PlanCritiqued":
+      return `${p.critic} ${p.verdict === "approve" ? "approved" : "asked to revise"} the plan (${p.issues} issues, round ${p.round})`;
+    case "PlanAutoApproved":
+      return `plan approved automatically after ${p.critic} approved it`;
+    case "PlanAutoApprovalSkipped":
+      return `plan left for a person: ${p.reason}`;
+    case "PlanCritiqueFailed":
+      return "the critic gave up; the plan waits for a person";
     case "PlanRequested":
       return `plan requested from ${p.agent}${p.revises ? " (revision)" : ""}: “${p.goal}”${by}`;
     case "PlanProposed":

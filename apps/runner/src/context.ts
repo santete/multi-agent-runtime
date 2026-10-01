@@ -289,6 +289,52 @@ function knowledgeHint(claim: ClaimResponse): string {
   return claim.knowledge?.length ? ` What the team already knows about the project is in ${KNOWLEDGE_FILE}.` : "";
 }
 
+function critiqueBrief(c: NonNullable<ClaimResponse["critique"]>): string {
+  const agents = c.agents.length ? c.agents.map((a) => `- \`${a.id}\`${a.skills.length ? ` — ${a.skills.join(", ")}` : ""}`).join("\n") : "- _None online._";
+  return [
+    `# Critique a plan (round ${c.round})`,
+    "",
+    `The \`${c.planner}\` agent planned this goal for a team of coding agents. Before anything is built, you check the plan.`,
+    "",
+    "## Goal",
+    "",
+    c.goal,
+    "",
+    "## The plan",
+    "",
+    "```json",
+    JSON.stringify(c.proposal, null, 2),
+    "```",
+    "",
+    "## Agents available",
+    "",
+    agents,
+    "",
+    "## What to check",
+    "",
+    `- Read the code on \`${c.baseBranch}\` (this worktree) as needed; do **not** modify anything.`,
+    "- Does the plan reach the goal? Is anything missing, wrong or already done?",
+    "- Is every objective self-contained and testable? Is any task too big for one agent session and one pull request?",
+    "- Are the dependencies right (nothing starts before what it needs; independent work in parallel)?",
+    "- Are agents or required skills sensible for each task?",
+    "- Answer `revise` only for real problems, with one issue per problem and what to change. Style preferences are not a reason.",
+    "",
+  ].join("\n");
+}
+
+/** Context file for a critique task. */
+export function critiqueFiles(c: NonNullable<ClaimResponse["critique"]>): WorkspaceFile[] {
+  return [{ path: `${CONTEXT_DIR}/CRITIQUE.md`, content: critiqueBrief(c), mergeJson: false }];
+}
+
+export function buildCritiquePrompt(c: NonNullable<ClaimResponse["critique"]>, claim?: ClaimResponse): string {
+  return [
+    `You are reviewing another agent's plan before work starts. Read ${CONTEXT_DIR}/CRITIQUE.md, inspect the repository as needed, and do not modify any file.` +
+      (claim ? knowledgeHint(claim) : ""),
+    "Answer with your verdict (approve or revise), a short summary and the issues (ref, severity, message).",
+  ].join("\n\n");
+}
+
 /** Context file for a plan task. */
 export function planFiles(plan: NonNullable<ClaimResponse["plan"]>): WorkspaceFile[] {
   return [{ path: `${CONTEXT_DIR}/PLAN.md`, content: planBrief(plan), mergeJson: false }];

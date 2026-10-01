@@ -17,7 +17,10 @@ import {
   type MergePolicy,
   type RoutingPolicy,
   type UpdateKnowledgeRequest,
+  type CritiqueContext,
+  type PlanCritique,
   type PlanDto,
+  type PlanningPolicy,
   type PlanningContext,
   type PlanProposal,
   type RevisePlanRequest,
@@ -59,6 +62,8 @@ import {
   ACTIVE_EXECUTION_STATUSES,
   approvalKey,
   checkPlan,
+  formatCritique,
+  toPlanCritique,
   KNOWLEDGE_KINDS,
   sameKnowledge,
   chooseAgent,
@@ -125,6 +130,8 @@ export interface StoreOptions {
 type Row = Record<string, any>;
 
 const ACTIVE = [...ACTIVE_EXECUTION_STATUSES];
+const DEFAULT_PLANNING: PlanningPolicy = { critics: [], maxRounds: 2, autoApprove: false, maxAutoTasks: 5 };
+
 /** What a project (alias p) spent since midnight UTC, as a SQL expression. */
 const TODAY_SPEND_SQL = `(select coalesce(sum(e.cost_usd), 0) from executions e join tasks t2 on t2.id = e.task_id
   where t2.project_id = p.id and e.created_at >= date_trunc('day', now()))`;
@@ -153,6 +160,7 @@ const toProject = (r: Row): ProjectDto => ({
   validationSandbox: r.validation_sandbox ?? null,
   budget: r.budget ?? null,
   onBrokenMain: r.on_broken_main ?? "notify",
+  planning: { ...DEFAULT_PLANNING, ...(r.planning ?? {}) },
   createdAt: iso(r.created_at),
 });
 
@@ -241,6 +249,8 @@ const toPlan = (r: Row): PlanDto => ({
   plannerTaskId: r.planner_task_id ?? null,
   plannerTaskKey: r.planner_task_key ?? null,
   plannerAgent: r.planner_agent ?? null,
+  round: r.round ?? 1,
+  critique: r.critique ?? null,
   proposal: r.proposal ?? null,
   createdTasks: r.created_tasks ?? [],
   feedback: r.feedback ?? null,
@@ -379,8 +389,8 @@ export class Store {
       const [row] = await q.query(
         `insert into projects (id, key, name, repo_url, default_branch, validation, max_parallel,
            review_agents, auto_approve_on_agent_review, routing_policy, revalidate_on_base_change, wait_for_checks,
-           validation_sandbox, budget, on_broken_main)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning *`,
+           validation_sandbox, budget, on_broken_main, planning)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning *`,
         [
           randomUUID(),
           req.key,
@@ -397,6 +407,7 @@ export class Store {
           req.validationSandbox ? JSON.stringify(req.validationSandbox) : null,
           req.budget ? JSON.stringify(req.budget) : null,
           req.onBrokenMain ?? "notify",
+          JSON.stringify({ ...DEFAULT_PLANNING, ...(req.planning ?? {}) }),
         ],
       );
       const project = toProject(row!);
@@ -754,14 +765,14 @@ export class Store {
     projectId: string,
     req: CreatePlanRequest,
     actor?: string,
-    previous?: { id: string; feedback: string },
+    previous?: { id: string; feedback: string; round?: number },
   ): Promise<string> {
     await this.getProject(projectId, q);
     const id = randomUUID();
     await q.query(
-      `insert into plans (id, project_id, goal, previous_plan_id, feedback, created_by)
-       values ($1, $2, $3, $4, $5, $6)`,
-      [id, projectId, req.goal, previous?.id ?? null, previous?.feedback ?? null, actor ?? null],
+      `insert into plans (id, project_id, goal, previous_plan_id, feedback, created_by, round)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, projectId, req.goal, previous?.id ?? null, previous?.feedback ?? null, actor ?? null, (previous?.round ?? 0) + 1],
     );
     const title = req.goal.replace(/\s+/g, " ").trim();
     const task = await this.insertTask(
@@ -799,48 +810,50 @@ export class Store {
    * dependency order; each becomes READY once its dependencies are merged.
    */
   async approvePlan(id: string, req: ApprovePlanRequest, actor?: string): Promise<PlanDto> {
-    return this.db.tx(async (q) => {
-      const plan = await this.lockPlan(q, id);
-      if (plan.status !== "proposed") throw new ConflictError(`plan is ${plan.status}; only a proposed plan can be approved`);
-      const check = checkPlan(req.tasks ? { summary: plan.proposal?.summary ?? "", tasks: req.tasks } : plan.proposal);
-      if (!check.ok) throw new ConflictError(`invalid plan: ${check.error}`);
-      const created: PlanDto["createdTasks"] = [];
-      for (const t of check.plan.tasks) {
-        const task = await this.insertTask(
-          q,
-          plan.projectId,
-          {
-            title: t.title,
-            objective: t.objective,
-            agent: t.agent ?? AUTO,
-            requires: t.requires,
-            dependsOn: t.dependsOn.map((d) => created.find((c) => c.ref === d)?.taskId ?? d),
-          },
-          actor,
-          plan.id,
-        );
-        created.push({ ref: t.ref, taskId: task.id, key: task.key });
-      }
-      if (plan.plannerTaskId) await this.acceptTaskKnowledge(q, plan.plannerTaskId, actor ?? "platform");
-      await q.query(
-        `update plans set status = 'approved', proposal = $2, created_tasks = $3, decided_by = $4, comment = $5,
-           decided_at = now() where id = $1`,
-        [id, JSON.stringify(check.plan), JSON.stringify(created), actor ?? null, req.comment ?? null],
+    return this.db.tx(async (q) => this.approvePlanTx(q, await this.lockPlan(q, id), req, actor));
+  }
+
+  private async approvePlanTx(q: Queryable, plan: PlanDto, req: ApprovePlanRequest, actor?: string): Promise<PlanDto> {
+    const id = plan.id;
+    if (plan.status !== "proposed") throw new ConflictError(`plan is ${plan.status}; only a proposed plan can be approved`);
+    const check = checkPlan(req.tasks ? { summary: plan.proposal?.summary ?? "", tasks: req.tasks } : plan.proposal);
+    if (!check.ok) throw new ConflictError(`invalid plan: ${check.error}`);
+    const created: PlanDto["createdTasks"] = [];
+    for (const t of check.plan.tasks) {
+      const task = await this.insertTask(
+        q,
+        plan.projectId,
+        {
+          title: t.title,
+          objective: t.objective,
+          agent: t.agent ?? AUTO,
+          requires: t.requires,
+          dependsOn: t.dependsOn.map((d) => created.find((c) => c.ref === d)?.taskId ?? d),
+        },
+        actor,
+        plan.id,
       );
-      await appendEvent(q, {
-        type: "PlanApproved",
-        projectId: plan.projectId,
-        payload: { planId: id, tasks: created.map((c) => c.key), edited: Boolean(req.tasks), actor: actor ?? null },
-      });
-      return this.getPlan(id, q);
+      created.push({ ref: t.ref, taskId: task.id, key: task.key });
+    }
+    if (plan.plannerTaskId) await this.acceptTaskKnowledge(q, plan.plannerTaskId, actor ?? "platform");
+    await q.query(
+      `update plans set status = 'approved', proposal = $2, created_tasks = $3, decided_by = $4, comment = $5,
+         decided_at = now() where id = $1`,
+      [id, JSON.stringify(check.plan), JSON.stringify(created), actor ?? null, req.comment ?? null],
+    );
+    await appendEvent(q, {
+      type: "PlanApproved",
+      projectId: plan.projectId,
+      payload: { planId: id, tasks: created.map((c) => c.key), edited: Boolean(req.tasks), actor: actor ?? null },
     });
+    return this.getPlan(id, q);
   }
 
   /** Rejects the plan; a planner still working on it is cancelled. */
   async rejectPlan(id: string, comment: string | undefined, actor?: string): Promise<PlanDto> {
     return this.db.tx(async (q) => {
       const plan = await this.lockPlan(q, id);
-      if (!["planning", "proposed", "failed"].includes(plan.status)) throw new ConflictError(`plan is already ${plan.status}`);
+      if (!["planning", "reviewing", "proposed", "failed"].includes(plan.status)) throw new ConflictError(`plan is already ${plan.status}`);
       await this.closePlan(q, plan, "rejected", comment, actor);
       return this.getPlan(id, q);
     });
@@ -865,6 +878,8 @@ export class Store {
       comment ?? null,
       actor ?? null,
     ]);
+    const critics = await q.query("select * from tasks where plan_id = $1 and kind = 'critique' and state not in ('COMPLETED', 'CANCELLED')", [plan.id]);
+    for (const row of critics) await changeTaskState(q, toTask(row), "cancelled", { actor: actor ?? null });
     if (plan.plannerTaskId) {
       const planner = await this.getTask(plan.plannerTaskId, q);
       if (!isTerminal(planner.state)) {
@@ -929,18 +944,168 @@ export class Store {
     await this.addArtifact(q, task, id, "plan_proposal", plan as unknown as Record<string, unknown>);
     if (!isTerminal(task.state)) await changeTaskState(q, task, "review_submitted", { tasks: plan.tasks.length });
     const [updated] = await q.query(
-      "update plans set status = 'proposed', proposal = $2 where id = $1 and status = 'planning' returning id",
+      "update plans set proposal = $2 where id = $1 and status = 'planning' returning id",
       [task.planId, JSON.stringify(plan)],
     );
-    if (updated) {
-      await appendEvent(q, {
-        type: "PlanProposed",
-        projectId: task.projectId,
-        taskId: task.id,
-        payload: { planId: task.planId, tasks: plan.tasks.length, summary: plan.summary.slice(0, 500) },
-      });
+    if (!updated) return execution;
+    const project = await this.getProject(task.projectId, q);
+    // Multi-agent debate (spec §53): another agent critiques the proposal first.
+    const critics = project.planning.critics.filter((a) => a !== task.agent);
+    if (critics.length && plan.tasks.length && project.planning.maxRounds > 0) {
+      await this.requestCritique(q, await this.getPlan(task.planId!, q), task.agent, critics);
+    } else {
+      await this.proposePlan(q, task.planId!);
     }
     return execution;
+  }
+
+  private async requestCritique(q: Queryable, plan: PlanDto, planner: string, critics: string[]): Promise<void> {
+    await q.query("update plans set status = 'reviewing' where id = $1", [plan.id]);
+    const [row] = await q.query<{ key: string; task_seq: number }>(
+      "update projects set task_seq = task_seq + 1 where id = $1 returning key, task_seq",
+      [plan.projectId],
+    );
+    const key = `${row!.key}-${row!.task_seq}`;
+    const [taskRow] = await q.query(
+      `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, kind, plan_id,
+         fallback_agents, excluded_agents)
+       values ($1, $2, $3, $4, $5, $6, 'CREATED', 2, 'critique', $7, $8, $9) returning *`,
+      [
+        randomUUID(),
+        plan.projectId,
+        key,
+        `Critique plan (round ${plan.round}): ${plan.goal.replace(/\s+/g, " ").slice(0, 60)}`,
+        plan.goal,
+        critics[0],
+        plan.id,
+        JSON.stringify(critics.slice(1)),
+        // The planner never judges its own plan.
+        JSON.stringify([planner]),
+      ],
+    );
+    const critiqueTask = toTask(taskRow!);
+    await appendEvent(q, {
+      type: "PlanCritiqueRequested",
+      projectId: plan.projectId,
+      taskId: critiqueTask.id,
+      payload: { planId: plan.id, critic: critics[0], round: plan.round, key },
+    });
+    await changeTaskState(q, critiqueTask, "dependencies_satisfied");
+  }
+
+  /** The plan waits for a decision; within the project's autonomy it approves itself. */
+  private async proposePlan(q: Queryable, planId: string): Promise<void> {
+    await q.query("update plans set status = 'proposed' where id = $1 and status in ('planning', 'reviewing')", [planId]);
+    const plan = await this.getPlan(planId, q);
+    await appendEvent(q, {
+      type: "PlanProposed",
+      projectId: plan.projectId,
+      taskId: plan.plannerTaskId,
+      payload: {
+        planId,
+        tasks: plan.proposal?.tasks.length ?? 0,
+        summary: (plan.proposal?.summary ?? "").slice(0, 500),
+        round: plan.round,
+        ...(plan.critique && { critique: plan.critique.verdict, critic: plan.critique.critic }),
+      },
+    });
+    await this.maybeAutoApprove(q, plan);
+  }
+
+  /**
+   * Autonomous planning (spec §53), within guardrails: the critic approved
+   * with no blocker, the plan is small enough, and every task has an agent
+   * online to take it. Otherwise a person decides, as always.
+   */
+  private async maybeAutoApprove(q: Queryable, plan: PlanDto): Promise<void> {
+    const policy = (await this.getProject(plan.projectId, q)).planning;
+    if (!policy.autoApprove) return;
+    const tasks = plan.proposal?.tasks ?? [];
+    const agents = await this.onlineAgents(q);
+    const coverable = (t: (typeof tasks)[number]) =>
+      t.agent
+        ? agents.some((a) => a.id === t.agent)
+        : agents.some((a) => t.requires.every((r) => a.skills.map((x) => x.toLowerCase()).includes(r.toLowerCase())));
+    const reason = !plan.critique
+      ? "no critic reviewed the plan"
+      : plan.critique.verdict !== "approve"
+        ? `the critic still asks for changes after ${plan.round} round(s)`
+        : plan.critique.issues.some((i) => i.severity === "blocker")
+          ? "the critic reported a blocker"
+          : !tasks.length
+            ? "the plan has no tasks"
+            : tasks.length > policy.maxAutoTasks
+              ? `${tasks.length} tasks exceed the limit of ${policy.maxAutoTasks} for automatic approval`
+              : tasks.find((t) => !coverable(t))
+                ? `no online agent can take ${tasks.find((t) => !coverable(t))!.ref}`
+                : null;
+    if (reason) {
+      await appendEvent(q, { type: "PlanAutoApprovalSkipped", projectId: plan.projectId, payload: { planId: plan.id, reason } });
+      return;
+    }
+    await this.approvePlanTx(q, plan, { comment: `approved automatically: ${plan.critique!.critic} approved round ${plan.round}` }, "platform");
+    await appendEvent(q, { type: "PlanAutoApproved", projectId: plan.projectId, payload: { planId: plan.id, critic: plan.critique!.critic } });
+  }
+
+  /** A critic answered: revise for another round, or put the plan up for a decision. */
+  private async finishCritique(
+    q: Queryable,
+    task: TaskDto,
+    id: string,
+    req: CompleteExecutionRequest,
+    critique: PlanCritique,
+  ): Promise<ExecutionDto> {
+    const execution = await this.finishExecution(q, task, id, req, "succeeded", { verdict: critique.verdict });
+    await this.addArtifact(q, task, id, "plan_critique", { ...critique, critic: task.agent });
+    if (!isTerminal(task.state)) await changeTaskState(q, task, "review_submitted", { verdict: critique.verdict });
+    const plan = await this.lockPlan(q, task.planId!);
+    if (plan.status !== "reviewing") return execution; // decided meanwhile (e.g. rejected)
+    await q.query("update plans set critique = $2 where id = $1", [plan.id, JSON.stringify({ ...critique, critic: task.agent })]);
+    await appendEvent(q, {
+      type: "PlanCritiqued",
+      projectId: plan.projectId,
+      taskId: task.id,
+      payload: { planId: plan.id, critic: task.agent, verdict: critique.verdict, issues: critique.issues.length, round: plan.round },
+    });
+    const project = await this.getProject(plan.projectId, q);
+    if (critique.verdict === "revise" && plan.round < project.planning.maxRounds) {
+      // Next round: the planner revises with the critique as feedback.
+      const feedback = formatCritique(critique, `agent ${task.agent}`);
+      await this.closePlan(q, plan, "revised", feedback, `agent ${task.agent}`);
+      const planner = plan.plannerTaskId ? await this.getTask(plan.plannerTaskId, q) : undefined;
+      const agent = !planner || planner.routing === "auto" ? AUTO : planner.agent;
+      await this.insertPlan(q, plan.projectId, { goal: plan.goal, agent }, `agent ${task.agent}`, { id: plan.id, feedback, round: plan.round });
+      return execution;
+    }
+    await this.proposePlan(q, plan.id);
+    return execution;
+  }
+
+  /** What a critic agent judges: the proposal, the goal and the agents available. */
+  private async critiqueContext(q: Queryable, planId: string, project: ProjectDto): Promise<CritiqueContext> {
+    const plan = await this.getPlan(planId, q);
+    return {
+      planId,
+      goal: plan.goal,
+      round: plan.round,
+      baseBranch: project.defaultBranch,
+      proposal: plan.proposal ?? { summary: "", tasks: [], knowledge: [] },
+      agents: (await this.onlineAgents(q)).map((a) => ({ id: a.id, skills: a.skills })),
+      planner: plan.plannerAgent ?? "unknown",
+    };
+  }
+
+  async setPlanningPolicy(id: string, policy: PlanningPolicy): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set planning = $2 where id = $1 returning *", [id, JSON.stringify(policy)]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectPlanningChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
   }
 
   // ---- knowledge base (spec §20, §35) --------------------------------------
@@ -1236,6 +1401,7 @@ export class Store {
       const dependencies = await this.dependencyContext(q, task);
       const review = task.kind === "review" && task.reviewOf ? await this.reviewTarget(q, task.reviewOf, project) : undefined;
       const plan = task.kind === "plan" && task.planId ? await this.planningContext(q, task.planId, project) : undefined;
+      const critique = task.kind === "critique" && task.planId ? await this.critiqueContext(q, task.planId, project) : undefined;
       const knowledge = await this.knowledgeContext(q, project.id);
       let [lastSession] = await q.query<{ session_id: string; runner_id: string }>(
         `select session_id, runner_id from executions
@@ -1284,6 +1450,7 @@ export class Store {
         ...(approvals.length > 0 && { approvals }),
         ...(review && { review }),
         ...(plan && { plan }),
+        ...(critique && { critique }),
         ...(knowledge.length > 0 && { knowledge }),
       };
     });
@@ -1533,6 +1700,11 @@ export class Store {
         return this.finishExecution(q, task, id, req, "failed", { reason: "the reviewer did not return a usable review" });
       }
       if (review) return this.finishReview(q, task, id, req, review);
+      if (task.kind === "critique" && status === "validating") {
+        const critique = toPlanCritique(t.kind === "completed" ? t.result : null);
+        if (!critique) return this.finishExecution(q, task, id, req, "failed", { reason: "the critic did not return a usable critique" });
+        return this.finishCritique(q, task, id, req, critique);
+      }
       // A plan task is done once the planner proposed a usable DAG; a human decides on it.
       if (task.kind === "plan" && status === "validating") {
         const check = checkPlan(t.kind === "completed" ? t.result : null, { allowEmpty: true });
@@ -2337,6 +2509,10 @@ export class Store {
         } else {
           await changeTaskState(q, task, "limit_exceeded", { attempts: row.attempts });
           result.blocked++;
+          if (task.kind === "critique" && task.planId) {
+            await q.query("update plans set status = 'proposed' where id = $1 and status = 'reviewing'", [task.planId]);
+            await appendEvent(q, { type: "PlanCritiqueFailed", projectId: task.projectId, taskId: task.id, payload: { planId: task.planId } });
+          }
         }
       }
 

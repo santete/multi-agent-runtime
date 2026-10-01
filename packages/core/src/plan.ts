@@ -132,3 +132,82 @@ export function checkPlan(result: unknown, options: { allowEmpty?: boolean } = {
     plan: { summary: str((value as any).summary), tasks: ordered, knowledge: toKnowledgeNotes((value as any).knowledge) },
   };
 }
+
+/**
+ * Multi-agent debate on a plan (spec §53): another agent critiques the
+ * proposal before anyone approves it.
+ */
+export type CritiqueVerdict = "approve" | "revise";
+
+export interface PlanCritique {
+  verdict: CritiqueVerdict;
+  summary: string;
+  issues: Array<{ ref: string | null; severity: "blocker" | "major" | "minor"; message: string }>;
+}
+
+export const CRITIQUE_SCHEMA = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["approve", "revise"],
+      description: "revise only for real problems: missing or wrong work, a wrong dependency, tasks too big for one session, unclear objectives.",
+    },
+    summary: { type: "string", description: "Overall assessment of the plan in a few sentences." },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          ref: { type: ["string", "null"], description: "The planned task the issue is about, or null for the whole plan." },
+          severity: { type: "string", enum: ["blocker", "major", "minor"] },
+          message: { type: "string", description: "What is wrong and what the planner should change." },
+        },
+        required: ["ref", "severity", "message"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["verdict", "summary", "issues"],
+  additionalProperties: false,
+} as const;
+
+/** A critic's answer; anything unusable is null (never an approval). */
+export function toPlanCritique(result: unknown): PlanCritique | null {
+  let value = result;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value.slice(value.indexOf("{"), value.lastIndexOf("}") + 1));
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const o = value as Record<string, unknown>;
+  if (o.verdict !== "approve" && o.verdict !== "revise") return null;
+  const severities = ["blocker", "major", "minor"] as const;
+  const issues = (Array.isArray(o.issues) ? o.issues : []).flatMap((i): PlanCritique["issues"] => {
+    if (!i || typeof i !== "object") return [];
+    const r = i as Record<string, unknown>;
+    const message = typeof r.message === "string" ? r.message.trim() : "";
+    if (!message) return [];
+    return [
+      {
+        ref: typeof r.ref === "string" && r.ref.trim() ? r.ref.trim() : null,
+        severity: severities.includes(r.severity as never) ? (r.severity as PlanCritique["issues"][number]["severity"]) : "major",
+        message,
+      },
+    ];
+  });
+  return { verdict: o.verdict, summary: typeof o.summary === "string" ? o.summary.trim() : "", issues };
+}
+
+/** The critique as feedback for the planner's next round. */
+export function formatCritique(critique: PlanCritique, critic: string): string {
+  const lines = [`Critique by ${critic}: ${critique.verdict === "approve" ? "approve" : "revise"}.`, "", critique.summary];
+  if (critique.issues.length) {
+    lines.push("", "Issues:");
+    for (const i of critique.issues) lines.push(`- [${i.severity}]${i.ref ? ` ${i.ref}:` : ""} ${i.message}`);
+  }
+  return lines.join("\n");
+}
