@@ -121,6 +121,7 @@ curl -s localhost:7700/tasks/<taskId>/events
 | PUT | `/projects/:id/routing-policy` | `{routingPolicy: "balanced" | "reliability" | "cost" | "speed"}` |
 | GET | `/me` | the calling user, role and organization |
 | GET/POST | `/orgs` | organizations; platform admins (`org: "*"`) create them ([ADR-0025](docs/adr/0025-organizations-and-marketplace.md)) |
+| PUT | `/orgs/:id/notifications` | `{webhooks, kinds?}`: the organization's own notification webhooks, next to the platform-wide `MAR_NOTIFY_WEBHOOKS` (its owners or platform admins; URLs are shown by host only) |
 | PUT | `/projects/:id/agents` | `{allowedAgents}`: agents allowed on the project (empty = any) |
 | GET/POST | `/agent-profiles` | agent marketplace: versioned profiles (adapter, skills, cost, pricing, instructions); runners use them with `"profile": "name"`; `POST /agent-profiles/:id/deprecate` |
 | GET | `/stream?projectId=&after=` | live events (server-sent events) |

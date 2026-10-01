@@ -40,6 +40,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.query("truncate events, approvals, artifacts, executions, tasks, runners, projects, event_cursors restart identity cascade");
+  await db.query("update orgs set notifications = '{}'");
   store = new Store(db);
   app = buildApp(store);
   received = [];
@@ -47,7 +48,7 @@ beforeEach(async () => {
 });
 afterEach(() => app.close());
 
-async function call<T>(method: "GET" | "POST", url: string, payload?: unknown) {
+async function call<T>(method: "GET" | "POST" | "PUT", url: string, payload?: unknown) {
   const res = await app.inject({ method, url, ...(payload !== undefined && { payload: payload as object }) });
   return { status: res.statusCode, body: (res.body ? res.json() : undefined) as T };
 }
@@ -60,7 +61,7 @@ const agent: AgentDescriptor = {
 
 const notifier = (kinds?: Parameters<typeof notifierOptionsFromEnv>[0]["MAR_NOTIFY_EVENTS"]) =>
   new Notifier(store, {
-    ...notifierOptionsFromEnv({ MAR_NOTIFY_WEBHOOKS: hookUrl, ...(kinds && { MAR_NOTIFY_EVENTS: kinds }) }, "http://mar.test")!,
+    ...notifierOptionsFromEnv({ MAR_NOTIFY_WEBHOOKS: hookUrl, ...(kinds && { MAR_NOTIFY_EVENTS: kinds }) }, "http://mar.test"),
     retryDelaysMs: [10],
   });
 
@@ -178,8 +179,31 @@ describe("notifier", () => {
     expect(await store.eventCursor("notifier")).toBe(await store.latestEventSeq());
   });
 
-  it("is off without webhooks", () => {
-    expect(notifierOptionsFromEnv({}, "http://x")).toBeNull();
+  it("sends each organization's notifications to its own webhooks too (spec §49)", async () => {
+    const n = new Notifier(store, { ...notifierOptionsFromEnv({}, "http://mar.test"), retryDelaysMs: [10] });
+    const { project, runnerId } = await setup();
+    await n.poll();
+    await call("POST", `/projects/${project.id}/tasks`, { title: "Refund API", objective: "o", agent: "claude" });
+    await deliver(await claim(runnerId));
+    // No platform webhooks and none for the org yet: nothing sent.
+    expect(await n.poll()).toBe(0);
+
+    const org = await call<{ notifications: { webhooks: string[]; kinds: string[] } }>("PUT", "/orgs/default/notifications", {
+      webhooks: [hookUrl],
+      kinds: ["review"],
+    });
+    expect(org.body.notifications).toEqual({ webhooks: [`${new URL(hookUrl).host}/…`], kinds: ["review"] });
+    expect(JSON.stringify((await call("GET", "/orgs")).body)).not.toContain("secret");
+    expect((await call("PUT", "/orgs/default/notifications", { webhooks: ["not a url"] })).status).toBe(400);
+
+    await call("POST", `/projects/${project.id}/tasks`, { title: "Export", objective: "o", agent: "claude" });
+    await deliver(await claim(runnerId));
+    expect(await n.poll()).toBe(1);
+    expect(received.map((r) => r.text)).toEqual([expect.stringContaining("*PAY-2* Export")]);
+  });
+
+  it("reads platform-wide webhooks from the environment", () => {
+    expect(notifierOptionsFromEnv({}, "http://x").webhooks).toEqual([]);
     expect(notifierOptionsFromEnv({ MAR_NOTIFY_WEBHOOKS: "https://a, https://b", MAR_NOTIFY_EVENTS: "plan,bogus" }, "http://x")).toEqual({
       webhooks: ["https://a", "https://b"],
       kinds: ["plan"],

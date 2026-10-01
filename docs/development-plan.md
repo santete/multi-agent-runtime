@@ -8,7 +8,7 @@ Nguồn yêu cầu: [`product-spec.md`](product-spec.md). Quyết định kiến
 |---|---|---|
 | D1 | Backend TypeScript (Node 22), pnpm monorepo | [0001](adr/0001-typescript-monorepo.md) |
 | D2 | Control Plane tập trung + Runner daemon | [0002](adr/0002-control-plane-and-runner.md) |
-| D3 | State machine tự viết trên Postgres (MVP), đánh giá Temporal ở Phase 2 | [0002](adr/0002-control-plane-and-runner.md), [0005](adr/0005-task-state-machine.md) |
+| D3 | State machine tự viết trên Postgres; đã đánh giá Temporal và chưa dùng | [0002](adr/0002-control-plane-and-runner.md), [0005](adr/0005-task-state-machine.md), [0032](adr/0032-temporal-evaluation.md) |
 | D4 | GitHub trước, qua interface `GitProvider` | [0002](adr/0002-control-plane-and-runner.md) |
 | D5 | Approval qua Web UI; Phase 2 thêm thông báo qua webhook tương thích Slack ([ADR-0016](adr/0016-notifications.md)) | [0004](adr/0004-policy-enforcement.md) |
 | D6 | Thứ tự adapter: **Claude Code → Antigravity (agy) → Codex** | [0003](adr/0003-adapter-contract.md) |
@@ -35,7 +35,7 @@ Runner (mỗi máy) — workspace manager (git worktree) · adapter host · vali
 - [x] Adapter contract + parser cho Claude Code và agy, test bằng fixture thật
 - [x] Task state machine chuẩn hóa + test
 - [x] Spike Claude PreToolUse hook qua `--settings` ở headless (làm ở M2: allow mở được shell, deny được báo trong `permission_denials`)
-- [ ] Spike agy `--sandbox` + cách ly config theo runner (chuyển sang M3)
+- [x] Spike agy `--sandbox` (ADR-0018) + cách ly config theo runner (xem mục "Các việc còn sót")
 
 ## Phase 1 — MVP
 
@@ -315,12 +315,19 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] `RoutingGitProvider`: GitHub và GitLab dùng cùng lúc, chọn theo repo
 - [ ] Chạy thật trên một repo GitLab (cần tài khoản và `GITLAB_TOKEN`)
 
+### Các việc còn sót — trạng thái ✅
+
+- [x] **Webhook theo org:** `PUT /orgs/:id/notifications {webhooks, kinds}` (owner của org). Notifier luôn chạy: gửi tới webhook chung của platform và tới webhook của org sở hữu project. API chỉ hiện host của URL webhook
+- [x] **Cách ly config của agy:** agent agy chạy với `USERPROFILE`/`HOME` riêng (`<home>/profiles/<agent>`, mặc định bật, tắt bằng `isolateConfig: false`). agy vẫn đăng nhập được vì thông tin đăng nhập không nằm trong `~/.gemini`, nhưng không đọc settings, hook, plugin hay MCP cá nhân. Đã chạy thật (LP-38): agy chạy trong profile riêng và đọc repo bình thường. `ANTIGRAVITY_APP_DATA_DIR` đã thử nhưng làm agy treo nên không dùng
+- [x] **Dữ liệu LP-9:** task bị ghi CANCELLED dù PR #21 đã merge (lỗi cancel khi đang MERGING, đã sửa trước đó). Đã sửa thành COMPLETED, có event `TaskStateCorrected` để audit
+- [x] **Temporal:** đã đánh giá, chưa dùng ([ADR-0032](adr/0032-temporal-evaluation.md)); giới hạn đã biết là các vòng lặp nền chỉ nên chạy trên một instance control plane
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |
 |---|---|
 | CLI thay đổi format output | Test dựa trên fixture, pin phiên bản CLI, contract test chạy hằng đêm với CLI thật |
 | agy headless không cho phép chạy lệnh shell (upstream #548/#619) | ADR-0004: Runner chạy build/test thay agent; ADR-0018: chế độ unattended (`--sandbox`) opt-in theo runner, luôn có policy hook |
-| Config cá nhân lọt vào lượt chạy (hook, plugin) | Claude: `--setting-sources project,local --strict-mcp-config`; agy: cách ly config theo runner (M2) |
+| Config cá nhân lọt vào lượt chạy (hook, plugin) | Claude: `--setting-sources project,local --strict-mcp-config`; Codex: `--ignore-user-config`; agy: profile riêng theo agent (`isolateConfig`) |
 | Merge conflict khi chạy song song | Path ownership + merge queue |
 | Quota subscription | Theo dõi `rate_limit_event` (Claude); scheduler giới hạn concurrency theo agent |

@@ -77,6 +77,13 @@ describe("AntigravityAdapter.buildCommand", () => {
     expect(flags(unattended.buildCommand({ ...request, permissionProfile: "read-only" }).args)).toEqual([]);
     expect(flags(new AntigravityAdapter().buildCommand(request).args)).toEqual([]);
   });
+
+  it("runs with a profile of its own, without the machine user's settings", () => {
+    const request = { workspace: "/ws", prompt: "x", objective: "x", permissionProfile: "edit" as const, env: { MAR_EXECUTION_ID: "e1" } };
+    const isolated = new AntigravityAdapter({ platform: "linux", profileDir: "/runner/profiles/agy" });
+    expect(isolated.buildCommand(request).env).toEqual({ MAR_EXECUTION_ID: "e1", USERPROFILE: "/runner/profiles/agy", HOME: "/runner/profiles/agy" });
+    expect(new AntigravityAdapter({ platform: "linux" }).buildCommand(request).env).toEqual({ MAR_EXECUTION_ID: "e1" });
+  });
 });
 
 describe("AntigravityStreamParser: tools blocked by the policy hook", () => {
