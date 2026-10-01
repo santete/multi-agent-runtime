@@ -309,6 +309,12 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] Trang Metrics (chọn project và cửa sổ thời gian; mỗi số có định nghĩa)
 - [x] Tính trên dữ liệu thật của LP: các con số khớp với những gì đã xảy ra (19/19 merge, 5/19 cần người, 0/19 tự động hoàn toàn vì mọi PR đều do người review)
 
+### GitLab — trạng thái 🟡 code xong, chưa chạy thật ([ADR-0031](adr/0031-gitlab-provider.md))
+
+- [x] `GitLabProvider` (API v4, gitlab.com hoặc self-hosted, có subgroup): MR, squash merge, note, CI qua commit statuses, behind base, revert qua branch mới
+- [x] `RoutingGitProvider`: GitHub và GitLab dùng cùng lúc, chọn theo repo
+- [ ] Chạy thật trên một repo GitLab (cần tài khoản và `GITLAB_TOKEN`)
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

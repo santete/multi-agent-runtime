@@ -46,6 +46,8 @@ export function checksState(runs: CheckRun[]): ChecksState {
  * the platform talks to GitHub; agents never hold credentials).
  */
 export interface GitProvider {
+  /** Whether the repository is hosted where this provider works (several providers can be combined). */
+  handles?(repoUrl: string): boolean;
   /** Returns null when this provider does not handle the repository. */
   openPullRequest(req: OpenPullRequest): Promise<PullRequestRef | null>;
   /** Idempotent: an already merged pull request reports "merged". */
@@ -79,6 +81,10 @@ export class GitHubProvider implements GitProvider {
     private readonly apiBase = "https://api.github.com",
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  handles(repoUrl: string): boolean {
+    return parseGitHubRepo(repoUrl) !== null;
+  }
 
   async openPullRequest(req: OpenPullRequest): Promise<PullRequestRef | null> {
     const repo = parseGitHubRepo(req.repoUrl);
@@ -252,4 +258,53 @@ function checkConclusion(conclusion: string | null): CheckRun["state"] {
 
 function toRef(pr: { html_url: string; number: number }): PullRequestRef {
   return { url: pr.html_url, number: pr.number };
+}
+
+/**
+ * Several hosting providers at once (GitHub and GitLab): each call goes to the
+ * provider that handles the repository.
+ */
+export class RoutingGitProvider implements GitProvider {
+  constructor(private readonly providers: GitProvider[]) {}
+
+  handles(repoUrl: string): boolean {
+    return this.providers.some((p) => p.handles?.(repoUrl));
+  }
+
+  private for(repoUrl: string): GitProvider {
+    const provider = this.providers.find((p) => p.handles?.(repoUrl));
+    if (!provider) throw new GitProviderError(`no git provider configured for ${repoUrl}`);
+    return provider;
+  }
+
+  async openPullRequest(req: OpenPullRequest): Promise<PullRequestRef | null> {
+    const provider = this.providers.find((p) => p.handles?.(req.repoUrl));
+    return provider ? provider.openPullRequest(req) : null;
+  }
+
+  async mergePullRequest(req: MergePullRequest): Promise<MergeResult> {
+    return this.for(req.repoUrl).mergePullRequest(req);
+  }
+
+  async commentOnPullRequest(req: { repoUrl: string; number: number; body: string }): Promise<void> {
+    await this.providers.find((p) => p.handles?.(req.repoUrl))?.commentOnPullRequest?.(req);
+  }
+
+  async pullRequestStatus(req: { repoUrl: string; number: number }): Promise<PullRequestStatus> {
+    const provider = this.for(req.repoUrl);
+    if (!provider.pullRequestStatus) throw new GitProviderError(`the provider of ${req.repoUrl} does not report pull request status`);
+    return provider.pullRequestStatus(req);
+  }
+
+  async commitChecks(req: { repoUrl: string; sha: string }): Promise<{ state: ChecksState; runs: CheckRun[] }> {
+    const provider = this.for(req.repoUrl);
+    if (!provider.commitChecks) throw new GitProviderError(`the provider of ${req.repoUrl} does not report commit checks`);
+    return provider.commitChecks(req);
+  }
+
+  async revertPullRequest(req: { repoUrl: string; number: number; title: string; body: string }): Promise<PullRequestRef> {
+    const provider = this.for(req.repoUrl);
+    if (!provider.revertPullRequest) throw new GitProviderError(`the provider of ${req.repoUrl} cannot revert`);
+    return provider.revertPullRequest(req);
+  }
 }

@@ -3,7 +3,8 @@ import { initTelemetry } from "@mar/telemetry";
 import { buildApp } from "./app.js";
 import { loadUsers } from "./auth.js";
 import { createPgDb, createPgliteDb, migrate } from "./db.js";
-import { GitHubProvider } from "./git-provider.js";
+import { type GitProvider, GitHubProvider, RoutingGitProvider } from "./git-provider.js";
+import { GitLabProvider } from "./gitlab-provider.js";
 import { Notifier, notifierOptionsFromEnv } from "./notifier.js";
 import { Store } from "./store.js";
 
@@ -27,13 +28,18 @@ const applied = await migrate(db);
 // Organizations named in the users file exist (spec §49).
 await new Store(db).ensureOrgs([...new Set(users.map((u) => u.org ?? "default").filter((o) => o !== "*"))]);
 
-// GitHub token for opening and merging pull requests, e.g. GITHUB_TOKEN=$(gh auth token).
+// Hosting providers for pull/merge requests: GITHUB_TOKEN (e.g. $(gh auth token)) and/or GITLAB_TOKEN (+ GITLAB_URL when self-hosted).
 const githubToken = process.env.GITHUB_TOKEN || undefined;
+const gitlabToken = process.env.GITLAB_TOKEN || undefined;
+const providers: GitProvider[] = [
+  ...(githubToken ? [new GitHubProvider(githubToken, process.env.GITHUB_API_URL)] : []),
+  ...(gitlabToken ? [new GitLabProvider(gitlabToken, process.env.GITLAB_URL)] : []),
+];
 const store = new Store(db, {
   leaseSeconds: Number(process.env.MAR_LEASE_SECONDS ?? 60),
   // Encrypts stored project secrets (spec §48); without it only runner-env secrets can be defined.
   secretsKey: process.env.MAR_SECRETS_KEY || undefined,
-  gitProvider: githubToken ? new GitHubProvider(githubToken, process.env.GITHUB_API_URL) : undefined,
+  gitProvider: providers.length > 1 ? new RoutingGitProvider(providers) : providers[0],
 });
 const app = buildApp(store, {
   users,
