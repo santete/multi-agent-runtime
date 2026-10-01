@@ -46,3 +46,8 @@ Spec §39 yêu cầu theo dõi token, thời gian, chi phí API, số lần retr
 - Chi phí của agent không báo cost và không có pricing thì không được tính, nên budget có thể bị vượt mà không ai biết. UI ghi chú rõ điều này, và chi phí ước tính được đánh dấu `≈`.
 - Budget được kiểm tra trước khi task chạy, không phải trong lúc task chạy. Một execution đang chạy vẫn chạy xong, nên số thực chi có thể vượt budget một lượt chạy.
 - Cooldown gắn theo runner. Hai runner dùng chung một tài khoản sẽ mỗi runner tự gặp quota một lần.
+- `input_tokens` của Claude không tính token đọc từ cache, nên số input hiển thị nhỏ hơn thực tế. Cost vẫn đúng vì lấy cost Claude báo, không ước tính.
+- Kiểm chứng thật:
+  - Claude báo cost của nó ($0,32). Codex được ước tính $0,12 từ pricing.
+  - Vượt budget ngày thì task mới chờ ở READY, kèm đúng một thông báo `BudgetExceeded`.
+  - Notifier giờ bỏ qua event cũ hơn `MAR_NOTIFY_MAX_AGE_MINUTES` (mặc định 60) khi bắt kịp sau một thời gian tắt, vì trước đó nó gửi lại thông báo đã cũ hàng giờ.

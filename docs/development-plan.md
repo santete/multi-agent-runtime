@@ -207,6 +207,11 @@ Thứ tự thực hiện: (1) cost & quota → (2) agent performance + chọn ag
 - [x] Agent hết quota sẽ cooldown trên runner đó, với thời gian đọc từ thông báo lỗi; task auto route sang agent khác hoặc chờ; người có thể gỡ cooldown sớm
 - [x] `maxConcurrent` theo agent; budget theo project (`dailyUsd`: task chờ, `perTaskUsd`: task bị BLOCKED); thông báo `budget` và `quota`
 - [x] `GET /projects/:id/costs`, tab Costs, cột cost và trạng thái cooldown trên trang Agents
+- [x] **Chạy thật** trên `mar-sandbox`:
+  - Claude báo cost của nó ($0,32). Codex được ước tính từ pricing (89.743 input + 1.110 output token ≈ $0,12, hiển thị kèm ≈).
+  - Hạ budget ngày xuống $0,30 thì task mới đứng ở READY, `BudgetExceeded` được ghi đúng một lần và thông báo được gửi.
+  - Notifier không gửi lại event cũ hơn 60 phút khi được bật lại.
+- [ ] Cooldown do quota mới được kiểm bằng test; trong lúc chạy thật không có agent nào hết quota
 
 ## Rủi ro đang theo dõi
 

@@ -19,6 +19,8 @@ export interface NotifierOptions {
   fetchImpl?: typeof fetch;
   /** Delays between delivery attempts; one attempt more than entries. */
   retryDelaysMs?: number[];
+  /** Events older than this are skipped (e.g. after notifications were off for a while). Default 60. */
+  maxAgeMinutes?: number | undefined;
   log?: { info(obj: object, msg: string): void; error(obj: object, msg: string): void };
 }
 
@@ -58,7 +60,14 @@ export class Notifier {
     }
     const events = await this.store.listEvents({}, cursor, limit);
     let sent = 0;
+    const oldest = Date.now() - (this.options.maxAgeMinutes ?? 60) * 60_000;
     for (const event of events) {
+      // Catching up after a pause: what happened long ago is no longer actionable.
+      if (Date.parse(event.createdAt) < oldest) {
+        cursor = event.seq;
+        await this.store.setEventCursor(CURSOR, cursor);
+        continue;
+      }
       const notification = await this.describe(event).catch((err) => {
         this.options.log?.error({ err: String(err), event: event.seq }, "notification skipped");
         return null;
@@ -185,5 +194,6 @@ export function notifierOptionsFromEnv(env: NodeJS.ProcessEnv, publicUrl: string
         .map((s) => s.trim())
         .filter((s): s is NotificationKind => all.includes(s as NotificationKind))
     : undefined;
-  return { webhooks, kinds, publicUrl: env.MAR_PUBLIC_URL || publicUrl };
+  const maxAge = Number(env.MAR_NOTIFY_MAX_AGE_MINUTES);
+  return { webhooks, kinds, publicUrl: env.MAR_PUBLIC_URL || publicUrl, ...(maxAge > 0 && { maxAgeMinutes: maxAge }) };
 }
