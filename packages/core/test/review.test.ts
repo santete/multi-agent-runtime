@@ -7,6 +7,7 @@ describe("toReviewResult", () => {
       verdict: "request_changes",
       summary: "Subtracts instead of adding.",
       findings: [{ severity: "blocker", file: "math.js", line: 2, message: "use a + b" }],
+      criteria: [],
     };
     expect(toReviewResult(review)).toEqual(review);
     expect(toReviewResult(JSON.stringify(review))).toEqual(review);
@@ -17,6 +18,7 @@ describe("toReviewResult", () => {
       verdict: "approve",
       summary: "ok",
       findings: [{ severity: "minor", file: "a", line: null, message: "" }],
+      criteria: [],
     });
     expect(toReviewResult("looks fine to me")).toBeNull();
     expect(toReviewResult({ verdict: "maybe" })).toBeNull();

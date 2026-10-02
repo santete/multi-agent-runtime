@@ -1,4 +1,4 @@
-import { type Handoff, isCiConfigPath, type TaskDto, type ValidationReport } from "@mar/core";
+import { alignChecks, type Handoff, isCiConfigPath, type TaskDto, type ValidationReport } from "@mar/core";
 
 const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : "_None._");
 
@@ -18,6 +18,16 @@ export function pullRequestBody(input: {
     );
   }
   sections.push("### Objective", task.objective);
+  // Spec §62: the acceptance criteria, as the agent checked them; reviewers confirm each one.
+  const criteria = task.contract?.acceptanceCriteria ?? [];
+  if (criteria.length) {
+    const checks = alignChecks(criteria, handoff?.criteria);
+    sections.push(
+      "### Acceptance criteria",
+      checks.map((c) => `- [${c.met ? "x" : " "}] ${c.criterion}${c.evidence ? ` — ${c.evidence}` : ""}`).join("\n"),
+      "_Checked by the agent; the review confirms each one._",
+    );
+  }
 
   if (handoff) {
     sections.push(

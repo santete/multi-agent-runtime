@@ -204,6 +204,12 @@ const createTaskBody = z.object({
   fallbackAgents: z.array(z.string().min(1)).max(10).optional(),
   priority: z.number().int().min(0).max(100).optional(),
   paths: z.array(z.string().trim().min(1).max(300)).max(50).optional(),
+  // Collaboration contract (spec §62).
+  inputs: z.array(z.string().trim().min(1).max(2000)).max(50).optional(),
+  constraints: z.array(z.string().trim().min(1).max(2000)).max(50).optional(),
+  expectedOutput: z.string().trim().max(4000).optional(),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(2000)).max(20).optional(),
+  owner: z.string().trim().min(1).max(200).optional(),
   maxAttempts: z.number().int().min(1).max(10).optional(),
   dependsOn: z.array(z.string().min(1)).max(50).optional(),
 });
@@ -222,6 +228,10 @@ const plannedTask = z.object({
   requires: z.array(z.string().min(1)).max(20).default([]),
   dependsOn: z.array(z.string().min(1)).max(50).default([]),
   paths: z.array(z.string().trim().min(1).max(300)).max(50).default([]),
+  inputs: z.array(z.string().trim().min(1).max(2000)).max(50).default([]),
+  constraints: z.array(z.string().trim().min(1).max(2000)).max(50).default([]),
+  expectedOutput: z.string().trim().max(4000).default(""),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(2000)).max(20).default([]),
 });
 const approvePlanBody = z
   .object({ tasks: z.array(plannedTask).min(1).max(20).optional(), comment: z.string().max(10_000).optional() })

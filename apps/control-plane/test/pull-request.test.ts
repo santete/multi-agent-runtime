@@ -8,13 +8,26 @@ describe("pull request body", () => {
   it("describes the task, the handoff and the changed files", () => {
     const body = pullRequestBody({
       task,
-      handoff: { summary: "Added refund()", changes: ["src/refund.js"], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [] },
+      handoff: { summary: "Added refund()", changes: ["src/refund.js"], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [], criteria: [] },
       validation: undefined,
       changedFiles: ["src/refund.js"],
     });
     expect(body).toContain("## PAY-1: Refund\n\n### Objective\n\nAdd refunds");
     expect(body).toContain("### Summary\n\nAdded refund()");
     expect(body).not.toContain("WARNING");
+  });
+
+  it("lists the acceptance criteria as the agent checked them (spec §62)", () => {
+    const body = pullRequestBody({
+      task: { ...task, contract: { inputs: [], constraints: [], expectedOutput: "", acceptanceCriteria: ["Refunds are idempotent", "Docs updated"] } },
+      handoff: {
+        summary: "s", changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [],
+        criteria: [{ criterion: "Refunds are idempotent", met: true, evidence: "test/refund.test.js" }],
+      },
+      validation: undefined,
+      changedFiles: [],
+    });
+    expect(body).toContain("### Acceptance criteria\n\n- [x] Refunds are idempotent — test/refund.test.js\n- [ ] Docs updated — not reported");
   });
 
   it("warns reviewers when the change touches CI configuration", () => {

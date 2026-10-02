@@ -343,6 +343,17 @@ Cấu hình LP: review chéo do agent, agent duyệt là merge; Codex làm criti
 - [x] Test trên Postgres thật (container): chuyển giao lock, failover, hai control plane chỉ gửi webhook một lần, ba instance cùng migrate một DB
 - [x] **Chạy thật** với hai control plane trên một Postgres (HA-1, PR #42): giết leader thì standby lên thay trong chưa tới 8 giây, rồi merge PR; leader cũ khởi động lại thì về standby; tổng cộng chỉ có một thông báo
 
+
+### Collaboration contract §62–63 — trạng thái ✅ ([ADR-0034](adr/0034-collaboration-contract.md))
+
+- [x] Task có `inputs`, `constraints`, `expectedOutput`, `acceptanceCriteria` và `owner`; planner sinh, critic kiểm tra, người sửa được
+- [x] Agent báo từng tiêu chí trong handoff; reviewer chấm từng tiêu chí; approve mà còn tiêu chí chưa đạt thì bị ép thành request_changes
+- [x] Brief review có các quyết định của người (ghi đè contract); PR có checklist; UI có mục Contract
+- [x] **Chạy thật:**
+  - Một plan sinh 9 tiêu chí, được chấm 9/9 và merge (PR #43).
+  - Một tiêu chí mâu thuẫn với ràng buộc thì bị chặn, không merge.
+  - Sau khi sửa: agent hỏi owner, owner gỡ ràng buộc, rồi task merge (PR #46).
+
 ## Rủi ro đang theo dõi
 
 | Rủi ro | Giảm thiểu |

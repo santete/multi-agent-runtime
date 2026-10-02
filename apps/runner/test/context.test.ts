@@ -1,6 +1,6 @@
 import type { ClaimResponse } from "@mar/core";
 import { describe, expect, it } from "vitest";
-import { agentFiles, buildPrompt, contextFiles, knowledgeFiles } from "../src/context.js";
+import { agentFiles, buildPrompt, contextFiles, knowledgeFiles, reviewFiles } from "../src/context.js";
 
 const claim = (extra: Partial<ClaimResponse> = {}): ClaimResponse =>
   ({
@@ -31,6 +31,22 @@ describe("task context", () => {
     expect(brief!.content).toContain("Implement POST /refunds");
     expect(brief!.content).toContain("Do **not** commit, push");
     expect(brief!.content).toContain("**test**: `npm test`");
+  });
+
+  it("states the task's contract, criteria numbered, and asks for a check of each (spec §62)", () => {
+    const contract = { inputs: ["docs/refund-policy.md"], constraints: ["Keep the API stable"], expectedOutput: "POST /refunds", acceptanceCriteria: ["Idempotent", "Documented"] };
+    const [brief] = contextFiles(claim({ task: { ...claim().task, contract, owner: "lan" } }));
+    const text = String(brief!.content);
+    expect(text).toContain("## Inputs\n\n- docs/refund-policy.md");
+    expect(text).toContain("## Constraints\n\n- Keep the API stable");
+    expect(text).toContain("## Expected output\n\nPOST /refunds");
+    expect(text).toContain("## Acceptance criteria");
+    expect(text).toContain("1. Idempotent\n2. Documented");
+    expect(text).toContain("Owner: lan");
+    expect(text).toContain("ask the task's owner in `openQuestions` which one wins");
+    expect(text.indexOf("## Acceptance criteria")).toBeLessThan(text.indexOf("## Rules"));
+    // Tasks without a contract keep their old brief.
+    expect(String(contextFiles(claim())[0]!.content)).not.toContain("## Acceptance criteria");
   });
 
   it("adds REWORK.md with the failing output on rework", () => {
@@ -135,5 +151,32 @@ describe("agent profile instructions", () => {
     expect(agentFiles(c)).toEqual([{ path: ".orchestrator/context/AGENT.md", content: "# Your standing instructions\n\nKeep diffs small.\n", mergeJson: false }]);
     expect(buildPrompt(c, false)).toContain("AGENT.md");
     expect(agentFiles(claim())).toEqual([]);
+  });
+});
+
+describe("review brief", () => {
+  const target: NonNullable<ClaimResponse["review"]> = {
+    taskId: "t",
+    taskKey: "PAY-7",
+    title: "Last four",
+    objective: "Add lastFourDigits",
+    branch: "task/PAY-7",
+    baseBranch: "main",
+    pullRequestUrl: null,
+    handoff: null,
+    validation: null,
+    author: "codex",
+    contract: { inputs: [], constraints: ["Do not modify README.md."], expectedOutput: "", acceptanceCriteria: ["README.md documents it."] },
+    decisions: [{ question: "Allow the README update?", answer: "Yes, the README constraint is lifted.", answeredBy: "lan" }],
+  };
+
+  it("asks the reviewer to check each criterion, and puts people's decisions above the contract (spec §62)", () => {
+    const [brief] = reviewFiles(target, "diff");
+    const text = String(brief!.content);
+    expect(text).toContain("1. README.md documents it.");
+    expect(text).toContain("Check every acceptance criterion yourself");
+    expect(text).toContain("## Decisions made by people");
+    expect(text).toContain("- **Allow the README update?**\n  Yes, the README constraint is lifted. _(lan)_");
+    expect(text.indexOf("## Constraints")).toBeLessThan(text.indexOf("## Decisions made by people"));
   });
 });
