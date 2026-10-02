@@ -6,6 +6,8 @@ Control plane and agent runtime that turns independent coding agents — Claude 
 
 ![Task graph in the dashboard](docs/images/ui-graph.png)
 
+**New here? Start with the [user guide](docs/user-guide.md)** (setup, giving work to agents, monitoring them, stepping in, opening their work in an IDE).
+
 ## Task lifecycle
 
 ```text
