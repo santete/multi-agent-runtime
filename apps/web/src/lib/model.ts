@@ -132,6 +132,8 @@ export function describeEvent(e: EventDto): string {
       return `created "${p.title}" for ${p.agent === "auto" ? `the scheduler${p.requires?.length ? ` (needs ${p.requires.join(", ")})` : ""}` : p.agent}${p.dependsOn?.length ? ` after ${p.dependsOn.join(", ")}` : ""}${by}`;
     case "TaskStateChanged":
       return `${stateLabel(p.from)} → ${stateLabel(p.to)}${p.comment ? ` — “${p.comment}”` : ""}${by}`;
+    case "LeasesExtendedOnStartup":
+      return `leases of ${p.executions} running executions renewed (no instance led for a while)`;
     case "InstructionSent":
       return `instruction${by}: “${oneLine(String(p.text ?? ""), 120)}”${p.interrupt ? " (agent stopped to take it)" : ""}`;
     case "TaskPauseRequested":

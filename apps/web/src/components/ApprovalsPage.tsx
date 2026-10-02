@@ -36,8 +36,8 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
       )}
       <h2>Approvals</h2>
       <p className="muted">
-        Risky actions agents tried to take. HIGH risk needs a senior; CRITICAL actions (pushes, credentials, infrastructure) are never
-        approvable.
+        Risky actions agents tried to take. By default HIGH risk needs a senior and CRITICAL actions (pushes, credentials, infrastructure)
+        are never approvable; a project's policy can change who approves what.
       </p>
       <ErrorBox error={error} />
       <Section title={`Waiting (${pending?.length ?? 0})`}>

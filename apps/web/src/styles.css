@@ -1063,6 +1063,7 @@ button.link:disabled {
 }
 
 .inline-select {
+  width: auto;
   padding: 0 4px;
   font-size: inherit;
 }

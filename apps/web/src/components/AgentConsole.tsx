@@ -11,7 +11,7 @@ import { describeEvent } from "../lib/model.js";
 export function AgentConsole({ execution }: { execution: ExecutionDto }) {
   const [events, setEvents] = useState<EventDto[]>([]);
   const [follow, setFollow] = useState(true);
-  const bottom = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,7 +38,9 @@ export function AgentConsole({ execution }: { execution: ExecutionDto }) {
   });
 
   useEffect(() => {
-    if (follow) bottom.current?.scrollIntoView({ block: "nearest" });
+    // Scroll the console itself, never the page (opening a task must show its header).
+    const el = box.current;
+    if (follow && el) el.scrollTop = el.scrollHeight;
   }, [events, follow]);
 
   return (
@@ -51,14 +53,13 @@ export function AgentConsole({ execution }: { execution: ExecutionDto }) {
           <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
         </label>
       </div>
-      <div className="console">
+      <div className="console" ref={box}>
         {events.map((e) => (
           <div key={e.seq} className={`line ${lineClass(e)}`}>
             <span className="line-kind">{kindOf(e)}</span>
             <span className="line-text">{describeEvent(e)}</span>
           </div>
         ))}
-        <div ref={bottom} />
       </div>
     </div>
   );
