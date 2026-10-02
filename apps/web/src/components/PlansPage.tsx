@@ -351,6 +351,28 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                         <input value={(t.paths ?? []).join(", ")} onChange={(e) => update(i, { paths: list(e.target.value) })} />
                       </label>
                     </div>
+                    <label>
+                      Expected output
+                      <input value={t.expectedOutput ?? ""} onChange={(e) => update(i, { expectedOutput: e.target.value })} />
+                    </label>
+                    <label>
+                      Acceptance criteria (one per line)
+                      <textarea
+                        rows={3}
+                        value={(t.acceptanceCriteria ?? []).join("\n")}
+                        onChange={(e) => update(i, { acceptanceCriteria: e.target.value.split("\n") })}
+                        onBlur={(e) => update(i, { acceptanceCriteria: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean) })}
+                      />
+                    </label>
+                    <label>
+                      Constraints (one per line)
+                      <textarea
+                        rows={2}
+                        value={(t.constraints ?? []).join("\n")}
+                        onChange={(e) => update(i, { constraints: e.target.value.split("\n") })}
+                        onBlur={(e) => update(i, { constraints: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean) })}
+                      />
+                    </label>
                   </div>
                 ) : (
                   <>
@@ -361,6 +383,18 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                       {t.requires.length > 0 && <span className="muted small">needs {t.requires.join(", ")}</span>}
                       {(t.paths ?? []).length > 0 && <span className="muted small mono">{t.paths.join(", ")}</span>}
                     </div>
+                    {t.expectedOutput && <p className="small"><span className="muted">Expected output:</span> {t.expectedOutput}</p>}
+                    {(t.acceptanceCriteria ?? []).length > 0 && (
+                      <ul className="criteria small">
+                        {t.acceptanceCriteria.map((c) => (
+                          <li key={c}>
+                            <span className="criterion-mark">○</span>
+                            <span>{c}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {(t.constraints ?? []).length > 0 && <p className="muted small">Constraints: {t.constraints.join("; ")}</p>}
                   </>
                 )}
               </div>

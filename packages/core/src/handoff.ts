@@ -1,3 +1,4 @@
+import { CRITERIA_SCHEMA, type CriterionCheck } from "./contract.js";
 import { KNOWLEDGE_NOTE_SCHEMA, type KnowledgeNote, toKnowledgeNotes } from "./knowledge.js";
 
 /**
@@ -20,6 +21,8 @@ export interface Handoff {
   knowledge: KnowledgeNote[];
   /** Questions only a person can answer; the task waits for the answers (spec §61). */
   openQuestions: OpenQuestion[];
+  /** The agent's own check of each acceptance criterion of the task (spec §62). */
+  criteria: CriterionCheck[];
 }
 
 export interface OpenQuestion {
@@ -39,6 +42,7 @@ export const HANDOFF_SCHEMA = {
     knownIssues: { type: "array", items: { type: "string" }, description: "Known issues, risks or shortcuts." },
     remainingWork: { type: "array", items: { type: "string" }, description: "Work left for a follow-up task." },
     knowledge: KNOWLEDGE_NOTE_SCHEMA,
+    criteria: CRITERIA_SCHEMA,
     openQuestions: {
       type: "array",
       description:
@@ -56,7 +60,7 @@ export const HANDOFF_SCHEMA = {
       },
     },
   },
-  required: ["summary", "changes", "decisions", "knownIssues", "remainingWork", "knowledge", "openQuestions"],
+  required: ["summary", "changes", "decisions", "knownIssues", "remainingWork", "knowledge", "openQuestions", "criteria"],
   additionalProperties: false,
 } as const;
 
@@ -72,7 +76,7 @@ export function toHandoff(result: unknown): Handoff {
     try {
       value = JSON.parse(result);
     } catch {
-      return { summary: result, changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [] };
+      return { summary: result, changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [], criteria: [] };
     }
   }
   const o = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -91,5 +95,9 @@ export function toHandoff(result: unknown): Handoff {
         return [{ question, options: stringArray(r.options).slice(0, 10), context: typeof r.context === "string" ? r.context : "" }];
       })
       .slice(0, 5),
+    criteria: (Array.isArray(o.criteria) ? o.criteria : []).flatMap((c): CriterionCheck[] => {
+      const r = (c && typeof c === "object" ? c : {}) as Record<string, unknown>;
+      return typeof r.criterion === "string" ? [{ criterion: r.criterion, met: r.met === true, evidence: typeof r.evidence === "string" ? r.evidence : "" }] : [];
+    }),
   };
 }

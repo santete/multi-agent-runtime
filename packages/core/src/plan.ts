@@ -1,11 +1,12 @@
 import { HUMAN_EXECUTOR } from "./api.js";
+import { CONTRACT_SCHEMA_PROPERTIES, type TaskContract, toContract } from "./contract.js";
 import { KNOWLEDGE_NOTE_SCHEMA, type KnowledgeNote, toKnowledgeNotes } from "./knowledge.js";
 
 /**
  * Assisted planning (spec §24): a planner agent breaks a goal into a task DAG
  * and a human approves, edits or sends it back before any task is created.
  */
-export interface PlannedTask {
+export interface PlannedTask extends TaskContract {
   /** Short id, unique within the plan, that other planned tasks depend on. */
   ref: string;
   title: string;
@@ -47,13 +48,14 @@ export const PLAN_SCHEMA = {
           agent: { type: ["string", "null"], description: "One of the available agent ids, or null to route by requires." },
           requires: { type: "array", items: { type: "string" }, description: "Skills the agent needs (from the available agents)." },
           dependsOn: { type: "array", items: { type: "string" }, description: "Refs of tasks that must be merged first." },
+          ...CONTRACT_SCHEMA_PROPERTIES,
           paths: {
             type: "array",
             items: { type: "string" },
             description: "Files or globs the task will change (e.g. src/payments.js, src/export/**); tasks whose paths overlap run one after the other.",
           },
         },
-        required: ["ref", "title", "objective", "agent", "requires", "dependsOn", "paths"],
+        required: ["ref", "title", "objective", "agent", "requires", "dependsOn", "paths", "inputs", "constraints", "expectedOutput", "acceptanceCriteria"],
         additionalProperties: false,
       },
     },
@@ -117,6 +119,7 @@ export function checkPlan(result: unknown, options: { allowEmpty?: boolean } = {
       dependsOn: [...new Set(strings(o.dependsOn))],
       // A person's task changes nothing in the repository itself, so it owns no paths.
       paths: str(o.agent) === HUMAN_EXECUTOR ? [] : [...new Set(strings(o.paths))].slice(0, 50),
+      ...toContract(o),
     };
     if (!task.title || !task.objective) return { ok: false, error: `task ${task.ref} needs a title and an objective` };
     if (tasks.some((x) => x.ref === task.ref)) return { ok: false, error: `duplicate task ref ${task.ref}` };

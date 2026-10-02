@@ -16,6 +16,10 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
   const [fallbackAgents, setFallbackAgents] = useState<string[]>([]);
   const [priority, setPriority] = useState(50);
   const [paths, setPaths] = useState("");
+  const [criteria, setCriteria] = useState("");
+  const [constraints, setConstraints] = useState("");
+  const [expectedOutput, setExpectedOutput] = useState("");
+  const [inputs, setInputs] = useState("");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -43,7 +47,20 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
         .split(/[\n,]/)
         .map((p) => p.trim())
         .filter(Boolean);
+      const lines = (text: string) =>
+        text
+          .split("\n")
+          // One item per line; list markers ("- ", "1. ") are dropped.
+          .map((l) => l.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
+          .filter(Boolean);
+      const contract = {
+        ...(lines(inputs).length && { inputs: lines(inputs) }),
+        ...(lines(constraints).length && { constraints: lines(constraints) }),
+        ...(expectedOutput.trim() && { expectedOutput: expectedOutput.trim() }),
+        ...(lines(criteria).length && { acceptanceCriteria: lines(criteria) }),
+      };
       const task = await api.createTask(project.id, {
+        ...contract,
         title,
         objective,
         agent,
@@ -122,6 +139,30 @@ export function NewTaskDialog({ project, tasks, onClose }: { project: ProjectDto
             ))}
           </select>
         </label>
+        <label>
+          Acceptance criteria (one per line; a reviewer checks each before it can merge)
+          <textarea
+            value={criteria}
+            onChange={(e) => setCriteria(e.target.value)}
+            rows={3}
+            placeholder={"Refunding twice with the same request id refunds once\nREADME documents the new endpoint"}
+          />
+        </label>
+        <details className="contract-more">
+          <summary className="muted small">More of the contract: expected output, constraints, inputs</summary>
+          <label>
+            Expected output
+            <input value={expectedOutput} onChange={(e) => setExpectedOutput(e.target.value)} placeholder="A POST /refunds endpoint with tests" />
+          </label>
+          <label>
+            Constraints (one per line)
+            <textarea value={constraints} onChange={(e) => setConstraints(e.target.value)} rows={2} placeholder="Do not change the payment record shape" />
+          </label>
+          <label>
+            Inputs (one per line)
+            <textarea value={inputs} onChange={(e) => setInputs(e.target.value)} rows={2} placeholder="docs/refund-policy.md" />
+          </label>
+        </details>
         <label>
           Area (files or globs it changes, one per line; overlapping tasks run one after the other)
           <textarea value={paths} onChange={(e) => setPaths(e.target.value)} rows={2} placeholder={"src/payments/**\nREADME.md"} />

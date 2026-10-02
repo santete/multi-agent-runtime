@@ -1,4 +1,4 @@
-import type { ActorDto, ApprovalDto, ArtifactDto, ExecutionDto, InstructionDto, TaskDto, ValidationReport } from "@mar/core";
+import { alignChecks, type ActorDto, type ApprovalDto, type ArtifactDto, type ExecutionDto, type InstructionDto, type TaskDto, type ValidationReport } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
@@ -34,6 +34,7 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
 
   const latest = <T extends ArtifactDto["type"]>(type: T) => artifacts?.filter((a) => a.type === type).at(-1);
   const handoff = latest("handoff");
+  const reviews = (artifacts ?? []).filter((a) => a.type === "review_result");
   const validation = latest("validation_result");
   const diff = latest("diff");
   const current = executions?.find((e) => e.id === selected) ?? executions?.at(-1);
@@ -95,6 +96,8 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             <p className="prose">{task.objective}</p>
             {task.dependsOn.length > 0 && <Dependencies ids={task.dependsOn} />}
           </Section>
+
+          <ContractView task={task} handoff={handoff?.content} review={reviews.at(-1)?.content} />
 
           {task.agent === "human" && task.state === "READY" && (
             <Section title="For a person">
@@ -459,5 +462,69 @@ function DiffView({ text }: { text: string }) {
         </div>
       ))}
     </pre>
+  );
+}
+
+/**
+ * Spec §62: the task's contract, and each acceptance criterion as last
+ * checked: by a reviewer when there is a review, otherwise by the agent.
+ */
+function ContractView({ task, handoff, review }: { task: TaskDto; handoff: Record<string, unknown> | undefined; review: Record<string, unknown> | undefined }) {
+  const c = task.contract;
+  if (!c || (!c.inputs.length && !c.constraints.length && !c.expectedOutput && !c.acceptanceCriteria.length && !task.owner)) return null;
+  const reviewed = Array.isArray(review?.criteria) && (review!.criteria as unknown[]).length > 0;
+  const checks = alignChecks(c.acceptanceCriteria, reviewed ? review!.criteria : handoff?.criteria);
+  const reported = reviewed || Array.isArray(handoff?.criteria);
+  return (
+    <Section title="Contract">
+      <dl className="contract">
+        {task.owner && (
+          <>
+            <dt>Owner</dt>
+            <dd>{task.owner}</dd>
+          </>
+        )}
+        {c.inputs.length > 0 && (
+          <>
+            <dt>Inputs</dt>
+            <dd>
+              <List items={c.inputs} />
+            </dd>
+          </>
+        )}
+        {c.constraints.length > 0 && (
+          <>
+            <dt>Constraints</dt>
+            <dd>
+              <List items={c.constraints} />
+            </dd>
+          </>
+        )}
+        {c.expectedOutput && (
+          <>
+            <dt>Expected output</dt>
+            <dd className="prose">{c.expectedOutput}</dd>
+          </>
+        )}
+      </dl>
+      {checks.length > 0 && (
+        <>
+          <div className="muted small">
+            Acceptance criteria{reported ? ` · checked by ${reviewed ? `the reviewer (${String(review?.reviewer ?? "review")})` : "the agent"}` : " · not checked yet"}
+          </div>
+          <ul className="criteria">
+            {checks.map((k) => (
+              <li key={k.criterion} className={!reported ? "" : k.met ? "met" : "unmet"}>
+                <span className="criterion-mark">{!reported ? "○" : k.met ? "✓" : "✗"}</span>
+                <span>
+                  {k.criterion}
+                  {reported && k.evidence && <span className="muted small"> — {k.evidence}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Section>
   );
 }

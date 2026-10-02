@@ -1164,3 +1164,46 @@ button.link:disabled {
 .diff-del {
   background: rgba(248, 81, 73, 0.15);
 }
+
+.contract {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 12px;
+}
+.contract dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.contract dd {
+  margin: 0;
+}
+.criteria {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: grid;
+  gap: 6px;
+}
+.criteria li {
+  display: flex;
+  gap: 8px;
+}
+.criterion-mark {
+  width: 1.2em;
+  font-weight: 600;
+}
+.criteria li.met .criterion-mark {
+  color: var(--success-fg, #1a7f37);
+}
+.criteria li.unmet .criterion-mark {
+  color: var(--danger-fg, #cf222e);
+}
+
+.contract-more {
+  display: grid;
+  gap: 8px;
+}
+.contract-more summary {
+  cursor: pointer;
+}

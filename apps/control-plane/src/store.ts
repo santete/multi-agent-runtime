@@ -49,6 +49,8 @@ import {
   type HeartbeatResponse,
   type PolicyVerdict,
   type InstructionDto,
+  enforceCriteria,
+  toContract,
   type ProductMetrics,
   type ExecutionSecret,
   type PutSecretRequest,
@@ -285,6 +287,13 @@ const toTask = (r: Row): TaskDto => ({
   dependsOn: r.depends_on ?? [],
   priority: r.priority ?? 50,
   paths: r.paths ?? [],
+  contract: {
+    inputs: r.inputs ?? [],
+    constraints: r.constraints ?? [],
+    expectedOutput: r.expected_output ?? "",
+    acceptanceCriteria: r.acceptance_criteria ?? [],
+  },
+  owner: r.owner ?? null,
   pullRequestUrl: r.pull_request_url ?? null,
   pullRequestNumber: r.pull_request_number ?? null,
   version: r.version,
@@ -1067,10 +1076,13 @@ export class Store {
     if (!p) throw new NotFoundError("project", projectId);
     const key = `${p.key}-${p.task_seq}`;
     const deps = await this.resolveDependencies(q, projectId, req.dependsOn ?? []);
+    const contract = toContract(req as unknown as Record<string, unknown>);
     const [row] = await q.query(
       `insert into tasks (id, project_id, key, title, objective, agent, state, max_attempts, depends_on,
-         routing, requires, fallback_agents, plan_id, kind, priority, paths)
-       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13, $14, $15) returning *`,
+         routing, requires, fallback_agents, plan_id, kind, priority, paths,
+         inputs, constraints, expected_output, acceptance_criteria, owner)
+       values ($1, $2, $3, $4, $5, $6, 'CREATED', $7, $8::uuid[], $9, $10, $11, $12, $13, $14, $15,
+         $16, $17, $18, $19, $20) returning *`,
       [
         randomUUID(),
         projectId,
@@ -1087,6 +1099,12 @@ export class Store {
         kind,
         req.priority ?? 50,
         JSON.stringify((req.paths ?? []).map((p) => p.trim()).filter(Boolean)),
+        JSON.stringify(contract.inputs),
+        JSON.stringify(contract.constraints),
+        contract.expectedOutput,
+        JSON.stringify(contract.acceptanceCriteria),
+        // Spec §62: the person accountable, by default whoever created the task.
+        req.owner ?? actor ?? null,
       ],
     );
     const task = toTask(row!);
@@ -1212,6 +1230,12 @@ export class Store {
           requires: t.requires,
           paths: t.paths,
           dependsOn: t.dependsOn.map((d) => created.find((c) => c.ref === d)?.taskId ?? d),
+          inputs: t.inputs,
+          constraints: t.constraints,
+          expectedOutput: t.expectedOutput,
+          acceptanceCriteria: t.acceptanceCriteria,
+          // Whoever asked for the plan owns its tasks.
+          ...(plan.createdBy && { owner: plan.createdBy }),
         },
         actor,
         plan.id,
@@ -2203,6 +2227,13 @@ export class Store {
       handoff: await latest("handoff"),
       validation: await latest("validation_result"),
       author: target.agent,
+      contract: target.contract,
+      decisions: (
+        await q.query(
+          "select question, answer, answered_by from decisions where task_id = $1 and status = 'answered' order by answered_at",
+          [taskId],
+        )
+      ).map((r) => ({ question: r.question, answer: r.answer, answeredBy: r.answered_by ?? null })),
     };
   }
 
@@ -2489,8 +2520,11 @@ export class Store {
     reviewTask: TaskDto,
     id: string,
     req: CompleteExecutionRequest,
-    review: ReviewResult,
+    reported: ReviewResult,
   ): Promise<ExecutionDto> {
+    // Spec §63: an approval that leaves an acceptance criterion unmet or unchecked asks for changes.
+    const reviewed = await this.getTask(reviewTask.reviewOf!, q);
+    const review = enforceCriteria(reported, reviewed.contract.acceptanceCriteria);
     const execution = await this.finishExecution(q, reviewTask, id, req, "succeeded", { verdict: review.verdict });
     await this.addArtifact(q, reviewTask, id, "review_result", { ...review, reviewer: reviewTask.agent });
     if (!isTerminal(reviewTask.state)) await changeTaskState(q, reviewTask, "review_submitted", { verdict: review.verdict });
@@ -2512,6 +2546,8 @@ export class Store {
       verdict: review.verdict,
       summary: review.summary,
       findings: review.findings,
+      // Spec §62: the reviewer's check of each acceptance criterion, shown on the reviewed task.
+      criteria: review.criteria,
     });
     await appendEvent(q, {
       type: "AgentReviewCompleted",

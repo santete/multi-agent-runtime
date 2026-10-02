@@ -39,6 +39,29 @@ function secretRules(secrets: ClaimResponse["secrets"]): string[] {
   ];
 }
 
+/** Spec §62: the task's contract, as sections of the brief (empty parts are left out). */
+function contractSections(contract: ClaimResponse["task"]["contract"] | undefined, owner?: string | null): string[] {
+  if (!contract) return [];
+  const section = (title: string, items: string[]) => (items.length ? [`## ${title}`, "", bullets(items), ""] : []);
+  return [
+    ...section("Inputs", contract.inputs),
+    ...section("Constraints", contract.constraints),
+    ...(contract.expectedOutput ? ["## Expected output", "", contract.expectedOutput, ""] : []),
+    ...(contract.acceptanceCriteria.length
+      ? [
+          "## Acceptance criteria",
+          "",
+          "The task is complete only when all of these hold. A reviewer checks each one; report each in your handoff's `criteria` (met or not, with evidence).",
+          "If a criterion cannot be met, for example because it contradicts a constraint, do not finish with it unmet: ask the task's owner in `openQuestions` which one wins.",
+          "",
+          contract.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n"),
+          "",
+        ]
+      : []),
+    ...(owner ? [`Owner: ${owner} (the person accountable for this task).`, ""] : []),
+  ];
+}
+
 function taskBrief(claim: ClaimResponse): string {
   const { task, project } = claim;
   const validation = project.validation.length
@@ -51,6 +74,7 @@ function taskBrief(claim: ClaimResponse): string {
     "",
     task.objective,
     "",
+    ...contractSections(task.contract, task.owner),
     "## Rules",
     "",
     "- Work only inside this repository checkout (it is a dedicated git worktree for this task).",
@@ -197,6 +221,17 @@ function reviewBrief(target: NonNullable<ClaimResponse["review"]>): string {
     "",
     target.objective,
     "",
+    ...contractSections(target.contract),
+    ...(target.decisions?.length
+      ? [
+          "## Decisions made by people",
+          "",
+          "The author asked these while working and a person answered. The answers override the objective and the contract above where they conflict: do not hold the author to a rule a person lifted.",
+          "",
+          ...target.decisions.flatMap((d) => [`- **${d.question}**`, `  ${d.answer}${d.answeredBy ? ` _(${d.answeredBy})_` : ""}`]),
+          "",
+        ]
+      : []),
     "## What the author reports",
     "",
     h ? h.summary : "_No handoff._",
@@ -216,6 +251,11 @@ function reviewBrief(target: NonNullable<ClaimResponse["review"]>): string {
     "- Do **not** modify any file; only report.",
     "- `request_changes` only for real problems (bugs, missing requirements, security, significant maintainability issues). Style nits alone are not a reason.",
     "- Give each finding a severity (blocker, major, minor, nit), the file, the line when it applies, and how to fix it.",
+    ...(target.contract?.acceptanceCriteria.length
+      ? [
+          "- Check every acceptance criterion yourself (do not take the author's word for it) and report each in `criteria` with your evidence. An approval with a criterion not met is turned into a request for changes.",
+        ]
+      : []),
     "",
   ].join("\n");
 }
@@ -233,7 +273,7 @@ export function buildReviewPrompt(target: NonNullable<ClaimResponse["review"]>, 
     `You are reviewing another agent's change for ${target.taskKey} ("${target.title}").`,
     `Read ${CONTEXT_DIR}/REVIEW.md and the diff in ${CONTEXT_DIR}/DIFF.patch, inspect the code as needed, and do not modify any file.` +
       (claim ? knowledgeHint(claim) : ""),
-    "Answer with your verdict (approve or request_changes), a short summary and your findings.",
+    "Answer with your verdict (approve or request_changes), a short summary, your findings and your check of each acceptance criterion (criteria).",
   ].join("\n\n");
 }
 
@@ -284,6 +324,7 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
     "- Use the agent `human` for work only a person can do: a business or product decision, credentials or access, a manual step outside the repository. Its objective says what to decide or do; tasks that need the outcome depend on it. The person answers in the platform, not in a file: their answer reaches the dependent tasks as that task's handoff (in their DEPENDENCIES.md), so give `human` tasks no `paths` and point dependent tasks to the handoff of the deciding task.",
     "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
     "- List in `paths` the files or globs each task will change (`src/payments/**`, `README.md`). Tasks whose paths overlap run one after the other, so keep areas narrow; leave it empty only when you cannot tell.",
+    "- Give each task a contract: `inputs` (what it starts from), `constraints` (what it must respect or not change), `expectedOutput` (the deliverable) and `acceptanceCriteria`: a few concrete, checkable statements (behaviour, tests, docs) that a reviewer can verify one by one. The task is only complete when all of them hold.",
     "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
     "- If nothing is left to do, return no tasks and explain why in the summary.",
     "",
@@ -366,6 +407,7 @@ function critiqueBrief(c: NonNullable<ClaimResponse["critique"]>): string {
     "- Is every objective self-contained and testable? Is any task too big for one agent session and one pull request?",
     "- Are the dependencies right (nothing starts before what it needs; independent work in parallel)?",
     "- Do the `paths` cover what each task changes, without making unrelated tasks overlap?",
+    "- Are the acceptance criteria concrete and checkable, and do they cover what the goal needs?",
     "- Are agents or required skills sensible for each task?",
     "- Answer `revise` only for real problems, with one issue per problem and what to change. Style preferences are not a reason.",
     "",
@@ -394,7 +436,7 @@ export function buildPlanPrompt(plan: NonNullable<ClaimResponse["plan"]>, struct
   return [
     `You are planning work for a team of coding agents. Read ${CONTEXT_DIR}/PLAN.md, inspect the repository as needed, and do not modify any file.` +
       (claim ? knowledgeHint(claim) : ""),
-    "Answer with a summary, the list of tasks (ref, title, objective, agent, requires, dependsOn, paths) and any durable project facts you established (knowledge).",
+    "Answer with a summary, the list of tasks (ref, title, objective, agent, requires, dependsOn, paths, inputs, constraints, expectedOutput, acceptanceCriteria) and any durable project facts you established (knowledge).",
     ...(structured ? [] : ['Reply with only that JSON object: {"summary": ..., "tasks": [...], "knowledge": [...]}.']),
   ].join("\n\n");
 }
@@ -467,7 +509,7 @@ export function buildPrompt(claim: ClaimResponse, resuming: boolean): string {
   const extra = claim.dependencies?.length ? ` Tasks it builds on are summarized in ${CONTEXT_DIR}/DEPENDENCIES.md.` : "";
   parts.push(
     `The full task brief, rules and the validation that will be run are in ${CONTEXT_DIR}/TASK.md; read it first.${extra}${knowledgeHint(claim)} ` +
-      "Do not commit or push. End with the handoff (summary, changes, decisions, known issues, remaining work).",
+      "Do not commit or push. End with the handoff (summary, changes, decisions, known issues, remaining work, and your check of each acceptance criterion).",
   );
   return parts.join("\n\n");
 }

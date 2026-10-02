@@ -11,3 +11,4 @@ export * from "./cost.js";
 export * from "./priority.js";
 export * from "./paths.js";
 export * from "./secrets.js";
+export * from "./contract.js";

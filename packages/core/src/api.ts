@@ -3,6 +3,7 @@ import type { AdapterCapabilities, AgentEvent } from "./adapter.js";
 import type { KnowledgeKind, KnowledgeStatus } from "./knowledge.js";
 import type { PlanCritique, PlannedTask, PlanProposal } from "./plan.js";
 import type { Budget, Pricing } from "./cost.js";
+import type { TaskContract } from "./contract.js";
 import type { ProjectPolicy } from "./policy.js";
 import type { SecretScope } from "./secrets.js";
 import type { CostTier, RoutingPolicy } from "./routing.js";
@@ -103,6 +104,10 @@ export interface TaskDto {
    * overlapping areas do not run at the same time. Empty = undeclared.
    */
   paths: string[];
+  /** Collaboration contract (spec §62): inputs, constraints, expected output, acceptance criteria. */
+  contract: TaskContract;
+  /** The person accountable for the task (spec §62 "Owner"); the executor is `agent`. */
+  owner: string | null;
   /** Set once the task's branch has been delivered as a pull request. */
   pullRequestUrl: string | null;
   pullRequestNumber: number | null;
@@ -493,6 +498,12 @@ export interface CreateTaskRequest {
   maxAttempts?: number | undefined;
   /** Ids or keys of tasks in the same project that must be merged first. */
   dependsOn?: string[] | undefined;
+  inputs?: string[] | undefined;
+  constraints?: string[] | undefined;
+  expectedOutput?: string | undefined;
+  acceptanceCriteria?: string[] | undefined;
+  /** Defaults to whoever creates the task. */
+  owner?: string | undefined;
 }
 
 /** An agent a runner offers (agent registry, spec §14). */
@@ -667,6 +678,10 @@ export interface ReviewTarget {
   validation: ValidationReport | null;
   /** Agent that did the work. */
   author: string;
+  /** The reviewed task's contract: the reviewer checks each acceptance criterion (spec §62-63). */
+  contract: TaskContract;
+  /** Answers people gave the task's agent (spec §61); they override the contract where they conflict. */
+  decisions?: Array<{ question: string; answer: string; answeredBy: string | null }>;
 }
 
 /**

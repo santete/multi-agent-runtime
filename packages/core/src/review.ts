@@ -1,3 +1,5 @@
+import { alignChecks, CRITERIA_SCHEMA, type CriterionCheck } from "./contract.js";
+
 /**
  * Agent code review (spec §30): another agent reviews a delivered task and
  * answers with this structure.
@@ -17,6 +19,8 @@ export interface ReviewResult {
   verdict: ReviewVerdict;
   summary: string;
   findings: ReviewFinding[];
+  /** The reviewer's check of each acceptance criterion of the task (spec §62-63). */
+  criteria: CriterionCheck[];
 }
 
 export const REVIEW_SCHEMA = {
@@ -42,8 +46,9 @@ export const REVIEW_SCHEMA = {
         additionalProperties: false,
       },
     },
+    criteria: { ...CRITERIA_SCHEMA, description: "Check each acceptance criterion of the task yourself, in the same order; empty when it has none." },
   },
-  required: ["verdict", "summary", "findings"],
+  required: ["verdict", "summary", "findings", "criteria"],
   additionalProperties: false,
 } as const;
 
@@ -77,12 +82,41 @@ export function toReviewResult(result: unknown): ReviewResult | null {
       },
     ];
   });
-  return { verdict: o.verdict, summary: typeof o.summary === "string" ? o.summary : "", findings };
+  const criteria = (Array.isArray(o.criteria) ? o.criteria : []).flatMap((c): CriterionCheck[] => {
+    const r = (c && typeof c === "object" ? c : {}) as Record<string, unknown>;
+    return typeof r.criterion === "string" ? [{ criterion: r.criterion, met: r.met === true, evidence: typeof r.evidence === "string" ? r.evidence : "" }] : [];
+  });
+  return { verdict: o.verdict, summary: typeof o.summary === "string" ? o.summary : "", findings, criteria };
+}
+
+/**
+ * Spec §63: a task is complete only when its acceptance criteria hold. The
+ * reviewer's checks are aligned with the task's criteria; an approval that
+ * leaves one unmet or unchecked becomes a request for changes.
+ */
+export function enforceCriteria(review: ReviewResult, criteria: string[]): ReviewResult {
+  if (!criteria.length) return review;
+  const checks = alignChecks(criteria, review.criteria);
+  const unmet = checks.filter((c) => !c.met);
+  if (review.verdict !== "approve" || !unmet.length) return { ...review, criteria: checks };
+  return {
+    verdict: "request_changes",
+    summary: `${review.summary}\n\n(Approval overridden by the platform: ${unmet.length} acceptance criteria not met or not checked.)`,
+    findings: [
+      ...review.findings,
+      ...unmet.map((c): ReviewFinding => ({ severity: "blocker", file: "", line: null, message: `Acceptance criterion not met: ${c.criterion} (${c.evidence || "no evidence"})` })),
+    ],
+    criteria: checks,
+  };
 }
 
 /** The review as a comment for the pull request, the task timeline and the rework brief. */
 export function formatReview(review: ReviewResult, reviewer: string): string {
   const lines = [`Review by ${reviewer}: ${review.verdict === "approve" ? "approved" : "changes requested"}.`, "", review.summary];
+  if (review.criteria?.length) {
+    lines.push("", "Acceptance criteria:");
+    for (const c of review.criteria) lines.push(`- [${c.met ? "x" : " "}] ${c.criterion}${c.evidence ? ` — ${c.evidence}` : ""}`);
+  }
   if (review.findings.length) {
     lines.push("", "Findings:");
     for (const f of review.findings) {
