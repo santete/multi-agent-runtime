@@ -74,7 +74,7 @@ const strings = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) :
  * The JSON object in a text answer (agents without structured output): the
  * whole text, a fenced block, or the outermost braces.
  */
-function parseJsonAnswer(text: string): unknown {
+export function parseJsonAnswer(text: string): unknown {
   const fenced = /```(?:json)?\s*\n([\s\S]*?)```/.exec(text)?.[1];
   const braces = text.includes("{") ? text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1) : undefined;
   for (const candidate of [text, fenced, braces]) {

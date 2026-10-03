@@ -322,6 +322,13 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] **Dữ liệu LP-9:** task bị ghi CANCELLED dù PR #21 đã merge (lỗi cancel khi đang MERGING, đã sửa trước đó). Đã sửa thành COMPLETED, có event `TaskStateCorrected` để audit
 - [x] **Temporal:** đã đánh giá, chưa dùng ([ADR-0032](adr/0032-temporal-evaluation.md)). Giới hạn chỉ chạy được một instance đã được giải quyết bằng leader election (xem bên dưới)
 
+### Qoder CLI adapter — trạng thái ✅ ([ADR-0035](adr/0035-qoder-adapter.md))
+
+- [x] Spike qodercli 1.1.65: stream-json giống Claude, PreToolUse hook giống Claude; hook qua `--settings` bị bỏ khi giới hạn `--setting-sources` nên đặt vào `.qoder/settings.local.json` của worktree
+- [x] `@mar/adapter-qoder`: danh sách tool cho phép (read-only khi review/plan), schema qua `--append-system-prompt` + parse JSON, lời gọi bị hook/prompt chặn thành `permission_denied`, bỏ cost/usage bằng 0 (Qoder tính credit)
+- [x] Runner config `adapter: "qoder"` (`executable`, `tools`), Marketplace có adapter `qoder`
+- [x] **Chạy thật** trên `mar-sandbox`: QD-1 (PR #47) hook kiểm tra mọi lời gọi, handoff đủ criteria, validation pass; QR-1 (PR #48) rework khi base đổi rồi merge; qoder làm planner (read-only, `PLAN_SCHEMA` qua system prompt) ra plan hợp lệ có contract. Agent không review code của chính nó nên vai trò reviewer của qoder chưa chạy thật
+
 ### Chạy end-to-end đủ tính năng trên GitHub — trạng thái ✅
 
 Cấu hình LP: review chéo do agent, agent duyệt là merge; Codex làm critic, plan tự duyệt; budget; validation trong container; CI gate.

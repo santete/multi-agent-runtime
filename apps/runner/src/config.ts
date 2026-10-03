@@ -4,6 +4,7 @@ import { AntigravityAdapter } from "@mar/adapter-antigravity";
 import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
 import { CodexAdapter } from "@mar/adapter-codex";
 import { GenericCliAdapter } from "@mar/adapter-generic-cli";
+import { QoderAdapter } from "@mar/adapter-qoder";
 import type { AgentAdapter } from "@mar/core";
 import { z } from "zod";
 
@@ -30,6 +31,13 @@ const agentConfig = z.discriminatedUnion("adapter", [
     unattended: z.boolean().default(false),
     /** Run agy with a profile of its own under the runner home, without the machine user's settings (default). */
     isolateConfig: z.boolean().default(true),
+    ...routing,
+  }),
+  z.object({
+    adapter: z.literal("qoder"),
+    executable: z.string().optional(),
+    /** Built-in tools of edit runs; read-only runs always get only the reading ones. */
+    tools: z.array(z.string().min(1)).min(1).optional(),
     ...routing,
   }),
   z.object({
@@ -90,6 +98,11 @@ export function createAdapter(config: AgentConfig, profilesDir?: string, agentId
         ...(config.defaultTimeoutSeconds && { defaultTimeoutSeconds: config.defaultTimeoutSeconds }),
         unattended: config.unattended,
         ...(config.isolateConfig && profilesDir && { profileDir: profileDirOf(profilesDir, agentId) }),
+      });
+    case "qoder":
+      return new QoderAdapter({
+        ...(config.executable && { executable: config.executable }),
+        ...(config.tools && { tools: config.tools }),
       });
     case "generic-cli":
       return new GenericCliAdapter({
