@@ -1,6 +1,7 @@
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { storableParams } from "./storable.js";
 
 export interface Queryable {
   // Rows are untyped database records unless the caller names a row type.
@@ -89,13 +90,13 @@ export function createPgDb(connectionString: string): Db {
   return {
     leaderLock: (name) => new PgLeaderLock(connectionString, advisoryKey(name)),
     async query(sql, params) {
-      return (await pool.query(sql, params as unknown[])).rows;
+      return (await pool.query(sql, storableParams(params as unknown[]))).rows;
     },
     async tx(fn) {
       const client = await pool.connect();
       try {
         await client.query("begin");
-        const result = await fn({ query: async (sql, params) => (await client.query(sql, params as unknown[])).rows });
+        const result = await fn({ query: async (sql, params) => (await client.query(sql, storableParams(params as unknown[]))).rows });
         await client.query("commit");
         return result;
       } catch (err) {
@@ -112,13 +113,15 @@ export function createPgDb(connectionString: string): Db {
 /** In-process Postgres (WASM) for tests and zero-setup local runs. */
 export async function createPgliteDb(dataDir?: string): Promise<Db> {
   const { PGlite } = await import("@electric-sql/pglite");
+  // PGlite creates only the last directory; a fresh checkout has no .data/ yet.
+  if (dataDir && !dataDir.includes("://")) await mkdir(dataDir, { recursive: true });
   const db = new PGlite(dataDir);
   return {
     async query(sql, params) {
-      return (await db.query(sql, params)).rows as never;
+      return (await db.query(sql, storableParams(params as unknown[] | undefined))).rows as never;
     },
     tx(fn) {
-      return db.transaction((t) => fn({ query: async (sql, params) => (await t.query(sql, params)).rows as never }));
+      return db.transaction((t) => fn({ query: async (sql, params) => (await t.query(sql, storableParams(params as unknown[] | undefined))).rows as never }));
     },
     // In-process: only this process can use the database, so it always leads.
     leaderLock: () => ({ hold: async () => true, release: async () => undefined }),

@@ -26,22 +26,69 @@ Platform **không cắm vào IDE**. Nó điều khiển bản CLI của các age
 
 ## 2. Cài đặt và khởi động
 
-Yêu cầu: Node 22+, pnpm 10, git. Postgres là tuỳ chọn: không có thì control plane dùng PGlite nhúng, nhưng PGlite chỉ phù hợp để dev với một process.
+Yêu cầu: Node 22+, pnpm 10, git. Thêm Docker nếu dùng Postgres. Mọi lệnh dưới đây chạy **ở thư mục gốc của repo**, và đường dẫn tương đối (`./users.json`, `runner.config.json`) tính từ thư mục đó.
+
+**Bước 1: cài đặt và build dashboard**
 
 ```sh
 pnpm install
 pnpm --filter @mar/web build            # dashboard, phục vụ tại /ui/
+```
 
-# Control plane (mặc định http://127.0.0.1:7700)
+**Bước 2: database.** Có hai lựa chọn:
+- Không làm gì: control plane dùng PGlite nhúng (dữ liệu ở `apps/control-plane/.data/pglite`). Hợp để thử và dev, chỉ chạy được một instance.
+- Postgres: `docker compose up -d` (dùng `docker-compose.yml` của repo, Postgres ở `localhost:5432`, user/mật khẩu/db đều là `mar`), rồi đặt `DATABASE_URL` ở bước 4.
+
+**Bước 3: người dùng.** Tạo `users.json` ở thư mục gốc repo. File đã nằm trong `.gitignore`. Token dài ít nhất 16 ký tự:
+
+```json
+[
+  { "name": "me",     "role": "owner",  "token": "đổi-thành-chuỗi-ngẫu-nhiên-1" },
+  { "name": "laptop", "role": "runner", "token": "đổi-thành-chuỗi-ngẫu-nhiên-2" }
+]
+```
+
+Có thể bỏ qua bước này khi chỉ thử trên máy mình. Khi đó API chạy ở *open mode*: ai gọi tới `127.0.0.1` cũng là owner, và không cần `apiToken` cho runner.
+
+**Bước 4: control plane** (mặc định http://127.0.0.1:7700). Bỏ dòng `DATABASE_URL` nếu dùng PGlite.
+
+PowerShell (Windows):
+
+```powershell
+$env:GITHUB_TOKEN   = gh auth token
+$env:DATABASE_URL   = "postgres://mar:mar@localhost:5432/mar"
+$env:MAR_USERS_FILE = "./users.json"
+pnpm --filter @mar/control-plane start
+```
+
+bash (Git Bash, macOS, Linux):
+
+```sh
 GITHUB_TOKEN=$(gh auth token) \
 DATABASE_URL=postgres://mar:mar@localhost:5432/mar \
 MAR_USERS_FILE=./users.json \
 pnpm --filter @mar/control-plane start
+```
 
-# Runner, trên mỗi máy có agent
-cp apps/runner/runner.config.example.json apps/runner/runner.config.json
+Khởi động thành công thì log có dòng `Server listening at http://127.0.0.1:7700`, và `http://127.0.0.1:7700/health` trả `{"ok":true,"role":"leader"}` (vài giây đầu có thể là `standby`). Mở dashboard tại `http://127.0.0.1:7700/ui/` rồi đăng nhập bằng token owner. Nếu không lên được, control plane in **một dòng** nói rõ lỗi:
+
+| Thông báo | Cách sửa |
+|---|---|
+| `Cannot connect to Postgres at localhost:5432/mar (ECONNREFUSED)` | Chạy `docker compose up -d`, hoặc bỏ `DATABASE_URL` để dùng PGlite |
+| `MAR_USERS_FILE: … does not exist` | Sai đường dẫn: đường dẫn tương đối tính từ thư mục đang đứng lúc gõ lệnh |
+| `MAR_USERS_FILE: …: 0.token: tokens must be at least 16 characters` | Sửa đúng trường được nêu |
+| `Port 7700 on 127.0.0.1 is already in use` | Một control plane khác đang chạy: tắt nó, hoặc đặt `PORT` khác |
+| `Refusing to listen on 0.0.0.0 without API users` | Mở ra mạng (`HOST`) thì bắt buộc có `users.json` |
+
+**Bước 5: runner**, trên mỗi máy có agent, trong một terminal khác:
+
+```sh
+cp apps/runner/runner.config.example.json runner.config.json
+# Sửa runner.config.json: giữ lại các agent đã cài trên máy này, thêm "apiToken": "<token của user role runner>"
 pnpm --filter @mar/runner start runner.config.json
 ```
+
+`home` trong config (mặc định `./.runner`, nơi chứa repo clone và worktree) tính từ thư mục chứa file config. Trên Windows, agent gọi `bash` (như agent `shell` trong config mẫu) chạy bằng Git Bash, kể cả khi `bash` trong PATH là WSL.
 
 ### Người dùng và vai trò
 

@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolveLaunchPath, stripBom } from "@mar/core/launch-path";
 import { z } from "zod";
+import { StartupError } from "./startup.js";
 
 /**
  * Who is calling the API (spec §32: approvals are tiered and audited).
@@ -75,7 +77,30 @@ export function hasRole(actor: Pick<Actor, "role">, min: Role): boolean {
  */
 export function loadUsers(env: NodeJS.ProcessEnv = process.env): UserConfig[] {
   const users: UserConfig[] = [];
-  if (env.MAR_USERS_FILE) users.push(...z.array(userSchema).parse(JSON.parse(readFileSync(env.MAR_USERS_FILE, "utf8"))));
+  if (env.MAR_USERS_FILE) users.push(...readUsersFile(resolveLaunchPath(env.MAR_USERS_FILE, { env })));
   if (env.MAR_API_TOKEN) users.push(userSchema.parse({ name: "admin", role: "owner", token: env.MAR_API_TOKEN, org: ALL_ORGS }));
   return users;
+}
+
+const USERS_EXAMPLE = '[{ "name": "me", "role": "owner", "token": "<at least 16 characters>" }]';
+
+function readUsersFile(path: string): UserConfig[] {
+  if (!existsSync(path)) {
+    throw new StartupError(
+      `MAR_USERS_FILE: ${path} does not exist. Relative paths start from the directory you ran the command in. ` +
+        `The file is a JSON array, e.g. ${USERS_EXAMPLE}`,
+    );
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stripBom(readFileSync(path, "utf8")));
+  } catch (err) {
+    throw new StartupError(`MAR_USERS_FILE: ${path} is not valid JSON (${err instanceof Error ? err.message : String(err)}).`);
+  }
+  const parsed = z.array(userSchema).safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]!;
+    throw new StartupError(`MAR_USERS_FILE: ${path}: ${issue.path.join(".") || "(root)"}: ${issue.message}. Expected e.g. ${USERS_EXAMPLE}`);
+  }
+  return parsed.data;
 }

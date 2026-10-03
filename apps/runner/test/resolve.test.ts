@@ -41,6 +41,20 @@ describe.runIf(process.platform === "win32")("resolveCommand (Windows)", () => {
     expect(resolveCommand("nope", env())).toEqual({ command: "nope", prefixArgs: [] });
   });
 
+  it("uses Git Bash instead of the WSL launcher in System32", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    const system32 = join(bin.path, "Windows", "System32");
+    const gitBin = join(bin.path, "Programs", "Git", "bin");
+    await mkdir(system32, { recursive: true });
+    await mkdir(gitBin, { recursive: true });
+    await writeFile(join(system32, "bash.exe"), "");
+    await writeFile(join(gitBin, "bash.exe"), "");
+    const wslOnly = { PATH: system32, PATHEXT: ".EXE" };
+    expect(resolveCommand("bash", { ...wslOnly, ProgramFiles: join(bin.path, "Programs") }).command).toBe(join(gitBin, "bash.exe"));
+    // Without Git Bash, the launcher is all there is.
+    expect(resolveCommand("bash", { ...wslOnly, ProgramFiles: join(bin.path, "none") }).command).toBe(join(system32, "bash.exe"));
+  });
+
   it("explains shims it cannot unwrap", async () => {
     await writeFile(join(bin.path, "tool.cmd"), "@ECHO off\r\ncall something-else %*\r\n");
     expect(() => resolveCommand("tool", env())).toThrow(/set "executable"/);
