@@ -1,6 +1,6 @@
 # multi-agent-runtime
 
-Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
+Control plane and agent runtime that turns independent coding agents — Claude Code, Antigravity (`agy`), OpenAI Codex, Qoder and others — into one coordinated software engineering team: shared task graph, isolated git worktrees, structured artifacts, validation, human approval and GitHub PRs.
 
 > Status: **MVP, Phase 2 and Phase 3 complete.** Task DAGs across Claude Code, Antigravity and Codex agents with a policy hook on every tool call, validation, review, CI-gated merge queue and GitHub pull requests; assisted and autonomous planning with a critic agent; capability routing by measured results; shared knowledge; cost, quota and budgets; self-healing (revert or fix a broken base branch, escalation); human decisions and tasks for people; organizations and an agent marketplace; Slack-compatible notifications, OpenTelemetry and a live dashboard. See the development plan.
 
@@ -33,6 +33,7 @@ packages/
   adapter-claude-code/     Claude Code CLI (claude -p --output-format stream-json)
   adapter-antigravity/     Antigravity CLI (agy -p --output-format stream-json)
   adapter-codex/           OpenAI Codex CLI (codex exec --json), sandboxed + audited
+  adapter-qoder/           Qoder CLI (qodercli -p --output-format stream-json), hook in .qoder/settings.local.json
   adapter-generic-cli/     any command-line tool (stdout lines + exit code)
 apps/
   control-plane/           Fastify API, Postgres/PGlite, append-only event store

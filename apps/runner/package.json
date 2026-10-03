@@ -12,6 +12,7 @@
     "@mar/adapter-claude-code": "workspace:*",
     "@mar/adapter-codex": "workspace:*",
     "@mar/adapter-generic-cli": "workspace:*",
+    "@mar/adapter-qoder": "workspace:*",
     "@mar/core": "workspace:*",
     "@mar/telemetry": "workspace:*",
     "zod": "^4.6.5"

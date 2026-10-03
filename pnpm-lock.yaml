@@ -63,6 +63,9 @@ importers:
       '@mar/adapter-generic-cli':
         specifier: workspace:*
         version: link:../../packages/adapter-generic-cli
+      '@mar/adapter-qoder':
+        specifier: workspace:*
+        version: link:../../packages/adapter-qoder
       '@mar/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -131,6 +134,15 @@ importers:
 
   packages/adapter-generic-cli:
     dependencies:
+      '@mar/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-qoder:
+    dependencies:
+      '@mar/adapter-claude-code':
+        specifier: workspace:*
+        version: link:../adapter-claude-code
       '@mar/core':
         specifier: workspace:*
         version: link:../core

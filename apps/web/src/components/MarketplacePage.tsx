@@ -119,7 +119,7 @@ function PublishForm({ actor, onDone }: { actor: ActorDto; onDone: () => void })
         <label>
           Adapter
           <select value={form.adapter} onChange={(e) => set({ adapter: e.target.value })}>
-            {["claude-code", "codex", "antigravity", "generic-cli"].map((a) => (
+            {["claude-code", "codex", "antigravity", "qoder", "generic-cli"].map((a) => (
               <option key={a}>{a}</option>
             ))}
           </select>

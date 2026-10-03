@@ -55,3 +55,25 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 | Cost | Chỉ token (input, cached, output, reasoning), không có USD |
 | Auth | Đăng nhập ChatGPT (`codex login`) hoặc API key |
 | Binary trên Windows | `codex.cmd` (npm shim) → `node .../@openai/codex/bin/codex.js` |
+
+## Qoder CLI 1.1.65 (spike 2026-10-03, Windows 11) — [ADR-0035](../adr/0035-qoder-adapter.md)
+
+| Khả năng | Qoder (`qodercli`) |
+|---|---|
+| Headless | `qodercli -p` (prompt qua stdin), `--output-format stream-json` (NDJSON giống Claude: `system/init`, `assistant`, `user`, `result`; thêm `system/hook_*`, `artifacts_update`) |
+| Session / resume | `session_id`; `--resume <id>` |
+| Auto-apply edit | `--permission-mode accept_edits` |
+| Read-only | Không có `plan` mode → `--permission-mode default` + `--tools Read,Glob,Grep,WebFetch,WebSearch` |
+| Giới hạn tool | `--tools a,b,c` (thay đổi danh sách tool trong `init`) |
+| Structured output | Không có `--json-schema` → schema qua `--append-system-prompt`, parse JSON từ câu trả lời cuối |
+| Cost / usage | `total_credits`, `credits` theo message; `total_cost_usd` và token luôn = 0 |
+| Báo action bị từ chối | `permission_denials` luôn rỗng; đọc từ `tool_result` lỗi: `… hook blocking error from command: "…": <reason>` hoặc `Error: Allow Bash to run: <cmd>?` |
+| Pre-tool policy hook | PreToolUse giống Claude (`tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision`). Qua `--settings` chỉ khi **không** giới hạn `--setting-sources` ("Flag hooks skipped: not in --setting-sources"); qua `.qoder/settings.local.json` trong workspace thì chạy với `project,local` |
+| Hook `deny` / `allow` ở headless | ✅ / ✅ (allow mở được lệnh shell ghi file) |
+| Lệnh shell không hook | read-only (`git status`) tự cho phép; lệnh khác bị từ chối ở headless |
+| Hook nhận env của agent | ✅ |
+| Cách chạy lệnh hook (Windows) | qua Git Bash, dấu nháy giữ nguyên |
+| Cách ly config của user | `--setting-sources project,local --strict-mcp-config`; plugin hệ thống (security-scan, code tracking) vẫn chạy |
+| Binary trên Windows | `~/.qoder/bin/qodercli/qodercli.exe` (PATH của user) |
+| Auth | Đăng nhập trình duyệt (`qodercli login`), lưu ở `~/.qoder/.auth` |
+| Model | `--model` (tên tier: `efficient`, `performance`, `auto`…; `--list-models`) |
