@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { resolveLaunchPath, stripBom } from "@mar/core/launch-path";
 import { AntigravityAdapter } from "@mar/adapter-antigravity";
 import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
 import { CodexAdapter } from "@mar/adapter-codex";
@@ -78,8 +80,28 @@ export type RunnerConfig = z.infer<typeof runnerConfig>;
 export type RunnerConfigInput = z.input<typeof runnerConfig>;
 export type AgentConfig = z.infer<typeof agentConfig>;
 
+/**
+ * Reads the runner config from where the command was run (falling back to
+ * apps/runner, where older instructions put it). A relative `home` is relative
+ * to the config file. Problems are reported in one line.
+ */
 export async function loadConfig(path: string): Promise<RunnerConfigInput> {
-  return JSON.parse(await readFile(path, "utf8")) as RunnerConfigInput;
+  const file = resolveLaunchPath(path, { fallbackToCwd: true });
+  if (!existsSync(file)) {
+    throw new Error(`Runner config ${file} does not exist. Copy apps/runner/runner.config.example.json and list the agents installed on this machine.`);
+  }
+  let config: RunnerConfigInput;
+  try {
+    config = JSON.parse(stripBom(await readFile(file, "utf8"))) as RunnerConfigInput;
+  } catch (err) {
+    throw new Error(`Runner config ${file} is not valid JSON (${err instanceof Error ? err.message : String(err)}).`);
+  }
+  const checked = runnerConfig.safeParse(config);
+  if (!checked.success) {
+    const issue = checked.error.issues[0]!;
+    throw new Error(`Runner config ${file}: ${issue.path.join(".") || "(root)"}: ${issue.message}.`);
+  }
+  return typeof config.home === "string" ? { ...config, home: resolve(dirname(file), config.home) } : config;
 }
 
 /** The isolated profile directory of an agent. */

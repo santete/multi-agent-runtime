@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { resolveLaunchPath } from "@mar/core/launch-path";
 import { initTelemetry } from "@mar/telemetry";
 import { buildApp } from "./app.js";
 import { loadUsers } from "./auth.js";
@@ -7,6 +8,7 @@ import { type GitProvider, GitHubProvider, RoutingGitProvider } from "./git-prov
 import { GitLabProvider } from "./gitlab-provider.js";
 import { Notifier, notifierOptionsFromEnv } from "./notifier.js";
 import { Background } from "./background.js";
+import { explainStartupError, StartupError } from "./startup.js";
 import { Store } from "./store.js";
 
 // Traces and metrics over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set (spec §41).
@@ -16,16 +18,30 @@ const telemetry = initTelemetry({ serviceName: "mar-control-plane" });
 const databaseUrl = process.env.DATABASE_URL;
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 7700);
+/** Stops with one line saying what went wrong and what to do. */
+const fail = (err: unknown): never => {
+  console.error(explainStartupError(err, { databaseUrl, host, port }));
+  process.exit(1);
+};
+
 // Users from MAR_USERS_FILE and/or MAR_API_TOKEN (owner). None = open mode.
-const users = loadUsers();
+const users = (() => {
+  try {
+    return loadUsers();
+  } catch (err) {
+    return fail(err);
+  }
+})();
 
 if (!users.length && !["127.0.0.1", "localhost", "::1"].includes(host)) {
-  console.error(`Refusing to listen on ${host} without API users (set MAR_USERS_FILE or MAR_API_TOKEN).`);
-  process.exit(1);
+  fail(new StartupError(`Refusing to listen on ${host} without API users (set MAR_USERS_FILE or MAR_API_TOKEN).`));
 }
 
-const db = databaseUrl ? createPgDb(databaseUrl) : await createPgliteDb(process.env.PGLITE_DIR ?? "./.data/pglite");
-const applied = await migrate(db);
+// An explicit PGLITE_DIR is relative to where the command was run; the default stays inside apps/control-plane.
+const db = databaseUrl
+  ? createPgDb(databaseUrl)
+  : await createPgliteDb(process.env.PGLITE_DIR ? resolveLaunchPath(process.env.PGLITE_DIR) : "./.data/pglite").catch(fail);
+const applied = await migrate(db).catch(fail);
 // Organizations named in the users file exist (spec §49).
 await new Store(db).ensureOrgs([...new Set(users.map((u) => u.org ?? "default").filter((o) => o !== "*"))]);
 
@@ -83,4 +99,7 @@ const shutdown = async () => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-await app.listen({ host, port });
+await app.listen({ host, port }).catch(async (err) => {
+  await background?.stop();
+  fail(err);
+});

@@ -57,13 +57,14 @@ pnpm typecheck
 # 0. Build the dashboard once (served at http://127.0.0.1:7700/ui/)
 pnpm --filter @mar/web build
 
-# 1. Control plane on http://127.0.0.1:7700
-#    Without DATABASE_URL it uses embedded PGlite in ./.data/pglite.
+# 1. Control plane on http://127.0.0.1:7700 (run every command from the repository root;
+#    relative paths such as MAR_USERS_FILE=./users.json are resolved from there).
+#    Without DATABASE_URL it uses embedded PGlite in apps/control-plane/.data/pglite.
 #    With Postgres: docker compose up -d && export DATABASE_URL=postgres://mar:mar@localhost:5432/mar
 pnpm --filter @mar/control-plane start
 
 # 2. Runner (copy and edit the example config: agents available on this machine)
-cp apps/runner/runner.config.example.json apps/runner/runner.config.json
+cp apps/runner/runner.config.example.json runner.config.json
 pnpm --filter @mar/runner start runner.config.json
 
 # 3. Create a project and a task

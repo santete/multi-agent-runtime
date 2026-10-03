@@ -18,6 +18,10 @@ export function resolveCommand(command: string, env: NodeJS.ProcessEnv = process
 
   const found = findOnPath(command, env);
   if (!found) return { command, prefixArgs: [] };
+  if (isWslLauncher(found)) {
+    const gitBash = findGitBash(env);
+    if (gitBash) return { command: gitBash, prefixArgs: [] };
+  }
   if (/\.(cmd|bat)$/i.test(found)) {
     const target = unwrapNpmShim(found);
     if (target) return target;
@@ -27,6 +31,21 @@ export function resolveCommand(command: string, env: NodeJS.ProcessEnv = process
     );
   }
   return { command: found, prefixArgs: [] };
+}
+
+/**
+ * `bash` in a PowerShell or cmd PATH is usually the WSL launcher in System32
+ * (or its WindowsApps alias), not Git Bash: it runs the command in a Linux
+ * distribution, or prints a UTF-16 error when WSL is not set up.
+ */
+function isWslLauncher(path: string): boolean {
+  return /[\\/](bash|wsl)\.exe$/i.test(path) && /[\\/](system32|WindowsApps)[\\/]/i.test(path);
+}
+
+/** Git for Windows' bash, which agents and runner configs mean by `bash` on Windows. */
+function findGitBash(env: NodeJS.ProcessEnv): string | undefined {
+  const roots = [env.ProgramFiles, env["ProgramFiles(x86)"], env.LOCALAPPDATA && join(env.LOCALAPPDATA, "Programs")];
+  return roots.filter((r): r is string => Boolean(r)).map((r) => join(r, "Git", "bin", "bash.exe")).find(existsSync);
 }
 
 function findOnPath(command: string, env: NodeJS.ProcessEnv): string | undefined {
