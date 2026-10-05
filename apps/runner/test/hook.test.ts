@@ -44,16 +44,18 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
 // Async spawn: the policy server runs in this process, so the event loop must stay free.
-function runHook(dialect: string, payload: object, env: Record<string, string> = {}): Promise<any> {
+/** `undefined` removes a variable, as a CLI that filters its hooks' environment does. */
+function runHook(dialect: string, payload: object, env: Record<string, string | undefined> = {}): Promise<any> {
   return new Promise((resolve, reject) => {
+    const merged: Record<string, string | undefined> = {
+      ...process.env,
+      MAR_CONTROL_PLANE_URL: baseUrl,
+      MAR_EXECUTION_ID: "exec-1",
+      MAR_EXECUTION_TOKEN: "tok-1",
+      ...env,
+    };
     const child = spawn(process.execPath, [POLICY_HOOK_SCRIPT, dialect], {
-      env: {
-        ...process.env,
-        MAR_CONTROL_PLANE_URL: baseUrl,
-        MAR_EXECUTION_ID: "exec-1",
-        MAR_EXECUTION_TOKEN: "tok-1",
-        ...env,
-      },
+      env: Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined)),
     });
     let stdout = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -119,6 +121,22 @@ describe("mar-policy-hook", () => {
     });
     await runHook("json", { tool: "Bash", input: { command: "npm whoami" } }, env);
     expect(received.at(-1)!.body).toEqual({ tool: "Bash", input: { command: "npm whoami" } });
+  });
+
+  it("takes credential-like variables a CLI filtered out from MAR_HOOK_CONTEXT (Command Code)", async () => {
+    const context = JSON.stringify({ MAR_EXECUTION_TOKEN: "tok-ctx", NPM_TOKEN: "npm_secret_1234" });
+    const filtered = { MAR_EXECUTION_TOKEN: undefined, NPM_TOKEN: undefined, MAR_SECRET_NAMES: "NPM_TOKEN", MAR_HOOK_CONTEXT: context };
+    await runHook("claude", { tool_name: "shell_command", tool_input: { command: "echo npm_secret_1234" } }, filtered);
+    expect(received.at(-1)).toMatchObject({
+      token: "tok-ctx",
+      body: { tool: "shell_command", input: { command: "echo [secret NPM_TOKEN]" }, containsSecret: "NPM_TOKEN" },
+    });
+    // A variable the CLI did pass wins over the context.
+    await runHook("claude", { tool_name: "read_file", tool_input: {} }, { MAR_HOOK_CONTEXT: context });
+    expect(received.at(-1)!.token).toBe("tok-1");
+    // A broken context fails closed.
+    const broken = await runHook("claude", { tool_name: "read_file", tool_input: {} }, { MAR_EXECUTION_TOKEN: undefined, MAR_HOOK_CONTEXT: "{" });
+    expect(broken.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   it("fails closed without its environment or with an unknown dialect", async () => {

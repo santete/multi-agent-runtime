@@ -77,7 +77,8 @@ const strings = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) :
 export function parseJsonAnswer(text: string): unknown {
   const fenced = /```(?:json)?\s*\n([\s\S]*?)```/.exec(text)?.[1];
   const braces = text.includes("{") ? text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1) : undefined;
-  for (const candidate of [text, fenced, braces]) {
+  const rest = text.includes("{") ? text.slice(text.indexOf("{")) : undefined;
+  for (const candidate of [text, fenced, braces, braces && balanceBrackets(braces), rest && balanceBrackets(rest)]) {
     if (!candidate) continue;
     try {
       return JSON.parse(candidate);
@@ -86,6 +87,40 @@ export function parseJsonAnswer(text: string): unknown {
     }
   }
   return undefined;
+}
+
+/**
+ * Inserts the closing brackets a model left out, outside strings: `["a"}` becomes
+ * `["a"]}` and a cut-off answer is closed at the end. Models without an enforced
+ * schema make this mistake in long nested answers (seen live: an array of
+ * acceptance criteria closed with `}`, the same way in a retry).
+ */
+export function balanceBrackets(json: string): string {
+  const closer: Record<string, string> = { "{": "}", "[": "]" };
+  const open: string[] = [];
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of json) {
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") open.push(ch);
+    else if (ch === "}" || ch === "]") {
+      // Close what was left open until this bracket matches.
+      while (open.length && closer[open.at(-1)!] !== ch) out += closer[open.pop()!];
+      open.pop();
+    }
+    out += ch;
+  }
+  if (inString) out += '"';
+  while (open.length) out += closer[open.pop()!];
+  return out;
 }
 
 /**

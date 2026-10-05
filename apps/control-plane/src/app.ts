@@ -254,7 +254,7 @@ const knowledgeQuery = z.object({ status: z.enum(["proposed", "accepted", "archi
 
 const reviewBody = z.object({ decision: z.enum(["approve", "reject"]), comment: z.string().max(10_000).optional() });
 const decisionBody = z.object({ comment: z.string().max(10_000).optional() }).default({});
-const approvalsQuery = z.object({ status: z.enum(["pending", "approved", "rejected"]).optional() });
+const approvalsQuery = z.object({ status: z.enum(["pending", "approved", "rejected", "withdrawn"]).optional() });
 
 const capabilities = z.object({
   pause: z.enum(["native", "checkpoint", "none"]),
@@ -542,9 +542,10 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
 
   // Human as executor (spec §61): agents' questions and tasks for people.
   app.get("/human-tasks", (req) => store.humanTasks(scope(req)));
+  app.get("/stuck-tasks", (req) => store.stuckTasks(scope(req)));
   app.get("/decisions", (req) =>
     store.listDecisions({
-      ...z.object({ status: z.enum(["pending", "answered"]).optional(), taskId: z.uuid().optional() }).parse(req.query),
+      ...z.object({ status: z.enum(["pending", "answered", "withdrawn"]).optional(), taskId: z.uuid().optional() }).parse(req.query),
       org: scope(req),
     }),
   );

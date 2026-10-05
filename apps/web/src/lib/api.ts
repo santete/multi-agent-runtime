@@ -19,6 +19,7 @@ import type {
   PutSecretRequest,
   ProductMetrics,
   SecretDto,
+  StuckTaskDto,
   ProjectPolicy,
   QueueEntry,
   PlannedTask,
@@ -123,12 +124,13 @@ export const api = {
   updateKnowledge: (id: string, body: { kind?: KnowledgeKind; title?: string; body?: string; status?: KnowledgeStatus }) =>
     put<KnowledgeDto>(`/knowledge/${id}`, body),
 
-  decisions: (filter: { status?: "pending" | "answered"; taskId?: string } = {}) =>
+  decisions: (filter: { status?: DecisionDto["status"]; taskId?: string } = {}) =>
     get<DecisionDto[]>(
       `/decisions?${new URLSearchParams(Object.entries(filter).filter(([, v]) => v) as [string, string][]).toString()}`,
     ),
   answerDecision: (id: string, answer: string) => post<DecisionDto>(`/decisions/${id}/answer`, { answer }),
   humanTasks: () => get<TaskDto[]>("/human-tasks"),
+  stuckTasks: () => get<StuckTaskDto[]>("/stuck-tasks"),
   completeHumanTask: (taskId: string, summary: string) => post<TaskDto>(`/tasks/${taskId}/done`, { summary }),
   queue: (projectId: string) => get<QueueEntry[]>(`/projects/${projectId}/queue`),
   setPriority: (taskId: string, priority: number) => put<TaskDto>(`/tasks/${taskId}/priority`, { priority }),

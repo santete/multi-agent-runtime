@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { resolveLaunchPath, stripBom } from "@mar/core/launch-path";
 import { AntigravityAdapter } from "@mar/adapter-antigravity";
 import { ClaudeCodeAdapter } from "@mar/adapter-claude-code";
+import { CommandCodeAdapter } from "@mar/adapter-command-code";
 import { CodexAdapter } from "@mar/adapter-codex";
 import { GenericCliAdapter } from "@mar/adapter-generic-cli";
 import { QoderAdapter } from "@mar/adapter-qoder";
@@ -42,6 +43,7 @@ const agentConfig = z.discriminatedUnion("adapter", [
     tools: z.array(z.string().min(1)).min(1).optional(),
     ...routing,
   }),
+  z.object({ adapter: z.literal("command-code"), executable: z.string().optional(), ...routing }),
   z.object({
     adapter: z.literal("generic-cli"),
     command: z.string().min(1),
@@ -126,6 +128,8 @@ export function createAdapter(config: AgentConfig, profilesDir?: string, agentId
         ...(config.executable && { executable: config.executable }),
         ...(config.tools && { tools: config.tools }),
       });
+    case "command-code":
+      return new CommandCodeAdapter({ ...(config.executable && { executable: config.executable }) });
     case "generic-cli":
       return new GenericCliAdapter({
         command: config.command,

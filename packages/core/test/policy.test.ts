@@ -37,6 +37,11 @@ describe("policy: shell commands", () => {
     expect(evaluateToolCall({ tool: "run_command", input: { CommandLine: "git push" } }, ctx).decision).toBe("deny");
   });
 
+  it("treats Command Code's shell_command as a shell tool", () => {
+    expect(shell("git push", "shell_command").decision).toBe("deny");
+    expect(shell("npm test", "shell_command")).toMatchObject({ decision: "allow", reason: "shell command inside the task workspace" });
+  });
+
   it("allows dependency installation as MEDIUM", () => {
     expect(shell("pnpm install")).toMatchObject({ decision: "allow", risk: "MEDIUM" });
   });
@@ -59,6 +64,9 @@ describe("policy: file tools", () => {
     expect(evaluateToolCall({ tool: "Write", input: { file_path: "../other/a.ts" } }, ctx).decision).toBe("deny");
     expect(evaluateToolCall({ tool: "Write", input: { file_path: ".git/config" } }, ctx))
       .toMatchObject({ decision: "deny", risk: "CRITICAL" });
+    // Command Code
+    expect(evaluateToolCall({ tool: "write_file", input: { file_path: "C:\\runner\\worktrees\\PAY-2\\a.ts" } }, ctx).decision).toBe("deny");
+    expect(evaluateToolCall({ tool: "write_file", input: { file_path: "src/a.ts" } }, ctx).decision).toBe("allow");
     expect(evaluateToolCall({ tool: "Read", input: { file_path: "C:\\runner\\worktrees\\PAY-1\\.env" } }, ctx))
       .toMatchObject({ decision: "deny", risk: "HIGH" });
   });

@@ -20,9 +20,9 @@ Tài liệu này dành cho người vận hành và người dùng hằng ngày:
 |---|---|
 | **Control plane** | Quản lý project, task, plan, lịch chạy, policy, approval, merge queue, metric; phục vụ API và dashboard. Chạy được nhiều instance trên cùng một Postgres ([ADR-0033](adr/0033-leader-election.md)). |
 | **Runner** | Nhận task, tạo worktree riêng cho mỗi task, chạy CLI agent ở chế độ headless, chạy validation (trên máy, hoặc trong container), push branch. |
-| **Agent** | Claude Code, Codex, Antigravity (agy), Qoder (`qodercli`), hoặc bất kỳ CLI nào qua adapter `generic-cli`. |
+| **Agent** | Claude Code, Codex, Antigravity (agy), Qoder (`qodercli`), Command Code (`command-code`), hoặc bất kỳ CLI nào qua adapter `generic-cli`. |
 
-Platform **không cắm vào IDE**. Nó điều khiển bản CLI của các agent (`claude`, `codex`, `agy`, `qodercli`): runner gọi chúng, gắn policy hook, và đọc kết quả có cấu trúc. Người dùng làm việc qua dashboard; muốn xem code thì mở branch hoặc worktree trong IDE (xem [mục 7](#7-mở-code-trong-ide)).
+Platform **không cắm vào IDE**. Nó điều khiển bản CLI của các agent (`claude`, `codex`, `agy`, `qodercli`, `command-code`): runner gọi chúng, gắn policy hook, và đọc kết quả có cấu trúc. Người dùng làm việc qua dashboard; muốn xem code thì mở branch hoặc worktree trong IDE (xem [mục 7](#7-mở-code-trong-ide)).
 
 ## 2. Cài đặt và khởi động
 
@@ -113,12 +113,14 @@ Trong `runner.config.json`, mỗi agent khai báo:
   "codex":       { "adapter": "codex", "skills": ["typescript", "review"], "cost": "medium" },
   "antigravity": { "adapter": "antigravity", "executable": "C:/…/agy.exe", "unattended": false, "isolateConfig": true },
   "qoder":       { "adapter": "qoder", "executable": "C:/…/.qoder/bin/qodercli/qodercli.exe", "skills": ["typescript"], "cost": "medium" },
+  "command-code": { "adapter": "command-code", "skills": ["typescript"], "cost": "low" },
   "shell":       { "adapter": "generic-cli", "command": "bash", "args": ["-c", "{objective}"] }
 }
 ```
 
 - `skills` dùng để route task có `agent: "auto"`. `cost` và `pricing` dùng để ước tính chi phí.
 - Qoder báo chi phí bằng credit chứ không phải token hay USD, nên budget theo USD không tính được cho agent `qoder`. `tools` (tuỳ chọn) đổi danh sách tool khi agent sửa code; khi review hoặc lập plan, agent chỉ được đọc ([ADR-0035](adr/0035-qoder-adapter.md)).
+- Command Code chỉ sửa được code khi runner bật policy hook (mặc định là bật). Khi đó policy là lớp quyết định mọi lời gọi. Taste learning được tắt trong các lượt chạy do platform điều phối ([ADR-0036](adr/0036-command-code-adapter.md)).
 - `profile` (tuỳ chọn) lấy agent từ Marketplace: instructions, skills, giá.
 - Máy runner cần **đăng nhập sẵn** các CLI và có quyền push lên repo. Agent không bao giờ được push hay giữ credential.
 
@@ -248,6 +250,9 @@ Mọi việc cần người đều nằm trong **Inbox**:
 | **Câu hỏi của agent** (thiếu quyết định nghiệp vụ, hai tiêu chí mâu thuẫn) | Chọn một đáp án gợi ý hoặc tự trả lời. Agent resume đúng session với câu trả lời, và reviewer cũng thấy câu trả lời đó |
 | **Approval**: agent muốn làm việc rủi ro (gọi mạng, sửa CI, ghi vào vùng của task khác, vi phạm rule của project) | *Approve* hoặc *Reject*. Agent resume và được báo kết quả. Mức rủi ro quyết định ai được duyệt |
 | **Task cho người** | Làm việc đó rồi bấm *Done* kèm tóm tắt |
+| **Stopped, nothing to approve**: task dừng vì một lời gọi bị từ chối hẳn (policy chặn, hoặc agent CLI tự chặn) nên không có gì để duyệt | Đọc lý do, rồi bấm *Retry* (chạy lại từ đầu) hoặc *Cancel task* |
+
+Huỷ hoặc retry một task thì các approval và câu hỏi chưa ai trả lời của nó được rút khỏi Inbox (trạng thái `withdrawn`).
 
 Các thao tác khác:
 - **Agent đi sai hướng**: gửi *Instruction* trên trang task, hoặc *Pause* để xem diff trước.

@@ -4,7 +4,7 @@ import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
-import { DecisionCard, HumanTaskCard } from "./HumanWork.js";
+import { DecisionCard, HumanTaskCard, StuckTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section } from "./ui.js";
 
 export function ApprovalsPage({ actor }: { actor: ActorDto }) {
@@ -16,6 +16,9 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
     e.type.startsWith("Decision") || (e.type === "TaskStateChanged" && (e.payload.to === "READY" || e.payload.from === "READY"));
   const [questions] = useLiveQuery(() => api.decisions({ status: "pending" }), [], isHumanWork);
   const [humanTasks, , reloadHuman] = useLiveQuery(api.humanTasks, [], isHumanWork);
+  const isStuckChange = (e: { type: string; payload: Record<string, unknown> }) =>
+    isApproval(e) || e.type.startsWith("Decision") || (e.type === "TaskStateChanged" && (e.payload.to === "WAITING_FOR_HUMAN" || e.payload.from === "WAITING_FOR_HUMAN"));
+  const [stuck, , reloadStuck] = useLiveQuery(api.stuckTasks, [], isStuckChange);
 
   return (
     <div className="page">
@@ -31,6 +34,13 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
         <Section title={`Tasks for a person (${humanTasks.length})`}>
           {humanTasks.map((t) => (
             <HumanTaskCard key={t.id} task={t} actor={actor} onDone={reloadHuman} showTask />
+          ))}
+        </Section>
+      )}
+      {stuck && stuck.length > 0 && (
+        <Section title={`Stopped, nothing to approve (${stuck.length})`}>
+          {stuck.map((s) => (
+            <StuckTaskCard key={s.task.id} stuck={s} actor={actor} onDone={reloadStuck} />
           ))}
         </Section>
       )}
@@ -87,8 +97,8 @@ export function ApprovalCard({ approval, actor, showTask = false }: { approval: 
         )}
         <span className="muted small">{timeAgo(approval.createdAt)}</span>
         {approval.status !== "pending" && (
-          <Pill tone={approval.status === "approved" ? "success" : "danger"}>
-            {approval.status} by {approval.decidedBy ?? "?"}
+          <Pill tone={approval.status === "approved" ? "success" : approval.status === "withdrawn" ? "neutral" : "danger"}>
+            {approval.status === "withdrawn" ? "withdrawn" : `${approval.status} by ${approval.decidedBy ?? "?"}`}
           </Pill>
         )}
       </div>
