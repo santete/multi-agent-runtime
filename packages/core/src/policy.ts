@@ -12,7 +12,7 @@ export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export type PolicyDecision = "allow" | "deny";
 
 export interface ToolCall {
-  /** Tool name as the agent reports it (Bash, PowerShell, Write, run_command, write_to_file, ...). */
+  /** Tool name as the agent reports it (Bash, PowerShell, Write, run_command, write_to_file, shell_command, ...). */
   tool: string;
   input: unknown;
 }
@@ -98,7 +98,7 @@ export interface PolicyVerdict {
   summary: string;
 }
 
-const SHELL_TOOLS = new Set(["bash", "powershell", "run_command", "shell", "exec_command"]);
+const SHELL_TOOLS = new Set(["bash", "powershell", "run_command", "shell", "exec_command", "shell_command"]);
 const WRITE_TOOLS = new Set([
   "apply_patch",
   "write",
@@ -109,6 +109,7 @@ const WRITE_TOOLS = new Set([
   "replace_file_content",
   "multi_replace_file_content",
   "edit_file",
+  "write_file",
 ]);
 
 /** CI configuration files: changing them changes what "passing" means. */

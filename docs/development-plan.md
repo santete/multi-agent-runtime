@@ -329,6 +329,14 @@ Các phần của spec chưa làm ở Phase 1–3, theo thứ tự ưu tiên: pa
 - [x] Runner config `adapter: "qoder"` (`executable`, `tools`), Marketplace có adapter `qoder`
 - [x] **Chạy thật** trên `mar-sandbox`: QD-1 (PR #47) hook kiểm tra mọi lời gọi, handoff đủ criteria, validation pass; QR-1 (PR #48) rework khi base đổi rồi merge; qoder làm planner (read-only, `PLAN_SCHEMA` qua system prompt) ra plan hợp lệ có contract. Agent không review code của chính nó nên vai trò reviewer của qoder chưa chạy thật
 
+### Command Code adapter — trạng thái ✅ ([ADR-0036](adr/0036-command-code-adapter.md))
+
+- [x] Spike Command Code 1.5.0: NDJSON event + result; ở `-p` muốn ghi file hay chạy lệnh phải có `--yolo`; hook `deny` vẫn chặn được khi có `--yolo`; hook lỗi thì tool vẫn chạy nếu không bật `failClosed`; env của hook bị lọc theo tên (`TOKEN`, `SECRET`, `API_KEY`…)
+- [x] `@mar/adapter-command-code`: `--yolo` chỉ khi có policy hook, `plan` mode cho read-only, hook `failClosed` + `tasteLearning: false` trong `.commandcode/settings.local.json`, `MAR_HOOK_CONTEXT` để hook nhận lại execution token và secret
+- [x] Policy: `shell_command` (shell), `write_file` (ghi)
+- [x] Runner: sửa JSON bằng một lượt resume khi câu trả lời có cấu trúc không đọc được (adapter có `promptedSchema`: Qoder, Command Code); core cân bằng ngoặc khi parse
+- [x] **Chạy thật** trên `mar-sandbox`: CC-1 lộ lỗi env bị lọc (hook từ chối mọi lời gọi, task an toàn chuyển sang chờ người); CC-2 (PR #50) hook kiểm tra cả 10 lời gọi, criteria đủ, validation pass; planner chạy read-only lộ ra ba lỗi: plan mode tự từ chối bị tính là policy deny nên task chờ người mà Inbox trống; JSON thiếu `]`; có lần trả lại chính schema. Sau khi sửa (bỏ qua lời từ chối của chính CLI, cân bằng ngoặc, kiểm tra trường required, mục "Stopped, nothing to approve" trong Inbox), planner ra plan hợp lệ với 5 tiêu chí
+
 ### Chạy end-to-end đủ tính năng trên GitHub — trạng thái ✅
 
 Cấu hình LP: review chéo do agent, agent duyệt là merge; Codex làm critic, plan tự duyệt; budget; validation trong container; CI gate.

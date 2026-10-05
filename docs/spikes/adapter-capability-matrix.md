@@ -77,3 +77,25 @@ Ngày spike: 2026-09-29 · Máy: Windows 11 · Kết quả ghi lại ở `packag
 | Binary trên Windows | `~/.qoder/bin/qodercli/qodercli.exe` (PATH của user) |
 | Auth | Đăng nhập trình duyệt (`qodercli login`), lưu ở `~/.qoder/.auth` |
 | Model | `--model` (tên tier: `efficient`, `performance`, `auto`…; `--list-models`) |
+
+## Command Code 1.5.0 (spike 2026-10-05, Windows 11) — [ADR-0036](../adr/0036-command-code-adapter.md)
+
+| Khả năng | Command Code (`command-code`) |
+|---|---|
+| Headless | `command-code -p --output-format json` (prompt qua stdin). NDJSON: `{"type":"event","event":{…}}` rồi một dòng `{"type":"result",…}` |
+| Event chính | `run_start` (sessionId), `message_end` (content text), `tool_queued` (toolCallId, toolName, input), `tool_completed` (result), `tool_errored`, `tool_hook_blocked` (hookOutput), `tool_denied`, `run_error`, `notice`; nhiều `*_delta` |
+| Kết quả | `result.subtype`: `success`, `error`, `max_turns`; `finalText`, `usage` (token), `durationMs` |
+| Resume | ✅ `--resume <sessionId>` |
+| Quyền ở `-p` | Ghi file và chạy lệnh **luôn bị chặn** nếu không có `--yolo`, kể cả với `auto-accept` hay hook `allow` |
+| Read-only | `--permission-mode plan` (chỉ có tool đọc) |
+| Structured output | Không có `--json-schema`, không có system prompt cho `-p` → schema nối vào prompt |
+| Pre-tool policy hook | PreToolUse giống Claude, trong `.commandcode/settings.local.json` / `settings.json` / `~/.commandcode/settings.json`; chạy cả khi chưa trust project |
+| Hook `deny` dưới `--yolo` | ✅ chặn được |
+| Hook lỗi hoặc timeout | **Cho chạy tiếp**, trừ khi hook có `"failClosed": true` |
+| Hook nhận env của agent | ⚠️ Trừ các biến có tên khớp `TOKEN`, `SECRET`, `API_KEY`, `PASSWORD`, `AUTH`… |
+| Tên tool | `read_file`, `read_multiple_files`, `read_directory`, `write_file`, `edit_file`, `shell_command`, `web_fetch`, `web_search` |
+| Cách ly config của user | Không có flag; hook trong `~/.commandcode/settings.json` vẫn được nạp |
+| Taste learning | Bật mặc định; tắt cho project bằng `tasteLearning: false` trong `settings.local.json` (`--config` ghi hẳn vào settings) |
+| Binary trên Windows | npm shim `command-code.cmd` (cũng có `cmd`, nhưng trùng `cmd.exe`) |
+| Auth | `command-code login`, lưu ở `~/.commandcode/auth.json`; hoặc `COMMAND_CODE_API_KEY` |
+| Cost / usage | Token, không có USD |

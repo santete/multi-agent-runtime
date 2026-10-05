@@ -1,4 +1,4 @@
-import type { ActorDto, DecisionDto, TaskDto } from "@mar/core";
+import type { ActorDto, DecisionDto, StuckTaskDto, TaskDto } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { timeAgo } from "../lib/model.js";
@@ -26,7 +26,9 @@ export function DecisionCard({ decision, actor, showTask = false }: { decision: 
   return (
     <div className={`card decision ${decision.status}`}>
       <div className="card-head">
-        <Pill tone={decision.status === "pending" ? "attention" : "success"}>{decision.status === "pending" ? "question" : "answered"}</Pill>
+        <Pill tone={decision.status === "pending" ? "attention" : decision.status === "answered" ? "success" : "neutral"}>
+          {decision.status === "pending" ? "question" : decision.status}
+        </Pill>
         {showTask && (
           <a className="mono" href={href.task(decision.taskId)}>
             {decision.taskKey}
@@ -42,6 +44,8 @@ export function DecisionCard({ decision, actor, showTask = false }: { decision: 
         <p className="prose">
           <strong>Answer:</strong> {decision.answer} <span className="muted small">— {decision.answeredBy}</span>
         </p>
+      ) : decision.status === "withdrawn" ? (
+        <p className="muted small">Withdrawn: the task was cancelled or retried before anyone answered.</p>
       ) : canAct(actor) ? (
         <div className="decision-answer">
           {decision.options.length > 0 && (
@@ -100,6 +104,66 @@ export function HumanTaskCard({ task, actor, onDone, showTask = false }: { task:
             </button>
           </div>
         </>
+      )}
+      <ErrorBox error={error} />
+    </div>
+  );
+}
+
+/**
+ * A task that stopped for a person with nothing to approve or answer: a call
+ * the policy refused outright, or one the agent CLI refused itself. Retry
+ * starts a new attempt; cancel ends the task.
+ */
+export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; actor: ActorDto; onDone: () => void }) {
+  const { task, reasons } = stuck;
+  const [error, setError] = useState<Error>();
+  const [busy, setBusy] = useState(false);
+  const act = (call: () => Promise<unknown>) => async () => {
+    setBusy(true);
+    try {
+      await call();
+      setError(undefined);
+      onDone();
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card decision">
+      <div className="card-head">
+        <Pill tone="warning">stopped</Pill>
+        <a className="mono" href={href.task(task.id)}>
+          {task.key}
+        </a>
+        <span>{task.title}</span>
+        <span className="muted small">
+          <span className="chip">{task.agent}</span> {timeAgo(task.updatedAt)}
+        </span>
+      </div>
+      {reasons.length ? (
+        <>
+          <p className="small">Refused calls in the last attempt:</p>
+          <ul className="small mono">
+            {reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="muted small">The last attempt asked for a person; see the task page.</p>
+      )}
+      {canAct(actor) && (
+        <div className="actions left">
+          <button className="primary" disabled={busy} onClick={act(() => api.retry(task.id))}>
+            Retry
+          </button>
+          <button className="danger" disabled={busy} onClick={act(() => api.cancel(task.id))}>
+            Cancel task
+          </button>
+        </div>
       )}
       <ErrorBox error={error} />
     </div>

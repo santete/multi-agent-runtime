@@ -72,6 +72,7 @@ import {
   type ReviewResult,
   type ReviewTarget,
   type RunnerDto,
+  type StuckTaskDto,
   type TaskDto,
   type TaskGraph,
   type TaskState,
@@ -430,6 +431,12 @@ async function appendEvent(q: Queryable, e: NewEvent): Promise<void> {
     "insert into events (id, type, project_id, task_id, execution_id, payload) values ($1, $2, $3, $4, $5, $6)",
     [randomUUID(), e.type, e.projectId ?? null, e.taskId ?? null, e.executionId ?? null, JSON.stringify(e.payload ?? {})],
   );
+}
+
+/** Approvals and questions nobody answered yet leave the Inbox once their task is cancelled or retried. */
+async function withdrawPending(q: Queryable, taskId: string): Promise<void> {
+  await q.query("update approvals set status = 'withdrawn', decided_at = now() where task_id = $1 and status = 'pending'", [taskId]);
+  await q.query("update decisions set status = 'withdrawn', answered_at = now() where task_id = $1 and status = 'pending'", [taskId]);
 }
 
 async function one<T>(rows: Promise<Row[]>, map: (r: Row) => T, what: string, id: string): Promise<T> {
@@ -1797,6 +1804,7 @@ export class Store {
         "update executions set cancel_requested = true where task_id = $1 and status = any($2::text[])",
         [id, ACTIVE],
       );
+      await withdrawPending(q, id);
       return changeTaskState(q, task, "cancelled", { actor: actor ?? null });
     });
   }
@@ -2989,8 +2997,41 @@ export class Store {
       .then((rows) => rows.map(toTask));
   }
 
+  /**
+   * Tasks waiting for a person with nothing in the Inbox to decide: a call the
+   * policy refused outright or the agent CLI itself refused. A person reads why
+   * and retries or cancels them.
+   */
+  async stuckTasks(org?: string): Promise<StuckTaskDto[]> {
+    const rows = await this.db.query(
+      `select t.* from tasks t where t.state = 'WAITING_FOR_HUMAN'
+         and not exists (select 1 from approvals a where a.task_id = t.id and a.status = 'pending')
+         and not exists (select 1 from decisions d where d.task_id = t.id and d.status = 'pending')
+         and ($1::text is null or t.project_id in (select id from projects where org_id = $1))
+       order by t.updated_at`,
+      [org ?? null],
+    );
+    return Promise.all(
+      rows.map(async (row) => {
+        const task = toTask(row);
+        const reasons = await this.db.query<{ type: string; payload: Record<string, unknown> }>(
+          `select e.type, e.payload from events e
+           where e.execution_id = (select id from executions where task_id = $1 order by attempt desc limit 1)
+             and ((e.type = 'ToolCallChecked' and e.payload->>'decision' = 'deny')
+               or (e.type = 'AgentEvent' and e.payload->>'kind' = 'permission_denied'))
+           order by e.seq`,
+          [task.id],
+        );
+        const lines = reasons.map(({ type, payload: p }) =>
+          type === "ToolCallChecked" ? `${p.tool}: [${p.risk}] ${p.reason}` : `${p.tool}: ${p.detail ?? "refused"}`,
+        );
+        return { task, reasons: [...new Set(lines)].slice(0, 5) };
+      }),
+    );
+  }
+
   async listDecisions(filter: {
-    status?: "pending" | "answered" | undefined;
+    status?: DecisionDto["status"] | undefined;
     taskId?: string | undefined;
     org?: string | undefined;
   }): Promise<DecisionDto[]> {
@@ -3063,6 +3104,8 @@ export class Store {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
       const payload = { reason: "retried by a human", actor: actor ?? null };
+      // The next attempt starts over: what the last one asked for no longer applies.
+      if (task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") await withdrawPending(q, id);
       if (task.state === "WAITING_FOR_HUMAN") return changeTaskState(q, task, "unassigned", payload);
       if (task.state === "BLOCKED") return changeTaskState(q, task, "unblocked", payload);
       throw new ConflictError(`task ${task.key} is ${task.state}; only WAITING_FOR_HUMAN or BLOCKED tasks can be retried`);

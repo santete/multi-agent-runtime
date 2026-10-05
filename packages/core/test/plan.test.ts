@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkPlan, MAX_PLAN_TASKS } from "../src/index.js";
+import { balanceBrackets, checkPlan, MAX_PLAN_TASKS, parseJsonAnswer } from "../src/index.js";
 
 const task = (ref: string, dependsOn: string[] = [], extra: Record<string, unknown> = {}) => ({
   ref,
@@ -58,5 +58,27 @@ describe("checkPlan: tasks for people", () => {
   it("gives a human task no paths", () => {
     const check = checkPlan({ tasks: [{ ref: "T1", title: "Decide", objective: "o", agent: "human", paths: [".orchestrator/context/DECISIONS.md"] }] });
     expect(check.ok && check.plan.tasks[0]!.paths).toEqual([]);
+  });
+});
+
+describe("parseJsonAnswer", () => {
+  it("reads the object from plain, fenced or surrounded answers", () => {
+    expect(parseJsonAnswer('{"a":1}')).toEqual({ a: 1 });
+    expect(parseJsonAnswer('Here it is:\n```json\n{"a":1}\n```')).toEqual({ a: 1 });
+    expect(parseJsonAnswer('Done. {"a":1} Bye.')).toEqual({ a: 1 });
+    expect(parseJsonAnswer("no json")).toBeUndefined();
+  });
+
+  it("closes brackets a model left out (seen live: an array closed with a brace)", () => {
+    const broken = '{"tasks":[{"ref":"T1","acceptanceCriteria":["a","b"}],"knowledge":[]}';
+    expect(parseJsonAnswer(broken)).toEqual({ tasks: [{ ref: "T1", acceptanceCriteria: ["a", "b"] }], knowledge: [] });
+    expect(parseJsonAnswer('{"summary":"cut off","tasks":[{"ref":"T1"')).toEqual({ summary: "cut off", tasks: [{ ref: "T1" }] });
+  });
+});
+
+describe("balanceBrackets", () => {
+  it("leaves brackets inside strings alone", () => {
+    expect(balanceBrackets('{"a":"x}]{[","b":["c"}')).toBe('{"a":"x}]{[","b":["c"]}');
+    expect(balanceBrackets('{"a":"say \\"}\\" ok"')).toBe('{"a":"say \\"}\\" ok"}');
   });
 });

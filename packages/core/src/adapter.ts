@@ -27,6 +27,11 @@ export interface AdapterCapabilities {
   resume: boolean;
   approval: ApprovalSupport;
   structuredOutput: boolean;
+  /**
+   * The CLI cannot enforce the output schema; it is only asked for in the prompt.
+   * The runner then gives the agent one more turn to fix an answer it cannot read.
+   */
+  promptedSchema?: boolean;
   streaming: boolean;
   costReporting: boolean;
 }

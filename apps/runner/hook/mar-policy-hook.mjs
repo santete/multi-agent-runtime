@@ -33,9 +33,25 @@ async function readStdin() {
   return raw;
 }
 
+/**
+ * Some CLIs (Command Code) drop variables whose names look like credentials
+ * (…TOKEN, …SECRET, …API_KEY) from the environment of their hooks. Their
+ * adapter passes those variables again in MAR_HOOK_CONTEXT, a JSON object; the
+ * agent itself already has them in its environment.
+ */
+function restoreHookContext() {
+  const raw = process.env.MAR_HOOK_CONTEXT;
+  if (!raw) return;
+  const ctx = JSON.parse(raw);
+  for (const [name, value] of Object.entries(ctx)) {
+    if (typeof value === "string" && process.env[name] === undefined) process.env[name] = value;
+  }
+}
+
 async function decide() {
   const d = DIALECTS[dialect];
   if (!d) return { decision: "deny", reason: `policy hook: unknown dialect ${dialect}` };
+  restoreHookContext();
   const { MAR_CONTROL_PLANE_URL: base, MAR_EXECUTION_ID: id, MAR_EXECUTION_TOKEN: token } = process.env;
   if (!base || !id || !token) return { decision: "deny", reason: "policy hook: missing MAR_* environment" };
 

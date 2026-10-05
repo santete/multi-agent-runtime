@@ -22,6 +22,7 @@ import { activeTraceparent, meter, SpanKind, SpanStatusCode, withSpan } from "@m
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, profileDirOf, runnerConfig } from "./config.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
+import { mergeRepair, repairPrompt, unreadableStructuredResult } from "./repair.js";
 import {
   type ContextExtras,
   buildCritiquePrompt,
@@ -557,11 +558,23 @@ export class Runner {
           // The agent's policy hook sends this back, so tool checks join the trace.
           const traceparent = activeTraceparent();
           const command = adapter.buildCommand(traceparent ? { ...request, env: { ...request.env, TRACEPARENT: traceparent } } : request);
-          const result = await runAgentProcess(command, adapter.createParser(), {
+          let result = await runAgentProcess(command, adapter.createParser(), {
             timeoutMs: this.config.timeoutSeconds * 1000,
             signal,
             onEvent: (e) => shipper.push(e),
           });
+          const problem = unreadableStructuredResult(request, result, adapter);
+          if (problem && !signal.aborted) {
+            // Agents whose CLI cannot enforce the schema (it is only asked for in the prompt) sometimes
+            // send broken JSON; one more turn in the same session usually fixes it.
+            shipper.push({ kind: "diagnostic", text: `runner: the final answer was not a valid JSON object (${problem.error}); asking the agent to correct it` });
+            const repair = await runAgentProcess(
+              adapter.buildCommand({ ...request, resumeSessionId: problem.sessionId, prompt: repairPrompt(problem.error) }),
+              adapter.createParser(),
+              { timeoutMs: this.config.timeoutSeconds * 1000, signal, onEvent: (e) => shipper.push(e) },
+            );
+            result = mergeRepair(result, repair, request.outputSchema);
+          }
           recordAgentOutcome(span, claim.task.agent, result);
           return result;
         },

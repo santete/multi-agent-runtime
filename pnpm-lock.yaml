@@ -60,6 +60,9 @@ importers:
       '@mar/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapter-codex
+      '@mar/adapter-command-code':
+        specifier: workspace:*
+        version: link:../../packages/adapter-command-code
       '@mar/adapter-generic-cli':
         specifier: workspace:*
         version: link:../../packages/adapter-generic-cli
@@ -127,6 +130,12 @@ importers:
         version: link:../core
 
   packages/adapter-codex:
+    dependencies:
+      '@mar/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-command-code:
     dependencies:
       '@mar/core':
         specifier: workspace:*

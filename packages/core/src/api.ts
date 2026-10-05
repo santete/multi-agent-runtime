@@ -326,7 +326,8 @@ export interface DecisionDto {
   question: string;
   options: string[];
   context: string;
-  status: "pending" | "answered";
+  /** `withdrawn`: the task was cancelled or retried before anyone answered. */
+  status: "pending" | "answered" | "withdrawn";
   answer: string | null;
   answeredBy: string | null;
   createdAt: string;
@@ -405,7 +406,15 @@ export interface ReviewRequest {
   comment?: string | undefined;
 }
 
-export type ApprovalStatus = "pending" | "approved" | "rejected";
+/** A task waiting for a person with nothing to approve or answer, and why it stopped. */
+export interface StuckTaskDto {
+  task: TaskDto;
+  /** The refused calls of its last attempt ("tool: reason"). */
+  reasons: string[];
+}
+
+/** `withdrawn`: the task was cancelled or retried before anyone decided. */
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "withdrawn";
 
 /** A risky tool call an agent attempted that needs a human decision (spec §31). */
 export interface ApprovalDto {

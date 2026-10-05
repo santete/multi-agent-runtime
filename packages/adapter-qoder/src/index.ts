@@ -69,6 +69,7 @@ export class QoderAdapter implements AgentAdapter {
     resume: true,
     approval: "pre-tool-hook",
     structuredOutput: true,
+    promptedSchema: true,
     streaming: true,
     costReporting: false,
   };
@@ -95,7 +96,7 @@ export class QoderAdapter implements AgentAdapter {
     if (request.outputSchema) {
       args.push(
         "--append-system-prompt",
-        "Your final message must be only a JSON object that validates against this JSON schema, " +
+        "Your final message must be only a JSON object that validates against this JSON schema (your answer, not the schema itself), " +
           `with no other text and no code fence:\n${JSON.stringify(request.outputSchema)}`,
       );
     }
