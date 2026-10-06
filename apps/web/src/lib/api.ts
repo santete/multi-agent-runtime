@@ -93,6 +93,8 @@ export const api = {
   me: () => get<ActorDto>("/me"),
   projects: () => get<ProjectDto[]>("/projects"),
   project: (id: string) => get<ProjectDto>(`/projects/${id}`),
+  createProject: (body: { key: string; name: string; repoUrl: string; defaultBranch: string; validation?: Array<{ name: string; command: string }> }) =>
+    post<ProjectDto>("/projects", body),
   tasks: (projectId: string) => get<TaskDto[]>(`/projects/${projectId}/tasks`),
   graph: (projectId: string) => get<TaskGraph>(`/projects/${projectId}/graph`),
   projectEvents: (projectId: string, after = 0, limit = 200) =>

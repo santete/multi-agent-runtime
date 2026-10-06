@@ -1,9 +1,11 @@
-import type { ProjectDto, TaskDto } from "@mar/core";
+import type { ActorDto, ProjectDto, TaskDto } from "@mar/core";
+import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { COLUMNS, groupByColumn } from "../lib/model.js";
 import { href } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
+import { NewProjectDialog } from "./NewProjectDialog.js";
 import { Empty, ErrorBox, Loading, Section } from "./ui.js";
 
 type ProjectSummary = { project: ProjectDto; tasks: TaskDto[] };
@@ -13,7 +15,9 @@ async function loadSummaries(): Promise<ProjectSummary[]> {
   return Promise.all(projects.map(async (project) => ({ project, tasks: await api.tasks(project.id) })));
 }
 
-export function Overview() {
+export function Overview({ actor }: { actor: ActorDto }) {
+  const [creating, setCreating] = useState(false);
+  const canCreate = actor.role === "owner";
   const [summaries, error] = useLiveQuery(loadSummaries, [], (e) => e.type === "TaskStateChanged" || e.type === "TaskCreated" || e.type === "ProjectCreated");
   const [runners] = useLiveQuery(api.runners, [], (e) => e.type === "RunnerRegistered" || e.type === "ExecutionAssigned" || e.type === "AgentFinished");
   const [pending] = useLiveQuery(() => api.approvals("pending"), [], (e) => e.type.startsWith("Approval"));
@@ -23,7 +27,16 @@ export function Overview() {
 
   return (
     <div className="page">
-      <h1>Overview</h1>
+      <header className="page-head">
+        <h1>Overview</h1>
+        {canCreate && (
+          <div className="actions">
+            <button className="primary" onClick={() => setCreating(true)}>
+              New project
+            </button>
+          </div>
+        )}
+      </header>
       <div className="stats">
         <a className="stat" href={href.agents()}>
           <span className="stat-value">{online.length}</span>
@@ -44,7 +57,7 @@ export function Overview() {
         {!summaries ? (
           <Loading />
         ) : summaries.length === 0 ? (
-          <Empty>No projects yet. Create one with POST /projects (owner role).</Empty>
+          <Empty>{canCreate ? "No projects yet. Create one with New project." : "No projects yet. An owner can create one."}</Empty>
         ) : (
           <div className="project-grid">
             {summaries.map(({ project, tasks }) => (
@@ -57,6 +70,7 @@ export function Overview() {
       <Section title="Recent activity">
         <ActivityFeed />
       </Section>
+      {creating && <NewProjectDialog onClose={() => setCreating(false)} />}
     </div>
   );
 }
