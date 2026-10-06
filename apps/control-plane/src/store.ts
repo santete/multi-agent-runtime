@@ -2006,7 +2006,7 @@ export class Store {
       // below their parallelism limit; the first one we can route wins.
       const candidates = await q.query(
         `select t.* from tasks t join projects p on p.id = t.project_id
-         where t.state = 'READY' and (t.agent = any($1::text[]) or t.agent = '${AUTO}')
+         where t.state = 'READY' and (t.agent = any($1::text[]) or t.agent = '${AUTO}' or t.fallback_agents ?| $1::text[])
            -- spec §49: a runner works for its own organization, on agents its projects allow
            and p.org_id = $2
            and (jsonb_array_length(p.allowed_agents) = 0 or t.agent = '${AUTO}' or p.allowed_agents ? t.agent)
@@ -2023,8 +2023,17 @@ export class Store {
       const ranked = await this.rank(q, candidates.map(toTask));
       candidates.sort((a, b) => ranked.get(b.id)!.score - ranked.get(a.id)!.score);
       let picked: { task: TaskDto; routed?: { agent: string; reason: string } } | undefined;
+      let onlineAgentIds: Set<string> | undefined;
       for (const row of candidates) {
         const candidate = toTask(row);
+        // Offered here only as a fallback: take it only when no online runner offers its own agent.
+        let fallback: string | undefined;
+        if (candidate.agent !== AUTO && !agentIds.includes(candidate.agent)) {
+          onlineAgentIds ??= new Set((await this.onlineAgents(q, runner.org_id)).map((a) => a.id));
+          if (onlineAgentIds.has(candidate.agent)) continue;
+          fallback = candidate.fallbackAgents.find((a) => agentIds.includes(a) && !candidate.excludedAgents.includes(a));
+          if (!fallback) continue;
+        }
         // Spec §27: an area another unmerged task works on waits until that task is merged.
         const holder = await this.pathHolder(q, candidate);
         if (holder) {
@@ -2041,6 +2050,10 @@ export class Store {
             });
           }
           continue;
+        }
+        if (fallback) {
+          picked = { task: candidate, routed: { agent: fallback, reason: `no online runner offers ${candidate.agent}; fallback ${fallback}` } };
+          break;
         }
         if (candidate.agent !== AUTO) {
           picked = { task: candidate };
@@ -2624,7 +2637,11 @@ export class Store {
     await this.db.tx(async (q) => {
       const task = await this.getTask(taskId, q);
       const project = await this.getProject(task.projectId, q);
-      const reviewers = project.reviewAgents.filter((a) => a !== task.agent);
+      // Reviewers some online runner offers come first (in the configured order): a review for an
+      // agent nobody runs would wait forever. The others stay as fallbacks.
+      const online = new Set((await this.onlineAgents(q, project.orgId)).map((a) => a.id));
+      const configured = project.reviewAgents.filter((a) => a !== task.agent);
+      const reviewers = [...configured.filter((a) => online.has(a)), ...configured.filter((a) => !online.has(a))];
       const reviewer = reviewers[0];
       if (task.kind !== "work" || !reviewer) return;
       const [p] = await q.query<{ key: string; task_seq: number }>(
