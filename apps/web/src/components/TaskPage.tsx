@@ -8,6 +8,7 @@ import { EventRow } from "./ActivityFeed.js";
 import { AgentConsole } from "./AgentConsole.js";
 import { ApprovalCard } from "./ApprovalsPage.js";
 import { DecisionCard, HumanTaskCard, StuckTaskCard } from "./HumanWork.js";
+import { TaskStatus } from "./TaskStatus.js";
 import { Empty, ErrorBox, Loading, Pill, Section, StateBadge } from "./ui.js";
 
 const TERMINAL = new Set(["COMPLETED", "CANCELLED"]);
@@ -95,6 +96,7 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
         </div>
         {canAct && <TaskActions task={task} onDone={reload} toMerge={Boolean(stuck?.manualMerge)} />}
       </header>
+      <TaskStatus task={task} approvals={approvals} decisions={decisions} hasStuckCard={Boolean(stuck)} />
       {stuck && <StuckTaskCard stuck={stuck} actor={actor} onDone={reload} />}
 
       <div className="columns-2">

@@ -1281,3 +1281,18 @@ button.link:disabled {
   background: var(--success-bg);
   color: var(--success-fg);
 }
+.task-status {
+  margin-top: 4px;
+}
+.task-status.status-info {
+  background: var(--surface-2);
+}
+.task-status.status-you {
+  background: var(--attention-bg);
+  color: var(--attention-fg);
+  font-weight: 500;
+}
+.task-status.status-done {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}

@@ -48,6 +48,11 @@ function findGitBash(env: NodeJS.ProcessEnv): string | undefined {
   return roots.filter((r): r is string => Boolean(r)).map((r) => join(r, "Git", "bin", "bash.exe")).find(existsSync);
 }
 
+/** Whether a command can be started on this machine (on the PATH, or an existing path). */
+export function commandExists(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return findOnPath(command, env) !== undefined;
+}
+
 function findOnPath(command: string, env: NodeJS.ProcessEnv): string | undefined {
   const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   const hasExt = /\.[a-z0-9]+$/i.test(command);
