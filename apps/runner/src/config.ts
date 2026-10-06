@@ -19,6 +19,12 @@ const routing = {
   pricing: z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).optional(),
   /** At most this many executions of this agent at once (subscription concurrency). */
   maxConcurrent: z.number().int().min(1).optional(),
+  /**
+   * The model the agent runs (passed as --model, e.g. "sonnet", "opus", "gpt-5"). Without it the CLI
+   * uses its own default, which can be a person's interactive choice (seen live: Haiku from
+   * ~/.claude/settings.json running a whole module and running out of context).
+   */
+  model: z.string().min(1).optional(),
   /** Marketplace profile ("name" or "name@version"): skills, cost, pricing and instructions come from it. */
   profile: z.string().min(1).optional(),
 };

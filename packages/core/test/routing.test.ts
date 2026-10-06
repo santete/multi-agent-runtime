@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type AgentSkillStats, type AgentStats, chooseAgent, failureText, hasSkills, isAgentUnavailable, qualityOf, reliabilityOf } from "../src/index.js";
+import { isContextOverflow } from "../src/index.js";
 
 const claude = { id: "claude-code", skills: ["typescript", "backend", "review"], cost: "high" as const };
 const codex = { id: "codex", skills: ["typescript", "backend", "review"], cost: "medium" as const };
@@ -113,5 +114,15 @@ describe("failures found live", () => {
     expect(isAgentUnavailable(failureText(t))).toBe(true);
     expect(failureText({ kind: "completed", success: true, result: "done" })).toBe("");
     expect(failureText({ kind: "failed", reason: "boom" })).toBe("boom");
+  });
+});
+
+describe("isContextOverflow", () => {
+  it("recognizes agents that ran out of context", () => {
+    for (const reason of ["Prompt is too long", "context window exceeded", "This model's maximum context length is 200000 tokens", "context_length_exceeded"]) {
+      expect(isContextOverflow(reason)).toBe(true);
+    }
+    expect(isContextOverflow("validation failed: test")).toBe(false);
+    expect(isContextOverflow("rate limit reached")).toBe(false);
   });
 });
