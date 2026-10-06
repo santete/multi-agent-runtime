@@ -7,7 +7,7 @@ import { href } from "../lib/router.js";
 import { EventRow } from "./ActivityFeed.js";
 import { AgentConsole } from "./AgentConsole.js";
 import { ApprovalCard } from "./ApprovalsPage.js";
-import { DecisionCard, HumanTaskCard } from "./HumanWork.js";
+import { DecisionCard, HumanTaskCard, StuckTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section, StateBadge } from "./ui.js";
 
 const TERMINAL = new Set(["COMPLETED", "CANCELLED"]);
@@ -28,6 +28,12 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
     (e) => forTask(e) && (e.type === "InstructionSent" || e.type === "ExecutionAssigned"),
   );
   const [decisions] = useLiveQuery(() => api.decisions({ taskId: id }), [id], (e) => forTask(e) && e.type.startsWith("Decision"));
+  // Stopped with nothing to approve (refused calls, blocked, or to merge by hand): what to do next, here too.
+  const [stuck] = useLiveQuery(
+    () => api.stuckTasks().then((all) => all.find((s) => s.task.id === id)),
+    [id],
+    (e) => forTask(e) && (e.type === "TaskStateChanged" || e.type === "ManualMergeNeeded"),
+  );
 
   if (error) return <ErrorBox error={error} />;
   if (!task) return <Loading />;
@@ -87,8 +93,9 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
             )}
           </p>
         </div>
-        {canAct && <TaskActions task={task} onDone={reload} />}
+        {canAct && <TaskActions task={task} onDone={reload} toMerge={Boolean(stuck?.manualMerge)} />}
       </header>
+      {stuck && <StuckTaskCard stuck={stuck} actor={actor} onDone={reload} />}
 
       <div className="columns-2">
         <div>
@@ -205,7 +212,7 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
   );
 }
 
-function TaskActions({ task, onDone }: { task: TaskDto; onDone: () => void }) {
+function TaskActions({ task, onDone, toMerge }: { task: TaskDto; onDone: () => void; toMerge: boolean }) {
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string>();
   const run = (fn: () => Promise<unknown>) => async () => {
@@ -234,7 +241,8 @@ function TaskActions({ task, onDone }: { task: TaskDto; onDone: () => void }) {
         </div>
       )}
       <div className="actions">
-        {(task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && (
+        {/* Waiting for a person to merge it: a retry would redo the approved work. */}
+        {(task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && !toMerge && (
           <button onClick={run(() => api.retry(task.id))}>Retry</button>
         )}
         {task.kind === "work" && PAUSABLE.has(task.state) && <button onClick={run(() => api.pause(task.id))}>Pause</button>}

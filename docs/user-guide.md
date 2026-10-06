@@ -152,14 +152,18 @@ Owner bấm **New project** trên trang Overview: điền tên, key (tiền tố
 
 | Ở đâu | Cấu hình gì |
 |---|---|
-| `validation` | Các lệnh phải pass sau khi agent làm xong (`npm test`…). Có thể chạy trong container (`validationSandbox`) |
-| Review | Agent nào review chéo; agent duyệt thì có tự merge không (`autoApproveOnAgentReview`) |
-| CI | Chờ CI của PR xanh mới merge; tự validate lại khi `main` đã đi tiếp |
+| Tab **Settings** → Validation | Các lệnh phải pass sau khi agent làm xong, theo thứ tự (cài dependency, build, test). **Nên đặt trước khi giao việc**: thiếu nó thì platform chỉ có lời agent tự khai, và trang project sẽ nhắc |
+| Tab **Settings** → Review | Agent nào review trước người; agent duyệt thì có tự merge không |
+| Tab **Settings** → Merging and CI | Chờ CI của PR xanh mới merge; validate lại khi `main` đã đi tiếp; khi CI của `main` hỏng sau merge thì báo, revert hay giao agent sửa |
+| Tab **Settings** → Agents | Routing policy cho `auto`, và những agent được phép làm project này |
+| Tab **Settings** → General, Validation sandbox | Tên, nhánh gốc, số task chạy song song; chạy validation trong container |
 | Tab **Costs** | Budget theo ngày và theo task |
 | Tab **Plans** | Critic phản biện plan; plan nhỏ được tự duyệt |
 | Tab **Policy** | Rule riêng của project, host được phép truy cập, ai duyệt mức rủi ro nào, **secret** |
 
 ![Tab Policy: rule, network, người duyệt, secret](images/guide-policy.png)
+
+**Merge khi không có pull request.** Control plane cần `GITHUB_TOKEN` (hoặc `GITLAB_TOKEN`) để mở và merge PR. Thiếu nó, hoặc repo nằm trên host không được cấu hình, thì trang project sẽ báo, và mỗi task được duyệt có thay đổi sẽ vào Inbox với nhãn **merge by hand**: kèm lệnh git để merge branch `task/<KEY>` vào nhánh gốc, rồi bấm **I merged it**. Task phụ thuộc chỉ bắt đầu sau bước này, nên không bao giờ có chuyện task "xong" mà code chưa vào `main`.
 
 ## 4. Giao việc
 
@@ -262,10 +266,12 @@ Mọi việc cần người đều nằm trong **Inbox**:
 
 | Việc | Làm gì |
 |---|---|
+| **Plans to approve**: planner đã đề xuất plan | *Review the plan*: xem từng task, sửa nếu cần, rồi duyệt, yêu cầu làm lại hoặc từ chối |
+| **Work to review**: task đã qua validation (và agent review, nếu có) | *Review*: đọc checklist tiêu chí, diff, handoff, rồi *Approve & merge* hoặc *Request changes* |
 | **Câu hỏi của agent** (thiếu quyết định nghiệp vụ, hai tiêu chí mâu thuẫn) | Chọn một đáp án gợi ý hoặc tự trả lời. Agent resume đúng session với câu trả lời, và reviewer cũng thấy câu trả lời đó |
 | **Approval**: agent muốn làm việc rủi ro (gọi mạng, sửa CI, ghi vào vùng của task khác, vi phạm rule của project) | *Approve* hoặc *Reject*. Agent resume và được báo kết quả. Mức rủi ro quyết định ai được duyệt |
 | **Task cho người** | Làm việc đó rồi bấm *Done* kèm tóm tắt |
-| **Stopped, nothing to approve**: task dừng vì một lời gọi bị từ chối hẳn (policy chặn, hoặc agent CLI tự chặn) nên không có gì để duyệt | Đọc lý do, rồi bấm *Retry* (chạy lại từ đầu) hoặc *Cancel task* |
+| **Stopped: needs you to act**: task dừng vì một lời gọi bị từ chối hẳn (policy chặn, hoặc agent CLI tự chặn), bị `BLOCKED` vì fail quá nhiều lần, hoặc cần **merge by hand** | Đọc lý do, rồi *Retry* (chạy lại từ đầu) hoặc *Cancel task*; với merge by hand thì merge branch rồi bấm *I merged it* |
 
 Huỷ hoặc retry một task thì các approval và câu hỏi chưa ai trả lời của nó được rút khỏi Inbox (trạng thái `withdrawn`).
 

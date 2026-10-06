@@ -483,6 +483,18 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.put("/projects/:id/validation-sandbox", role("owner"), (req) =>
     store.setValidationSandbox(idParams.parse(req.params).id, validationSandbox.nullable().parse(req.body ?? null)),
   );
+  app.put("/projects/:id/general", role("owner"), (req) =>
+    store.setGeneral(
+      idParams.parse(req.params).id,
+      z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          defaultBranch: z.string().trim().min(1).max(200),
+          maxParallel: z.number().int().min(1).max(100).nullable(),
+        })
+        .parse(req.body),
+    ),
+  );
   app.put("/projects/:id/merge-policy", role("owner"), (req) =>
     store.setMergePolicy(idParams.parse(req.params).id, mergePolicyBody.parse(req.body)),
   );
@@ -543,6 +555,11 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   // Human as executor (spec §61): agents' questions and tasks for people.
   app.get("/human-tasks", (req) => store.humanTasks(scope(req)));
   app.get("/stuck-tasks", (req) => store.stuckTasks(scope(req)));
+  app.get("/waiting", (req) => store.waitingWork(scope(req)));
+  app.post("/tasks/:id/merged", role("member"), (req) =>
+    store.markMergedByPerson(idParams.parse(req.params).id, req.actor.name, z.object({ sha: z.string().trim().min(4).max(64).optional() }).parse(req.body ?? {}).sha),
+  );
+  app.get("/projects/:id/delivery", async (req) => store.deliveryInfo(await store.getProject(idParams.parse(req.params).id)));
   app.get("/decisions", (req) =>
     store.listDecisions({
       ...z.object({ status: z.enum(["pending", "answered", "withdrawn"]).optional(), taskId: z.uuid().optional() }).parse(req.query),

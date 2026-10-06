@@ -143,6 +143,8 @@ describe("notifier", () => {
     await deliver(await claim(runnerId));
     await call("POST", `/tasks/${task.id}/review`, { decision: "approve" });
     await store.processMergeQueue();
+    // No Git provider here: the branch is merged by a person.
+    await call("POST", `/tasks/${task.id}/merged`);
     await n.poll();
     expect(received.map((r) => r.text)).toEqual([":white_check_mark: *PAY-1* Refund API merged."]);
   });

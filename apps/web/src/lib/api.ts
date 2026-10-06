@@ -6,6 +6,10 @@ import type {
   AgentSkillStats,
   AgentStats,
   Budget,
+  BrokenMainPolicy,
+  RoutingPolicy,
+  ValidationSandbox,
+  ValidationStep,
   CostReport,
   DecisionDto,
   ApprovalDto,
@@ -20,6 +24,8 @@ import type {
   ProductMetrics,
   SecretDto,
   StuckTaskDto,
+  WaitingWorkDto,
+  DeliveryInfo,
   ProjectPolicy,
   QueueEntry,
   PlannedTask,
@@ -133,6 +139,9 @@ export const api = {
   answerDecision: (id: string, answer: string) => post<DecisionDto>(`/decisions/${id}/answer`, { answer }),
   humanTasks: () => get<TaskDto[]>("/human-tasks"),
   stuckTasks: () => get<StuckTaskDto[]>("/stuck-tasks"),
+  waiting: () => get<WaitingWorkDto>("/waiting"),
+  markMerged: (taskId: string, sha?: string) => post<TaskDto>(`/tasks/${taskId}/merged`, sha ? { sha } : {}),
+  delivery: (projectId: string) => get<DeliveryInfo>(`/projects/${projectId}/delivery`),
   completeHumanTask: (taskId: string, summary: string) => post<TaskDto>(`/tasks/${taskId}/done`, { summary }),
   queue: (projectId: string) => get<QueueEntry[]>(`/projects/${projectId}/queue`),
   setPriority: (taskId: string, priority: number) => put<TaskDto>(`/tasks/${taskId}/priority`, { priority }),
@@ -177,6 +186,19 @@ export const api = {
   setBudget: (projectId: string, budget: Budget | null) => put<ProjectDto>(`/projects/${projectId}/budget`, budget),
   setPlanning: (projectId: string, planning: PlanningPolicy) => put<ProjectDto>(`/projects/${projectId}/planning`, planning),
   setPolicy: (projectId: string, policy: ProjectPolicy) => put<ProjectDto>(`/projects/${projectId}/policy`, policy),
+  setValidation: (projectId: string, steps: ValidationStep[]) => put<ProjectDto>(`/projects/${projectId}/validation`, steps),
+  setReview: (projectId: string, body: { reviewAgents: string[]; autoApproveOnAgentReview: boolean }) =>
+    put<ProjectDto>(`/projects/${projectId}/review`, body),
+  setMergePolicy: (projectId: string, body: { waitForChecks: boolean; revalidateOnBaseChange: boolean }) =>
+    put<ProjectDto>(`/projects/${projectId}/merge-policy`, body),
+  setSelfHealing: (projectId: string, onBrokenMain: BrokenMainPolicy) => put<ProjectDto>(`/projects/${projectId}/self-healing`, { onBrokenMain }),
+  setAllowedAgents: (projectId: string, allowedAgents: string[]) => put<ProjectDto>(`/projects/${projectId}/agents`, { allowedAgents }),
+  setRoutingPolicy: (projectId: string, routingPolicy: RoutingPolicy) =>
+    put<ProjectDto>(`/projects/${projectId}/routing-policy`, { routingPolicy }),
+  setGeneral: (projectId: string, body: { name: string; defaultBranch: string; maxParallel: number | null }) =>
+    put<ProjectDto>(`/projects/${projectId}/general`, body),
+  setValidationSandbox: (projectId: string, sandbox: ValidationSandbox | null) =>
+    put<ProjectDto>(`/projects/${projectId}/validation-sandbox`, sandbox),
   recentEvents: (limit = 50, projectId?: string) =>
     get<EventDto[]>(`/events/recent?limit=${limit}${projectId ? `&projectId=${projectId}` : ""}`),
 };

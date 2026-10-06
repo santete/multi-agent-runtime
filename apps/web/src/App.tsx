@@ -6,6 +6,7 @@ import { MarketplacePage } from "./components/MarketplacePage.js";
 import { MetricsPage } from "./components/MetricsPage.js";
 import { Login } from "./components/Login.js";
 import { Overview } from "./components/Overview.js";
+import { useWaitingCount } from "./lib/waiting.js";
 import { PlanPage } from "./components/PlansPage.js";
 import { ProjectPage } from "./components/ProjectPage.js";
 import { TaskPage } from "./components/TaskPage.js";
@@ -30,12 +31,8 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
   const route = useRoute();
   const status = useLiveStatus();
   const [projects] = useLiveQuery(api.projects, [], (e) => e.type === "ProjectCreated");
-  const [pending] = useLiveQuery(() => api.approvals("pending"), [], (e) => e.type.startsWith("Approval"));
-  // The inbox: approvals, agents' questions and tasks for a person (spec §61).
-  const humanEvent = (e: { type: string }) => e.type.startsWith("Decision") || e.type === "TaskStateChanged";
-  const [questions] = useLiveQuery(() => api.decisions({ status: "pending" }), [], humanEvent);
-  const [humanTasks] = useLiveQuery(api.humanTasks, [], humanEvent);
-  const inbox = (pending?.length ?? 0) + (questions?.length ?? 0) + (humanTasks?.length ?? 0);
+  // The inbox: everything that waits for a person (approvals, questions, plans, reviews, stuck work).
+  const inbox = useWaitingCount() ?? 0;
 
   return (
     <div className="shell">

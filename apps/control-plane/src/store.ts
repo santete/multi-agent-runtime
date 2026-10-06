@@ -73,6 +73,8 @@ import {
   type ReviewTarget,
   type RunnerDto,
   type StuckTaskDto,
+  type DeliveryInfo,
+  type WaitingWorkDto,
   type TaskDto,
   type TaskGraph,
   type TaskState,
@@ -723,6 +725,25 @@ export class Store {
         id,
       );
       await appendEvent(q, { type: "ProjectReviewPolicyChanged", projectId: id, payload: { ...policy } });
+      return project;
+    });
+  }
+
+  /** Name, base branch and parallelism; the key and repository stay (task keys and clones depend on them). */
+  async setGeneral(id: string, general: { name: string; defaultBranch: string; maxParallel: number | null }): Promise<ProjectDto> {
+    return this.db.tx(async (q) => {
+      const project = await one(
+        q.query("update projects set name = $2, default_branch = $3, max_parallel = $4 where id = $1 returning *", [
+          id,
+          general.name,
+          general.defaultBranch,
+          general.maxParallel,
+        ]),
+        toProject,
+        "project",
+        id,
+      );
+      await appendEvent(q, { type: "ProjectSettingsChanged", projectId: id, payload: { ...general } });
       return project;
     });
   }
@@ -2999,6 +3020,85 @@ export class Store {
       .then((rows) => rows.map(toTask));
   }
 
+  /** Plans and reviews waiting for a person (the Inbox). */
+  async waitingWork(org?: string): Promise<WaitingWorkDto> {
+    const inOrg = "($1::text is null or project_id in (select id from projects where org_id = $1))";
+    const plans = await this.db.query(`${PLAN_SELECT} where p.status = 'proposed' and ($1::text is null or p.project_id in (select id from projects where org_id = $1)) order by p.created_at`, [
+      org ?? null,
+    ]);
+    // A review task of an agent still running means the person's turn has not come yet.
+    const reviews = await this.db.query(
+      `select * from tasks t where t.state = 'REVIEW' and t.kind = 'work' and ${inOrg.replace(/project_id/g, "t.project_id")}
+         and not exists (select 1 from tasks r where r.review_of = t.id and r.state not in ('COMPLETED', 'CANCELLED', 'BLOCKED'))
+       order by t.updated_at`,
+      [org ?? null],
+    );
+    return { plans: plans.map(toPlan), reviews: reviews.map(toTask) };
+  }
+
+  /** Why a task is BLOCKED, for people: the last failures. */
+  private async blockedReasons(task: TaskDto): Promise<string[]> {
+    const rows = await this.db.query<{ type: string; payload: Record<string, any> }>(
+      `select type, payload from events where task_id = $1
+         and (type in ('ValidationFailed', 'DeliveryFailed', 'PullRequestFailed')
+              or (type = 'AgentEvent' and payload->>'kind' = 'failed')
+              or (type = 'TaskStateChanged' and payload->>'to' = 'BLOCKED'))
+       order by seq desc limit 6`,
+      [task.id],
+    );
+    return rows.reverse().map(({ type, payload: p }) => {
+      if (type === "ValidationFailed") {
+        const failed = (p.steps ?? []).filter((s: { passed?: boolean }) => !s.passed).map((s: { name: string }) => s.name);
+        return `validation failed${failed.length ? `: ${failed.join(", ")}` : ""}`;
+      }
+      if (type === "AgentEvent") return `agent failed: ${String(p.reason ?? "").slice(0, 300)}`;
+      if (type === "TaskStateChanged") {
+        const why = p.reason ?? p.error ?? (p.attempts ? `gave up after ${p.attempts} attempts` : "limit reached");
+        return `blocked: ${String(why).slice(0, 300)}`;
+      }
+      return `${type}: ${String(p.error ?? "").slice(0, 300)}`;
+    });
+  }
+
+  /** The last branch the runner pushed for a task (null commit: no changes). */
+  private async lastDelivery(taskId: string): Promise<{ branch: string; commitSha: string | null } | undefined> {
+    const [row] = await this.db.query<{ payload: { branch: string; commitSha: string | null } }>(
+      "select payload from events where task_id = $1 and type in ('BranchPushed', 'NoChanges') order by seq desc limit 1",
+      [taskId],
+    );
+    return row?.payload;
+  }
+
+  /** Whether approved work of the project is merged through pull requests (spec §33). */
+  deliveryInfo(project: ProjectDto): DeliveryInfo {
+    if (!this.gitProvider) return { pullRequests: false, reason: "no Git provider is configured (GITHUB_TOKEN or GITLAB_TOKEN)" };
+    if (this.gitProvider.handles && !this.gitProvider.handles(project.repoUrl)) {
+      return { pullRequests: false, reason: "no configured Git provider handles this repository's host" };
+    }
+    return { pullRequests: true };
+  }
+
+  /** A person merged the approved branch of a task that had no pull request. */
+  async markMergedByPerson(id: string, actor: string, sha?: string): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      const [last] = await q.query<{ payload: { trigger?: string } }>(
+        "select payload from events where task_id = $1 and type = 'TaskStateChanged' order by seq desc limit 1",
+        [id],
+      );
+      if (task.state !== "WAITING_FOR_HUMAN" || last?.payload.trigger !== "merge_by_person") {
+        throw new ConflictError(`task ${task.key} is not waiting for a person to merge it`);
+      }
+      const [execution] = await q.query<{ id: string }>("select id from executions where task_id = $1 order by attempt desc limit 1", [id]);
+      await this.addArtifact(q, task, execution?.id ?? null, "merge_result", { status: "merged", sha: sha ?? null, note: `merged by ${actor}` });
+      const completed = await changeTaskState(q, task, "merged_by_person", { actor, sha: sha ?? null });
+      await appendEvent(q, { type: "TaskMerged", projectId: task.projectId, taskId: id, payload: { pullRequest: null, sha: sha ?? null, actor } });
+      await this.acceptTaskKnowledge(q, completed.id, actor);
+      await this.unlockDependents(q, completed);
+      return completed;
+    });
+  }
+
   /**
    * Tasks waiting for a person with nothing in the Inbox to decide: a call the
    * policy refused outright or the agent CLI itself refused. A person reads why
@@ -3006,9 +3106,9 @@ export class Store {
    */
   async stuckTasks(org?: string): Promise<StuckTaskDto[]> {
     const rows = await this.db.query(
-      `select t.* from tasks t where t.state = 'WAITING_FOR_HUMAN'
+      `select t.* from tasks t where (t.state = 'BLOCKED' or t.state = 'WAITING_FOR_HUMAN'
          and not exists (select 1 from approvals a where a.task_id = t.id and a.status = 'pending')
-         and not exists (select 1 from decisions d where d.task_id = t.id and d.status = 'pending')
+         and not exists (select 1 from decisions d where d.task_id = t.id and d.status = 'pending'))
          and ($1::text is null or t.project_id in (select id from projects where org_id = $1))
        order by t.updated_at`,
       [org ?? null],
@@ -3016,6 +3116,7 @@ export class Store {
     return Promise.all(
       rows.map(async (row) => {
         const task = toTask(row);
+        if (task.state === "BLOCKED") return { task, reasons: await this.blockedReasons(task) };
         const reasons = await this.db.query<{ type: string; payload: Record<string, unknown> }>(
           `select e.type, e.payload from events e
            where e.execution_id = (select id from executions where task_id = $1 order by attempt desc limit 1)
@@ -3024,9 +3125,24 @@ export class Store {
            order by e.seq`,
           [task.id],
         );
-        const lines = reasons.map(({ type, payload: p }) =>
-          type === "ToolCallChecked" ? `${p.tool}: [${p.risk}] ${p.reason}` : `${p.tool}: ${p.detail ?? "refused"}`,
+        // The policy's own denials say what was refused; the agent's report of the same tool adds nothing.
+        const checked = new Set(reasons.filter((r) => r.type === "ToolCallChecked").map((r) => r.payload.tool));
+        const lines = reasons
+          .filter(({ type, payload: p }) => type === "ToolCallChecked" || !checked.has(p.tool) || p.detail)
+          .map(({ type, payload: p }) =>
+            type === "ToolCallChecked" ? `${p.summary ?? p.tool} — [${p.risk}] ${p.reason}` : `${p.tool}: ${p.detail ?? "refused"}`,
+          );
+        const [entered] = await this.db.query<{ payload: { trigger?: string } }>(
+          "select payload from events where task_id = $1 and type = 'TaskStateChanged' order by seq desc limit 1",
+          [task.id],
         );
+        if (entered?.payload.trigger === "merge_by_person") {
+          const [need] = await this.db.query<{ payload: { branch: string; base: string; reason: string } }>(
+            "select payload from events where task_id = $1 and type = 'ManualMergeNeeded' order by seq desc limit 1",
+            [task.id],
+          );
+          if (need) return { task, reasons: [], manualMerge: { branch: need.payload.branch, base: need.payload.base, reason: need.payload.reason } };
+        }
         return { task, reasons: [...new Set(lines)].slice(0, 5) };
       }),
     );
@@ -3106,6 +3222,15 @@ export class Store {
     return this.db.tx(async (q) => {
       const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
       const payload = { reason: "retried by a human", actor: actor ?? null };
+      if (task.state === "WAITING_FOR_HUMAN") {
+        const [last] = await q.query<{ payload: { trigger?: string } }>(
+          "select payload from events where task_id = $1 and type = 'TaskStateChanged' order by seq desc limit 1",
+          [id],
+        );
+        if (last?.payload.trigger === "merge_by_person") {
+          throw new ConflictError(`task ${task.key} is approved and waits to be merged by a person; a retry would redo it (merge it, or cancel it)`);
+        }
+      }
       // The next attempt starts over: what the last one asked for no longer applies.
       if (task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") await withdrawPending(q, id);
       if (task.state === "WAITING_FOR_HUMAN") return changeTaskState(q, task, "unassigned", payload);
@@ -3161,10 +3286,15 @@ export class Store {
 
   /** One step of the merge queue for one task; returns what happened, for the trace. */
   private async processMergeQueueTask(task: TaskDto, result: MergeQueueResult): Promise<string> {
-    const [last] = await this.db.query<{ id: string; branch: string | null }>(
-      "select id, branch from executions where task_id = $1 order by attempt desc limit 1",
+    const [last] = await this.db.query<{ id: string; branch: string | null; status: string }>(
+      "select id, branch, status from executions where task_id = $1 order by attempt desc limit 1",
       [task.id],
     );
+    // Approved while the runner was still pushing the branch: merging now would find nothing and lose the work.
+    if (last?.status === "delivering") {
+      result.waiting++;
+      return "waiting for delivery";
+    }
     if (task.state === "APPROVED") {
       try {
         task = await this.db.tx((q) => changeTaskState(q, task, "merge_started"));
@@ -3175,7 +3305,27 @@ export class Store {
     }
 
     if (!task.pullRequestNumber || !this.gitProvider) {
-      // Nothing to merge (no changes, or no provider): the reviewed work is accepted as is.
+      // Approved changes that no pull request carries: never call them merged, a person merges the branch.
+      const pushed = await this.lastDelivery(task.id);
+      if (pushed?.commitSha) {
+        const project = await this.getProject(task.projectId);
+        const reason = !this.gitProvider
+          ? "no Git provider is configured (set GITHUB_TOKEN or GITLAB_TOKEN on the control plane)"
+          : "no pull request was opened for this branch (see the task timeline)";
+        await this.db.tx(async (q) => {
+          const current = await this.getTask(task.id, q);
+          if (current.state !== "MERGING") return;
+          await changeTaskState(q, current, "merge_by_person", { branch: pushed.branch, reason });
+          await appendEvent(q, {
+            type: "ManualMergeNeeded",
+            projectId: task.projectId,
+            taskId: task.id,
+            payload: { branch: pushed.branch, base: project.defaultBranch, commitSha: pushed.commitSha, reason },
+          });
+        });
+        return "manual";
+      }
+      // Nothing to merge: the reviewed work had no changes.
       await this.finishMerge(task, last?.id ?? null, { status: "merged", sha: null }, "no pull request to merge");
       result.merged++;
       return "merged";

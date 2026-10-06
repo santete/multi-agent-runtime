@@ -28,6 +28,8 @@ export type TaskState = (typeof TASK_STATES)[number];
 
 export type TaskTransitionTrigger =
   | "dependencies_satisfied"
+  | "merge_by_person"
+  | "merged_by_person"
   | "assigned"
   | "unassigned"
   | "agent_started"
@@ -86,7 +88,8 @@ const TRANSITIONS: TransitionTable = {
     interrupted: "READY",
   },
   // unassigned: approvals decided (or a human asked to retry), back to the queue.
-  WAITING_FOR_HUMAN: { approval_resolved: "RUNNING", unassigned: "READY" },
+  // merged_by_person: a person merged an approved branch that had no pull request.
+  WAITING_FOR_HUMAN: { approval_resolved: "RUNNING", unassigned: "READY", merged_by_person: "COMPLETED" },
   WAITING_FOR_AGENT: { agent_available: "RUNNING", unassigned: "READY" },
   // agent_failed: the runner was lost while validating.
   VALIDATING: { validation_passed: "REVIEW", validation_failed: "REWORK", agent_failed: "RETRYING" },
@@ -100,6 +103,8 @@ const TRANSITIONS: TransitionTable = {
     base_changed: "REWORK",
     ci_failed: "REWORK",
     limit_exceeded: "BLOCKED",
+    // Approved changes with no pull request (no provider for the repository, or opening it failed).
+    merge_by_person: "WAITING_FOR_HUMAN",
   },
   // Requeued ("unassigned") so any runner offering the agent can pick it up again.
   REWORK: { rework_started: "RUNNING", unassigned: "READY", limit_exceeded: "BLOCKED", paused: "PAUSED" },

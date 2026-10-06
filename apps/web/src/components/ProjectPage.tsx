@@ -10,11 +10,12 @@ import { CostsTab } from "./CostsTab.js";
 import { KnowledgeTab } from "./KnowledgeTab.js";
 import { NewTaskDialog } from "./NewTaskDialog.js";
 import { PolicyTab } from "./PolicyTab.js";
+import { SettingsTab } from "./SettingsTab.js";
 import { NewPlanDialog, PlansList } from "./PlansPage.js";
 import { Empty, ErrorBox, Loading, StateBadge } from "./ui.js";
 
 export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; actor: ActorDto }) {
-  const [project, projectError] = useLiveQuery(() => api.project(id), [id], () => false);
+  const [project, projectError, reloadProject] = useLiveQuery(() => api.project(id), [id], (e) => e.projectId === id && e.type.startsWith("Project"));
   const [tasks, tasksError] = useLiveQuery(
     () => api.tasks(id),
     [id],
@@ -22,6 +23,7 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
   );
   const [creating, setCreating] = useState(false);
   const [planning, setPlanning] = useState(false);
+  const [delivery] = useLiveQuery(() => api.delivery(id), [id], () => false);
 
   if (projectError) return <ErrorBox error={projectError} />;
   if (!project) return <Loading />;
@@ -35,7 +37,7 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
           <p className="muted small">
             {project.repoUrl} · base <span className="mono">{project.defaultBranch}</span>
             {project.maxParallel ? ` · max ${project.maxParallel} in parallel` : ""}
-            {project.validation.length ? ` · validation: ${project.validation.map((v) => v.name).join(", ")}` : " · no validation"}
+            {project.validation.length ? ` · validation: ${project.validation.map((v) => v.name).join(", ")}` : ""}
             {project.revalidateOnBaseChange ? " · re-validates on a moved base" : ""}
             {project.waitForChecks ? " · waits for CI" : ""}
           </p>
@@ -67,11 +69,26 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <a className={tab === "policy" ? "active" : ""} href={href.project(id, "policy")}>
           Policy
         </a>
+        <a className={tab === "settings" ? "active" : ""} href={href.project(id, "settings")}>
+          Settings
+        </a>
         <a className={tab === "activity" ? "active" : ""} href={href.project(id, "activity")}>
           Activity
         </a>
       </nav>
 
+      {delivery && !delivery.pullRequests && (
+        <div className="notice warning">
+          Approved work is not merged automatically here: {delivery.reason}. Each approved task with changes waits in the Inbox for a
+          person to merge its branch.
+        </div>
+      )}
+      {project.validation.length === 0 && tab !== "settings" && (
+        <div className="notice warning">
+          No validation commands: the platform cannot check what agents deliver.{" "}
+          <a href={href.project(id, "settings")}>Set them up in Settings</a>.
+        </div>
+      )}
       <ErrorBox error={tasksError} />
       {!tasks ? (
         <Loading />
@@ -87,6 +104,8 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
         <CostsTab project={project} actor={actor} />
       ) : tab === "policy" ? (
         <PolicyTab project={project} actor={actor} />
+      ) : tab === "settings" ? (
+        <SettingsTab project={project} actor={actor} onSaved={() => reloadProject()} />
       ) : (
         <ActivityFeed projectId={id} limit={100} />
       )}
@@ -101,6 +120,11 @@ export function ProjectPage({ id, tab, actor }: { id: string; tab: ProjectTab; a
 
 function Board({ tasks, projectId }: { tasks: TaskDto[]; projectId: string }) {
   const groups = groupByColumn(tasks);
+  // Agents some online runner offers: READY work for any other agent will not start.
+  const [runners] = useLiveQuery(api.runners, [], (e) => e.type === "RunnerRegistered");
+  const offered = new Set((runners ?? []).filter((r) => r.online).flatMap((r) => r.agents.map((a) => a.id)));
+  const unserved = (t: TaskDto) =>
+    runners !== undefined && t.state === "READY" && t.agent !== "human" && (t.agent === "auto" ? offered.size === 0 : !offered.has(t.agent));
   // READY work in the order the scheduler will take it (spec §53).
   const [queue] = useLiveQuery(() => api.queue(projectId), [projectId, tasks], () => false);
   const rank = new Map((queue ?? []).map((e, i) => [e.taskId, { i, e }]));
@@ -142,6 +166,11 @@ function Board({ tasks, projectId }: { tasks: TaskDto[]; projectId: string }) {
                 {rank.get(t.id) && t.state === "READY" && (
                   <span className="muted small" title={rank.get(t.id)!.e.reasons.join(", ")}>
                     #{rank.get(t.id)!.i + 1} · score {rank.get(t.id)!.e.score}
+                  </span>
+                )}
+                {unserved(t) && (
+                  <span className="badge tone-warning" title="Start a runner that offers this agent, or change the task's agent">
+                    no online runner offers {t.agent === "auto" ? "any agent" : t.agent}
                   </span>
                 )}
                 {rank.get(t.id)?.e.blockedBy && t.state === "READY" && (
