@@ -120,7 +120,7 @@ Trong `runner.config.json`, mỗi agent khai báo:
 
 ```json
 "agents": {
-  "claude-code": { "adapter": "claude-code", "skills": ["typescript", "backend", "review"], "cost": "high", "maxConcurrent": 1 },
+  "claude-code": { "adapter": "claude-code", "model": "sonnet", "skills": ["typescript", "backend", "review"], "cost": "high", "maxConcurrent": 1 },
   "codex":       { "adapter": "codex", "skills": ["typescript", "review"], "cost": "medium" },
   "antigravity": { "adapter": "antigravity", "executable": "C:/…/agy.exe", "unattended": false, "isolateConfig": true },
   "qoder":       { "adapter": "qoder", "executable": "C:/…/.qoder/bin/qodercli/qodercli.exe", "skills": ["typescript"], "cost": "medium" },
@@ -130,6 +130,7 @@ Trong `runner.config.json`, mỗi agent khai báo:
 ```
 
 - `skills` dùng để route task có `agent: "auto"`. `cost` và `pricing` dùng để ước tính chi phí.
+- `model` (nên đặt): model agent dùng, ví dụ `"sonnet"`, `"opus"` cho Claude Code. Không đặt thì CLI dùng mặc định của nó, mà mặc định đó có thể là lựa chọn cá nhân của mày khi dùng CLI tương tác (ví dụ `haiku` trong `~/.claude/settings.json`). Model nhỏ dễ hết ngữ cảnh với task lớn.
 - Qoder báo chi phí bằng credit chứ không phải token hay USD, nên budget theo USD không tính được cho agent `qoder`. `tools` (tuỳ chọn) đổi danh sách tool khi agent sửa code; khi review hoặc lập plan, agent chỉ được đọc ([ADR-0035](adr/0035-qoder-adapter.md)).
 - Command Code chỉ sửa được code khi runner bật policy hook (mặc định là bật). Khi đó policy là lớp quyết định mọi lời gọi. Taste learning được tắt trong các lượt chạy do platform điều phối ([ADR-0036](adr/0036-command-code-adapter.md)).
 - `profile` (tuỳ chọn) lấy agent từ Marketplace: instructions, skills, giá.

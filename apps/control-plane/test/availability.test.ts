@@ -7,6 +7,7 @@ import { buildApp, createPgliteDb, type Db, migrate, Store } from "../src/index.
 
 let db: Db;
 let app: FastifyInstance;
+let store: Store;
 let project: ProjectDto;
 
 beforeAll(async () => {
@@ -16,7 +17,8 @@ beforeAll(async () => {
 afterAll(() => db.close());
 beforeEach(async () => {
   await db.query("truncate events, approvals, decisions, artifacts, executions, tasks, runners, projects restart identity cascade");
-  app = buildApp(new Store(db));
+  store = new Store(db);
+  app = buildApp(store);
   project = (await call<ProjectDto>("POST", "/projects", { key: "PAY", name: "p", repoUrl: "https://github.com/o/r.git" })).body;
 });
 afterEach(() => app.close());
@@ -79,5 +81,38 @@ describe("fallback agents", () => {
     const codexBox = await register("codex-box", ["codex"]);
     await register("agy-box", ["agy"]);
     expect(await claim(codexBox)).toBeFalsy();
+  });
+});
+
+describe("a session that no longer fits the context window", () => {
+  const handoff = { summary: "done", changes: [], decisions: [], knownIssues: [], remainingWork: [], knowledge: [], openQuestions: [], criteria: [] };
+  async function finish(c: ClaimResponse, terminal: object) {
+    await call("POST", `/executions/${c.execution.id}/start`, { workspace: "/ws", branch: "task/PAY-1" });
+    await call("POST", `/executions/${c.execution.id}/complete`, { exitCode: 0, ...{ terminal } });
+  }
+
+  it("is not resumed, and the reviewer's comments still reach the new session", async () => {
+    const runner = await register("box", ["claude"]);
+    const task = (await call<TaskDto>("POST", `/projects/${project.id}/tasks`, { title: "T", objective: "o", agent: "claude" })).body;
+    const first = (await claim(runner))!;
+    await finish(first, { kind: "completed", sessionId: "s1", success: true, deniedActions: [], result: handoff });
+    await call("POST", `/executions/${first.execution.id}/validation`, { passed: true, steps: [], changedFiles: [] });
+    await call("POST", `/executions/${first.execution.id}/delivery`, { branch: "task/PAY-1", commitSha: "abc1234", changedFiles: ["a.ts"] });
+    await call("POST", `/tasks/${task.id}/review`, { decision: "reject", comment: "update does not update anything" });
+
+    // The rework resumes the session, which overflows.
+    await store.sweep();
+    const second = (await claim(runner))!;
+    expect(second.resume?.sessionId).toBe("s1");
+    expect(second.rework).toMatchObject({ kind: "review", comment: "update does not update anything" });
+    await finish(second, { kind: "completed", sessionId: "s1", success: false, deniedActions: [], result: "Prompt is too long" });
+
+    // The next attempt starts a new session and still knows what to fix.
+    await store.sweep();
+    const third = (await claim(runner))!;
+    expect(third.resume).toBeUndefined();
+    expect(third.rework).toMatchObject({ kind: "review", comment: "update does not update anything" });
+    const events = (await call<{ events: Array<{ type: string; payload: Record<string, unknown> }> }>("GET", `/tasks/${task.id}/events`)).body.events;
+    expect(events.find((e) => e.type === "SessionDiscarded")?.payload).toMatchObject({ sessionId: "s1", reason: "Prompt is too long" });
   });
 });

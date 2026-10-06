@@ -388,6 +388,7 @@ export class Runner {
         ? claim.resume.sessionId
         : undefined;
 
+    const agentModel: string | undefined = this.config.agents[claim.task.agent]?.model;
     const request: AgentRunRequest = {
       workspace: workspace.path,
       prompt: claim.review
@@ -410,6 +411,7 @@ export class Runner {
         MAR_EXECUTION_TOKEN: claim.executionToken,
       },
       ...(resumeSessionId && { resumeSessionId }),
+      ...(agentModel && { model: agentModel }),
       ...(adapter.capabilities.structuredOutput && { outputSchema: claim.review ? REVIEW_SCHEMA : claim.plan ? PLAN_SCHEMA : claim.critique ? CRITIQUE_SCHEMA : HANDOFF_SCHEMA }),
       ...(this.config.policyHook &&
         // Also for sandboxed agents: their hook works wherever the CLI fires it.

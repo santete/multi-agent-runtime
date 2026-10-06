@@ -101,6 +101,7 @@ import {
   failureText,
   isCiConfigPath,
   isSessionLost,
+  isContextOverflow,
   areasOverlap,
   matchesGlob,
   writtenPaths,
@@ -2097,7 +2098,7 @@ export class Store {
         [task.id],
       );
       const project = await this.getProject(task.projectId, q);
-      const rework = previous ? await this.reworkContext(q, project, previous.id, previous.attempt) : undefined;
+      const rework = previous ? await this.latestRework(q, project, task.id) : undefined;
       const approvals = previous ? await this.approvalDecisions(q, previous.id) : [];
       const decisions = previous
         ? (
@@ -2124,13 +2125,15 @@ export class Store {
          where task_id = $1 and session_id is not null and agent = $2 order by attempt desc limit 1`,
         [task.id, task.agent],
       );
-      // Spec §46 "mất session": an agent that could not resume its session starts a new one.
-      if (lastSession && previous?.status === "failed" && isSessionLost(String(previous.result?.reason ?? ""))) {
+      // Spec §46 "mất session": an agent that could not resume its session, or whose session no longer fits
+      // its context window, starts a new one (the brief and the rework context say what to do).
+      const lastFailure = String(previous?.result?.reason ?? (typeof previous?.result?.result === "string" ? previous.result.result : ""));
+      if (lastSession && previous?.status === "failed" && (isSessionLost(lastFailure) || isContextOverflow(lastFailure))) {
         await appendEvent(q, {
           type: "SessionDiscarded",
           projectId: task.projectId,
           taskId: task.id,
-          payload: { sessionId: lastSession.session_id, reason: String(previous.result?.reason ?? "").slice(0, 300) },
+          payload: { sessionId: lastSession.session_id, reason: lastFailure.slice(0, 300) },
         });
         lastSession = undefined;
       }
@@ -2197,6 +2200,29 @@ export class Store {
    * Why the work of the given execution is being redone (spec §29): failed
    * validation, a rejected review, or a merge conflict with the base branch.
    */
+  /**
+   * Why the task goes back to its agent: the newest attempt that was sent back (review, validation,
+   * CI, conflict, moved base). Attempts that failed on their own in between do not erase it, so a
+   * fresh session after a failed rework still gets the reviewer's comments. An attempt that passed
+   * validation without being sent back ends the search.
+   */
+  private async latestRework(q: Queryable, project: ProjectDto, taskId: string): Promise<ReworkContext | undefined> {
+    const executions = await q.query<{ id: string; attempt: number }>(
+      "select id, attempt from executions where task_id = $1 order by attempt desc limit 10",
+      [taskId],
+    );
+    for (const e of executions) {
+      const rework = await this.reworkContext(q, project, e.id, e.attempt);
+      if (rework) return rework;
+      const [passed] = await q.query(
+        "select 1 from artifacts where execution_id = $1 and type = 'validation_result' and (content->>'passed')::boolean limit 1",
+        [e.id],
+      );
+      if (passed) return undefined;
+    }
+    return undefined;
+  }
+
   private async reworkContext(
     q: Queryable,
     project: ProjectDto,
@@ -3059,6 +3085,7 @@ export class Store {
       `select type, payload from events where task_id = $1
          and (type in ('ValidationFailed', 'DeliveryFailed', 'PullRequestFailed')
               or (type = 'AgentEvent' and payload->>'kind' = 'failed')
+              or (type = 'AgentEvent' and payload->>'kind' = 'completed' and payload->>'success' = 'false')
               or (type = 'TaskStateChanged' and payload->>'to' = 'BLOCKED'))
        order by seq desc limit 6`,
       [task.id],
@@ -3068,7 +3095,10 @@ export class Store {
         const failed = (p.steps ?? []).filter((s: { passed?: boolean }) => !s.passed).map((s: { name: string }) => s.name);
         return `validation failed${failed.length ? `: ${failed.join(", ")}` : ""}`;
       }
-      if (type === "AgentEvent") return `agent failed: ${String(p.reason ?? "").slice(0, 300)}`;
+      if (type === "AgentEvent") {
+        const why = p.kind === "failed" ? p.reason : typeof p.result === "string" ? p.result : "it ended without success";
+        return `agent failed: ${String(why ?? "").slice(0, 300)}`;
+      }
       if (type === "TaskStateChanged") {
         const why = p.reason ?? p.error ?? (p.attempts ? `gave up after ${p.attempts} attempts` : "limit reached");
         return `blocked: ${String(why).slice(0, 300)}`;

@@ -172,6 +172,17 @@ export function failureText(terminal: { kind: string; reason?: string; success?:
 }
 
 /** The agent could not resume its session (expired, deleted, other machine): start a new one. */
+/**
+ * The agent's conversation no longer fits its context window (seen live with
+ * Claude Code: "Prompt is too long" after a long first attempt plus a rework).
+ * Resuming that session can only fail again; a new one starts from the brief.
+ */
+export function isContextOverflow(reason: string): boolean {
+  return /prompt is too long|context(?:[ _-]window|[ _-]length)?.{0,20}(exceeded|too long|limit)|maximum context length|too many tokens|context_length_exceeded|input is too long/i.test(
+    reason,
+  );
+}
+
 export function isSessionLost(reason: string): boolean {
   return /no conversation found|(session|conversation|thread).{0,40}(not found|expired|missing|does not exist|unknown)|could not resume|failed to resume|invalid session/i.test(reason);
 }
