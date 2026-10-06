@@ -66,6 +66,12 @@ describe("auto routing", () => {
     expect(selected?.payload).toMatchObject({ agent: "agy", requires: ["frontend"], reason: expect.stringContaining("has frontend") });
   });
 
+  it("never routes to a plain command agent, even the cheapest", async () => {
+    const shell = { ...agent("shell", [], "low"), adapter: "generic-cli" };
+    const { task, runnerId } = await setup({ agent: "auto" }, [shell, agent("claude", ["typescript"], "high")]);
+    expect((await claim(runnerId))!.task).toMatchObject({ id: task.id, agent: "claude" });
+  });
+
   it("follows the project's routing policy", async () => {
     const { runnerId } = await setup({ agent: "auto", requires: ["backend"] }, AGENTS, "cost");
     expect((await claim(runnerId))!.task.agent).toBe("codex");

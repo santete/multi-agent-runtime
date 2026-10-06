@@ -2030,6 +2030,8 @@ export class Store {
         const allowed = candidateProject.allowedAgents;
         const choice = chooseAgent(
           usable
+            // A plain command (generic-cli) runs the objective as a shell command: only when asked for by name.
+            .filter((a) => a.adapter !== "generic-cli")
             .filter((a) => !allowed.length || allowed.includes(a.id))
             .map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
           { requires: candidate.requires, excluded: candidate.excludedAgents },

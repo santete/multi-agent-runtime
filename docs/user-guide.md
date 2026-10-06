@@ -171,11 +171,15 @@ Bấm **New task** trên trang project:
 
 - **Objective**: agent cần làm gì.
 - **Agent**: một agent cụ thể, hoặc `auto` để scheduler chọn theo skill, độ tin cậy, chi phí và tải. Có thể khai báo agent dự phòng.
+  - Lúc mới cài, các agent chưa có lịch sử nên được coi là tin cậy như nhau, và `auto` sẽ chọn agent có `cost` thấp nhất trong runner config. Việc quan trọng thì chọn agent cụ thể. Muốn giới hạn những agent mà một project được dùng, đặt `PUT /projects/:id/agents {allowedAgents}`.
+  - `auto` không bao giờ chọn agent kiểu lệnh shell (`generic-cli`, như `shell` trong config mẫu). Agent đó chỉ chạy khi được chọn đích danh.
 - **Acceptance criteria**: mỗi dòng một tiêu chí, phải kiểm chứng được. Agent tự báo từng tiêu chí; reviewer chấm lại, và còn tiêu chí chưa đạt thì **không merge được** ([ADR-0034](adr/0034-collaboration-contract.md)). Mục *More of the contract* có thêm expected output, constraints, inputs.
 - **Area**: các file hoặc glob task sẽ sửa. Hai task có area chồng nhau thì chạy lần lượt, và agent ghi ra ngoài area của mình sang vùng của task khác sẽ cần người duyệt ([ADR-0026](adr/0026-path-ownership.md)).
 - **Priority**, **Depends on**.
 
 ### Từ một mục tiêu (plan)
+
+Việc lớn hoặc còn mơ hồ ("đọc dự án, xác định phần còn thiếu, lên kế hoạch") nên đi qua **plan**, không nên làm thành một task. Một task chỉ trả về được tóm tắt và danh sách việc còn lại. Còn plan chia goal thành các task có contract riêng (tiêu chí, area, phụ thuộc), mỗi task được giao, kiểm chứng và review riêng.
 
 Bấm **New plan** và mô tả goal. Luồng diễn ra như sau:
 1. Agent planner đọc code và chia goal thành các task, mỗi task có contract riêng.
