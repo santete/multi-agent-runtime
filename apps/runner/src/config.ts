@@ -81,6 +81,7 @@ export const runnerConfig = z.object({
 export type RunnerConfig = z.infer<typeof runnerConfig>;
 export type RunnerConfigInput = z.input<typeof runnerConfig>;
 export type AgentConfig = z.infer<typeof agentConfig>;
+const agentConfigSchema = agentConfig;
 
 /**
  * Reads the runner config from where the command was run (falling back to
@@ -104,6 +105,29 @@ export async function loadConfig(path: string): Promise<RunnerConfigInput> {
     throw new Error(`Runner config ${file}: ${issue.path.join(".") || "(root)"}: ${issue.message}.`);
   }
   return typeof config.home === "string" ? { ...config, home: resolve(dirname(file), config.home) } : config;
+}
+
+/**
+ * Leaves out the agents whose CLI cannot be found on this machine (e.g. an
+ * example path like C:/Users/<you>/... left in the config): offering them would
+ * only make every task routed to them fail. Returns the config to run and the
+ * agents left out with their command.
+ */
+export function availableAgents(
+  config: RunnerConfigInput,
+  exists: (command: string) => boolean,
+): { config: RunnerConfigInput; missing: Array<{ agent: string; command: string }> } {
+  const missing: Array<{ agent: string; command: string }> = [];
+  const agents = Object.fromEntries(
+    Object.entries(config.agents).filter(([agent, agentConfig]) => {
+      const parsed = agentConfigSchema.parse(agentConfig);
+      const command = createAdapter(parsed, undefined, agent).buildCommand({ workspace: ".", prompt: "", objective: "", permissionProfile: "edit" }).command;
+      if (exists(command)) return true;
+      missing.push({ agent, command });
+      return false;
+    }),
+  );
+  return { config: { ...config, agents }, missing };
 }
 
 /** The isolated profile directory of an agent. */

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { availableAgents, loadConfig } from "../src/config.js";
 
 const config = { controlPlaneUrl: "http://127.0.0.1:7700", name: "dev", home: "./.runner", agents: { shell: { adapter: "generic-cli", command: "bash" } } };
 
@@ -38,5 +38,23 @@ describe("loadConfig", () => {
     await expect(loadConfig(join(dir, "bad.json"))).rejects.toThrow(/bad\.json: controlPlaneUrl: /);
     writeFileSync(join(dir, "broken.json"), "{");
     await expect(loadConfig(join(dir, "broken.json"))).rejects.toThrow(/is not valid JSON/);
+  });
+});
+
+describe("availableAgents", () => {
+  it("leaves out agents whose CLI is not on this machine, such as an example path left in", () => {
+    const { config: kept, missing } = availableAgents(
+      {
+        ...config,
+        agents: {
+          "claude-code": { adapter: "claude-code" },
+          qoder: { adapter: "qoder", executable: "C:/Users/<you>/.qoder/bin/qodercli/qodercli.exe" },
+          shell: { adapter: "generic-cli", command: "bash" },
+        },
+      },
+      (command) => command === "claude" || command === "bash",
+    );
+    expect(Object.keys(kept.agents)).toEqual(["claude-code", "shell"]);
+    expect(missing).toEqual([{ agent: "qoder", command: "C:/Users/<you>/.qoder/bin/qodercli/qodercli.exe" }]);
   });
 });

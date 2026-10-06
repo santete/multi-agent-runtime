@@ -232,6 +232,8 @@ try {
   await step("the agent works, validation passes, the task waits for review with its next step", async () => {
     await sees("Approve & merge", 120_000);
     await sees("journey.txt exists");
+    // The page says whose turn it is.
+    await sees("Your turn: read the contract checklist");
   });
 
   await step("the Inbox lists the work to review and leads to it", async () => {
@@ -295,6 +297,9 @@ try {
     await click("Approve and create tasks");
     // The plan page says what happens next.
     await sees("Approved: 2 tasks were created");
+    // The second task's page says what it waits for.
+    await page.getByRole("link", { name: "JRN-5" }).first().click();
+    await sees("Waits for JRN-4");
   });
 
   for (const [n, file] of [
