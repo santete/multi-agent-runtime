@@ -52,6 +52,12 @@ pnpm test
 pnpm typecheck
 ```
 
+The user journey test drives the dashboard in a real browser (Edge or Chrome) against a real control plane and runner, with a scripted agent and a local Git origin: create a project, configure it, give a task, review it, merge it, handle a refused call, plan a goal and see it through. Every step checks that the page shows the next thing to do.
+
+```sh
+pnpm --filter @mar/web build && pnpm --filter @mar/web journey   # KEEP=1 keeps screenshots, HEADED=1 shows the browser
+```
+
 ## Run locally
 
 ```sh
@@ -109,6 +115,10 @@ curl -s localhost:7700/tasks/<taskId>/events
 | GET | `/approvals?status=pending`, `/tasks/:id/approvals` | approval requests for risky actions |
 | GET | `/decisions?status=&taskId=` | questions agents could not decide alone; `POST /decisions/:id/answer {answer}` resumes the agent ([ADR-0024](docs/adr/0024-human-as-executor.md)) |
 | GET | `/human-tasks` | READY tasks for `agent: "human"`; `POST /tasks/:id/done {summary}` completes one |
+| GET | `/waiting` | plans waiting for approval and delivered tasks waiting for a person's review (the Inbox) |
+| POST | `/tasks/:id/merged` | `{sha?}`: a person merged an approved branch that had no pull request (no Git provider for the repository); dependent tasks start |
+| GET | `/projects/:id/delivery` | `{pullRequests, reason?}`: whether approved work is merged through pull requests |
+| PUT | `/projects/:id/general` | `{name, defaultBranch, maxParallel}` |
 | GET | `/stuck-tasks` | tasks waiting for a person with nothing to approve or answer (a refused call), with the reasons; retry or cancel them. Cancelling or retrying a task withdraws its pending approvals and questions |
 | POST | `/approvals/:id/approve`, `/approvals/:id/reject` | decide an approval (`{comment?}`) |
 | GET | `/tasks/:id/executions` | execution attempts |

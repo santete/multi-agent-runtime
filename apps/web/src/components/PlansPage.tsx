@@ -294,7 +294,20 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
           )}
         </Section>
       )}
-      {plan.status === "failed" && <div className="error">The planner did not produce a usable plan. See its task for details.</div>}
+      {plan.status === "failed" && (
+        <div className="error">
+          The planner did not produce a usable plan. See{" "}
+          {plan.plannerTaskId ? <a href={href.task(plan.plannerTaskId)}>its task</a> : "its task"} for why, then start a new plan from the
+          project page (the Plans tab or New plan), maybe with another planner agent.
+        </div>
+      )}
+      {plan.status === "approved" && (
+        <div className="notice success">
+          Approved: {plan.createdTasks.length} task{plan.createdTasks.length === 1 ? " was" : "s were"} created and start as soon as their
+          dependencies are merged. Follow them on the <a href={href.project(plan.projectId)}>board</a>; each one comes to your{" "}
+          <a href={href.approvals()}>Inbox</a> when it needs you (a review, a question, a merge).
+        </div>
+      )}
       {plan.status === "revised" && revision && (
         <p className="small">
           Sent back to the planner: <a href={href.plan(revision.id)}>see the revised plan</a>.

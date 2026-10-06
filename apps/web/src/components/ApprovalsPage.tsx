@@ -4,7 +4,7 @@ import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
-import { DecisionCard, HumanTaskCard, StuckTaskCard } from "./HumanWork.js";
+import { DecisionCard, HumanTaskCard, PlanWaitingCard, ReviewWaitingCard, StuckTaskCard } from "./HumanWork.js";
 import { Empty, ErrorBox, Loading, Pill, Section } from "./ui.js";
 
 export function ApprovalsPage({ actor }: { actor: ActorDto }) {
@@ -18,11 +18,30 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
   const [humanTasks, , reloadHuman] = useLiveQuery(api.humanTasks, [], isHumanWork);
   const isStuckChange = (e: { type: string; payload: Record<string, unknown> }) =>
     isApproval(e) || e.type.startsWith("Decision") || (e.type === "TaskStateChanged" && (e.payload.to === "WAITING_FOR_HUMAN" || e.payload.from === "WAITING_FOR_HUMAN"));
-  const [stuck, , reloadStuck] = useLiveQuery(api.stuckTasks, [], isStuckChange);
+  const [stuck, , reloadStuck] = useLiveQuery(api.stuckTasks, [], (e) => isStuckChange(e) || (e.type === "TaskStateChanged" && (e.payload.to === "BLOCKED" || e.payload.from === "BLOCKED")));
+  const [waiting] = useLiveQuery(api.waiting, [], (e) => e.type.startsWith("Plan") || e.type === "TaskStateChanged");
+  const nothing =
+    !pending?.length && !questions?.length && !humanTasks?.length && !stuck?.length && !waiting?.plans.length && !waiting?.reviews.length;
 
   return (
     <div className="page">
       <h1>Inbox</h1>
+      <p className="muted">Everything that waits for a person, across projects.</p>
+      {nothing && pending && <Empty>Nothing waits for you. Agents are working, or there is no work yet.</Empty>}
+      {waiting && waiting.plans.length > 0 && (
+        <Section title={`Plans to approve (${waiting.plans.length})`}>
+          {waiting.plans.map((p) => (
+            <PlanWaitingCard key={p.id} plan={p} />
+          ))}
+        </Section>
+      )}
+      {waiting && waiting.reviews.length > 0 && (
+        <Section title={`Work to review (${waiting.reviews.length})`}>
+          {waiting.reviews.map((t) => (
+            <ReviewWaitingCard key={t.id} task={t} />
+          ))}
+        </Section>
+      )}
       {questions && questions.length > 0 && (
         <Section title={`Questions from agents (${questions.length})`}>
           {questions.map((d) => (
@@ -38,19 +57,19 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
         </Section>
       )}
       {stuck && stuck.length > 0 && (
-        <Section title={`Stopped, nothing to approve (${stuck.length})`}>
+        <Section title={`Stopped: needs you to act (${stuck.length})`}>
           {stuck.map((s) => (
             <StuckTaskCard key={s.task.id} stuck={s} actor={actor} onDone={reloadStuck} />
           ))}
         </Section>
       )}
-      <h2>Approvals</h2>
+      <h2>Risky actions</h2>
       <p className="muted">
         Risky actions agents tried to take. By default HIGH risk needs a senior and CRITICAL actions (pushes, credentials, infrastructure)
         are never approvable; a project's policy can change who approves what.
       </p>
       <ErrorBox error={error} />
-      <Section title={`Waiting (${pending?.length ?? 0})`}>
+      <Section title={`Waiting for approval (${pending?.length ?? 0})`}>
         {!pending ? (
           <Loading />
         ) : pending.length === 0 ? (

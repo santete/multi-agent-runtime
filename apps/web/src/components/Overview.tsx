@@ -6,6 +6,7 @@ import { COLUMNS, groupByColumn } from "../lib/model.js";
 import { href } from "../lib/router.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { NewProjectDialog } from "./NewProjectDialog.js";
+import { useWaitingCount } from "../lib/waiting.js";
 import { Empty, ErrorBox, Loading, Section } from "./ui.js";
 
 type ProjectSummary = { project: ProjectDto; tasks: TaskDto[] };
@@ -20,7 +21,7 @@ export function Overview({ actor }: { actor: ActorDto }) {
   const canCreate = actor.role === "owner";
   const [summaries, error] = useLiveQuery(loadSummaries, [], (e) => e.type === "TaskStateChanged" || e.type === "TaskCreated" || e.type === "ProjectCreated");
   const [runners] = useLiveQuery(api.runners, [], (e) => e.type === "RunnerRegistered" || e.type === "ExecutionAssigned" || e.type === "AgentFinished");
-  const [pending] = useLiveQuery(() => api.approvals("pending"), [], (e) => e.type.startsWith("Approval"));
+  const waiting = useWaitingCount();
 
   const online = runners?.filter((r) => r.online) ?? [];
   const working = runners?.flatMap((r) => r.activeExecutions) ?? [];
@@ -46,11 +47,19 @@ export function Overview({ actor }: { actor: ActorDto }) {
           <span className="stat-value">{working.length}</span>
           <span className="stat-label">agents working</span>
         </a>
-        <a className={`stat ${pending?.length ? "stat-attention" : ""}`} href={href.approvals()}>
-          <span className="stat-value">{pending?.length ?? 0}</span>
-          <span className="stat-label">approvals waiting</span>
+        <a className={`stat ${waiting ? "stat-attention" : ""}`} href={href.approvals()}>
+          <span className="stat-value">{waiting ?? 0}</span>
+          <span className="stat-label">waiting for you</span>
         </a>
       </div>
+      {runners && online.length === 0 && (
+        <div className="notice warning">
+          <strong>No runner is online</strong>, so nothing will run. Start one on a machine where the agent CLIs are installed and signed in,
+          from the repository root:
+          <pre className="code small">{"copy apps\\runner\\runner.config.example.json runner.config.json\npnpm --filter @mar/runner start runner.config.json"}</pre>
+          Keep only the agents installed on that machine in <span className="mono">runner.config.json</span>. See the user guide, section 2.
+        </div>
+      )}
 
       <Section title="Projects">
         <ErrorBox error={error} />

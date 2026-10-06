@@ -1,4 +1,4 @@
-import type { ActorDto, DecisionDto, StuckTaskDto, TaskDto } from "@mar/core";
+import type { ActorDto, DecisionDto, PlanDto, StuckTaskDto, TaskDto } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { timeAgo } from "../lib/model.js";
@@ -116,7 +116,8 @@ export function HumanTaskCard({ task, actor, onDone, showTask = false }: { task:
  * starts a new attempt; cancel ends the task.
  */
 export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; actor: ActorDto; onDone: () => void }) {
-  const { task, reasons } = stuck;
+  const { task, reasons, manualMerge } = stuck;
+  const [sha, setSha] = useState("");
   const [error, setError] = useState<Error>();
   const [busy, setBusy] = useState(false);
   const act = (call: () => Promise<unknown>) => async () => {
@@ -134,7 +135,7 @@ export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; a
   return (
     <div className="card decision">
       <div className="card-head">
-        <Pill tone="warning">stopped</Pill>
+        <Pill tone={task.state === "BLOCKED" ? "danger" : "warning"}>{manualMerge ? "merge by hand" : task.state === "BLOCKED" ? "blocked" : "stopped"}</Pill>
         <a className="mono" href={href.task(task.id)}>
           {task.key}
         </a>
@@ -143,9 +144,30 @@ export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; a
           <span className="chip">{task.agent}</span> {timeAgo(task.updatedAt)}
         </span>
       </div>
-      {reasons.length ? (
+      {manualMerge ? (
         <>
-          <p className="small">Refused calls in the last attempt:</p>
+          <p className="small">
+            Approved, but it cannot be merged automatically: {manualMerge.reason}. Merge branch <span className="mono">{manualMerge.branch}</span>{" "}
+            into <span className="mono">{manualMerge.base}</span> yourself (a pull request on the host, or locally), then confirm here. Tasks
+            that depend on it start after that.
+          </p>
+          <pre className="code small">{`git fetch origin\ngit checkout ${manualMerge.base} && git pull\ngit merge --no-ff origin/${manualMerge.branch}\ngit push origin ${manualMerge.base}`}</pre>
+          {canAct(actor) && (
+            <div className="actions left">
+              <input className="mono" value={sha} onChange={(e) => setSha(e.target.value)} placeholder="merge commit (optional)" />
+              <button className="primary" disabled={busy} onClick={act(() => api.markMerged(task.id, sha.trim() || undefined))}>
+                I merged it
+              </button>
+              <button className="danger" disabled={busy} onClick={act(() => api.cancel(task.id))}>
+                Cancel task
+              </button>
+            </div>
+          )}
+          <ErrorBox error={error} />
+        </>
+      ) : reasons.length ? (
+        <>
+          <p className="small">{task.state === "BLOCKED" ? "It failed too often:" : "Refused calls in the last attempt:"}</p>
           <ul className="small mono">
             {reasons.map((r) => (
               <li key={r}>{r}</li>
@@ -155,7 +177,7 @@ export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; a
       ) : (
         <p className="muted small">The last attempt asked for a person; see the task page.</p>
       )}
-      {canAct(actor) && (
+      {!manualMerge && canAct(actor) && (
         <div className="actions left">
           <button className="primary" disabled={busy} onClick={act(() => api.retry(task.id))}>
             Retry
@@ -165,7 +187,57 @@ export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; a
           </button>
         </div>
       )}
-      <ErrorBox error={error} />
+      {!manualMerge && <ErrorBox error={error} />}
+    </div>
+  );
+}
+
+/** A plan a planner proposed: the person decides on its page. */
+export function PlanWaitingCard({ plan }: { plan: PlanDto }) {
+  const tasks = plan.proposal?.tasks.length ?? 0;
+  return (
+    <div className="card decision">
+      <div className="card-head">
+        <Pill tone="attention">plan</Pill>
+        <a href={href.plan(plan.id)}>{plan.goal.length > 120 ? `${plan.goal.slice(0, 120)}…` : plan.goal}</a>
+        <span className="muted small">
+          {tasks} task{tasks === 1 ? "" : "s"} proposed by <span className="chip">{plan.plannerAgent}</span> {timeAgo(plan.createdAt)}
+        </span>
+      </div>
+      {plan.proposal?.summary && <p className="small prose">{plan.proposal.summary}</p>}
+      <div className="actions left">
+        <a className="button primary" href={href.plan(plan.id)}>
+          Review the plan
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/** Validated work waiting for a person's review. */
+export function ReviewWaitingCard({ task }: { task: TaskDto }) {
+  return (
+    <div className="card decision">
+      <div className="card-head">
+        <Pill tone="attention">review</Pill>
+        <a className="mono" href={href.task(task.id)}>
+          {task.key}
+        </a>
+        <span>{task.title}</span>
+        <span className="muted small">
+          by <span className="chip">{task.agent}</span> {timeAgo(task.updatedAt)}
+        </span>
+        {task.pullRequestUrl && (
+          <a className="small" href={task.pullRequestUrl} target="_blank" rel="noreferrer">
+            PR #{task.pullRequestNumber}
+          </a>
+        )}
+      </div>
+      <div className="actions left">
+        <a className="button primary" href={href.task(task.id)}>
+          Review
+        </a>
+      </div>
     </div>
   );
 }

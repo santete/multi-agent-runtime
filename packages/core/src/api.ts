@@ -411,6 +411,24 @@ export interface StuckTaskDto {
   task: TaskDto;
   /** The refused calls of its last attempt ("tool: reason"). */
   reasons: string[];
+  /** Approved, but nothing can merge it: a person merges this branch, then marks the task merged. */
+  manualMerge?: { branch: string; base: string; reason: string };
+}
+
+/** Work that waits for a person besides approvals, questions and stuck tasks (the Inbox). */
+export interface WaitingWorkDto {
+  /** Plans a planner proposed, to approve, revise or reject. */
+  plans: PlanDto[];
+  /** Delivered tasks waiting for a person's review (agent reviews, if any, are done). */
+  reviews: TaskDto[];
+}
+
+/** How approved work of a project reaches its base branch. */
+export interface DeliveryInfo {
+  /** A Git provider (GITHUB_TOKEN / GITLAB_TOKEN) handles the repository: pull requests are opened and merged. */
+  pullRequests: boolean;
+  /** Why not, for people. */
+  reason?: string;
 }
 
 /** `withdrawn`: the task was cancelled or retried before anyone decided. */

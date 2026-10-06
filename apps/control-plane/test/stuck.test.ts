@@ -7,6 +7,7 @@ import { buildApp, createPgliteDb, type Db, migrate, Store } from "../src/index.
 
 let db: Db;
 let app: FastifyInstance;
+let store: Store;
 let project: ProjectDto;
 let runnerId: string;
 
@@ -17,13 +18,14 @@ beforeAll(async () => {
 afterAll(() => db.close());
 beforeEach(async () => {
   await db.query("truncate events, approvals, decisions, artifacts, executions, tasks, runners, projects restart identity cascade");
-  app = buildApp(new Store(db));
+  store = new Store(db);
+  app = buildApp(store);
   project = (await call<ProjectDto>("POST", "/projects", { key: "PAY", name: "p", repoUrl: "https://github.com/o/r.git" })).body;
   runnerId = (await call<{ runnerId: string }>("POST", "/runners/register", { name: "box", agents: [agent("cmd")] })).body.runnerId;
 });
 afterEach(() => app.close());
 
-async function call<T>(method: "GET" | "POST", url: string, payload?: unknown, headers: Record<string, string> = {}) {
+async function call<T = unknown>(method: "GET" | "POST", url: string, payload?: unknown, headers: Record<string, string> = {}) {
   const res = await app.inject({ method, url, headers, ...(payload !== undefined && { payload: payload as object }) });
   return { status: res.statusCode, body: (res.body ? res.json() : undefined) as T };
 }
@@ -83,7 +85,7 @@ describe("stuck tasks", () => {
 
     const stuck = (await call<StuckTaskDto[]>("GET", "/stuck-tasks")).body;
     expect(stuck.map((s) => s.task.key)).toEqual(["PAY-1"]);
-    expect(stuck[0]!.reasons).toEqual([expect.stringMatching(/^shell_command: \[CRITICAL\] /), "write_file: Security hook failed (failClosed)"]);
+    expect(stuck[0]!.reasons).toEqual([expect.stringMatching(/^shell_command: git push origin main — \[CRITICAL\] /), "write_file: Security hook failed (failClosed)"]);
 
     // Retrying takes it out of the list.
     await call("POST", `/tasks/${task.id}/retry`);
@@ -110,5 +112,64 @@ describe("withdrawing what nobody answered", () => {
     await call("POST", `/tasks/${second.task.id}/retry`);
     expect((await call<DecisionDto[]>("GET", "/decisions?status=pending")).body).toEqual([]);
     expect(await state(second.task.id)).toBe("READY");
+  });
+});
+
+describe("approved work without a pull request", () => {
+  async function approveDelivered(commitSha: string | null): Promise<TaskDto> {
+    const { task, claim } = await newTask();
+    await complete(claim, []);
+    await call("POST", `/executions/${claim.execution.id}/validation`, { passed: true, steps: [], changedFiles: [] });
+    await call("POST", `/executions/${claim.execution.id}/delivery`, { branch: "task/PAY-1", commitSha, changedFiles: commitSha ? ["src/a.ts"] : [] });
+    await call("POST", `/tasks/${task.id}/review`, { decision: "approve" });
+    return task;
+  }
+
+  it("is never called merged: a person merges the branch, then dependent work starts", async () => {
+    const task = await approveDelivered("abc1234");
+    const next = (await call<TaskDto>("POST", `/projects/${project.id}/tasks`, { title: "Next", objective: "o", agent: "cmd", dependsOn: [task.id] })).body;
+    expect((await call("GET", `/projects/${project.id}/delivery`)).body).toEqual({
+      pullRequests: false,
+      reason: "no Git provider is configured (GITHUB_TOKEN or GITLAB_TOKEN)",
+    });
+
+    await store.processMergeQueue();
+    expect(await state(task.id)).toBe("WAITING_FOR_HUMAN");
+    expect(await state(next.id)).toBe("CREATED");
+    const stuck = (await call<StuckTaskDto[]>("GET", "/stuck-tasks")).body;
+    expect(stuck).toEqual([
+      expect.objectContaining({ manualMerge: { branch: "task/PAY-1", base: "main", reason: expect.stringContaining("no Git provider") } }),
+    ]);
+    // Only the task waiting for its merge can be marked merged, and it cannot be retried (that would redo it).
+    expect((await call("POST", `/tasks/${next.id}/merged`)).status).toBe(409);
+    expect((await call("POST", `/tasks/${task.id}/retry`)).status).toBe(409);
+
+    const merged = await call<TaskDto>("POST", `/tasks/${task.id}/merged`, { sha: "def5678" });
+    expect(merged.body.state).toBe("COMPLETED");
+    expect(await state(next.id)).toBe("READY");
+    expect((await call<StuckTaskDto[]>("GET", "/stuck-tasks")).body).toEqual([]);
+  });
+
+  it("completes approved work that changed nothing", async () => {
+    const task = await approveDelivered(null);
+    await store.processMergeQueue();
+    expect(await state(task.id)).toBe("COMPLETED");
+  });
+});
+
+describe("approving before the branch is pushed", () => {
+  it("waits for the delivery instead of merging nothing", async () => {
+    const { task, claim } = await newTask();
+    await complete(claim, []);
+    await call("POST", `/executions/${claim.execution.id}/validation`, { passed: true, steps: [], changedFiles: [] });
+    // A fast person approves while the runner is still pushing.
+    await call("POST", `/tasks/${task.id}/review`, { decision: "approve" });
+    await store.processMergeQueue();
+    expect(await state(task.id)).toBe("APPROVED");
+
+    await call("POST", `/executions/${claim.execution.id}/delivery`, { branch: "task/PAY-1", commitSha: "abc1234", changedFiles: ["src/a.ts"] });
+    await store.processMergeQueue();
+    // No provider: the pushed work now waits for a person to merge it, it is not lost.
+    expect(await state(task.id)).toBe("WAITING_FOR_HUMAN");
   });
 });

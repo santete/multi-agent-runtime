@@ -70,6 +70,8 @@ async function finish(c: ClaimResponse, notes: unknown[], passed = true) {
 async function approveAndMerge(taskId: string) {
   await call("POST", `/tasks/${taskId}/review`, { decision: "approve" });
   await store.processMergeQueue();
+  // No Git provider here: the branch is merged by a person.
+  await call("POST", `/tasks/${taskId}/merged`);
 }
 
 describe("knowledge base", () => {
@@ -87,7 +89,7 @@ describe("knowledge base", () => {
     // Not shared before the work is merged.
     await createTask("Void");
     await approveAndMerge(first.id);
-    expect(await knowledge("accepted")).toEqual([expect.objectContaining({ title: cents.title, decidedBy: "platform" })]);
+    expect(await knowledge("accepted")).toEqual([expect.objectContaining({ title: cents.title, decidedBy: "local" })]);
 
     const next = await claim();
     expect(next.task.key).toBe("PAY-2");
