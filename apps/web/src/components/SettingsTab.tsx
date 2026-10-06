@@ -135,7 +135,7 @@ function ReviewSettings({ project, owner, onSaved, agents }: SectionProps & { ag
     <SettingsCard
       title="Review"
       owner={owner}
-      help="Validated work goes to review. Pick agents to review it first (one different from the task's agent is chosen); without reviewers, a person reviews every task on its page."
+      help="Validated work goes to review. Pick agents to review it before you: the first checked agent that an online runner offers (never the task's own agent) reviews, the others take over if it is unavailable. One agent review per task; without reviewers, you review every task on its page."
       save={async () => onSaved(await api.setReview(project.id, { reviewAgents: reviewers, autoApproveOnAgentReview: reviewers.length > 0 && autoApprove }))}
     >
       {offered.length === 0 ? (
