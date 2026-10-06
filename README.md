@@ -68,7 +68,7 @@ pnpm --filter @mar/control-plane start
 cp apps/runner/runner.config.example.json runner.config.json
 pnpm --filter @mar/runner start runner.config.json
 
-# 3. Create a project and a task
+# 3. Create a project (or use "New project" on the dashboard) and a task
 curl -s -X POST localhost:7700/projects -H 'content-type: application/json' \
   -d '{"key":"DEMO","name":"Demo","repoUrl":"https://github.com/<you>/<repo>.git"}'
 curl -s -X POST localhost:7700/projects/<projectId>/tasks -H 'content-type: application/json' \

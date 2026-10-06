@@ -61,6 +61,17 @@ $env:MAR_USERS_FILE = "./users.json"
 pnpm --filter @mar/control-plane start
 ```
 
+cmd (Windows):
+
+```bat
+for /f %i in ('gh auth token') do set GITHUB_TOKEN=%i
+set DATABASE_URL=postgres://mar:mar@localhost:5432/mar
+set MAR_USERS_FILE=./users.json
+pnpm --filter @mar/control-plane start
+```
+
+Trong cmd, `for /f` chạy lệnh `gh auth token` rồi gán kết quả vào biến (viết `%%i` nếu đặt trong file `.bat`). `GITHUB_TOKEN` lấy từ GitHub CLI đã đăng nhập (`gh auth login`), nên không phải tạo hay dán token ở đâu. Thiếu nó thì branch vẫn được push, chỉ là không có PR.
+
 bash (Git Bash, macOS, Linux):
 
 ```sh
@@ -137,7 +148,7 @@ Trong `runner.config.json`, mỗi agent khai báo:
 
 ## 3. Tạo và cấu hình project
 
-Tạo project qua API (`POST /projects` với `key`, `name`, `repoUrl`, `validation`), rồi cấu hình trên dashboard:
+Owner bấm **New project** trên trang Overview: điền tên, key (tiền tố của mã task, ví dụ `PAY`), repository (`owner/repo` trên GitHub hoặc URL clone) và các lệnh validation. Cũng có thể tạo qua API (`POST /projects` với `key`, `name`, `repoUrl`, `validation`). Sau đó cấu hình tiếp trên trang project:
 
 | Ở đâu | Cấu hình gì |
 |---|---|
