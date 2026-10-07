@@ -32,7 +32,7 @@ export const MAX_PLAN_TASKS = 20;
 export const PLAN_SCHEMA = {
   type: "object",
   properties: {
-    summary: { type: "string", description: "How the goal is broken down and why, in a few sentences." },
+    summary: { type: "string", description: "How the goal is broken down and why: 3 to 7 short lines, each starting with \"- \" (what is already done, what is missing, the order, the risks, what a person must decide). No long paragraph." },
     tasks: {
       type: "array",
       description: `At most ${MAX_PLAN_TASKS} tasks, each small enough for one agent session and one pull request.`,
