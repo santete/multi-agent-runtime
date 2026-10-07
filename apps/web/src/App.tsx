@@ -27,12 +27,56 @@ export function App() {
   return <Shell actor={actor} onLogout={() => (setToken(null), setActor(null))} />;
 }
 
+const ICONS: Record<string, string> = {
+  overview: "M3 3h7v7H3zM14 3h7v4h-7zM14 11h7v10h-7zM3 14h7v7H3z",
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z",
+  agents: "M12 8V4H8M4 12a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM9 15v.01M15 15v.01",
+  marketplace: "M3 9l1-5h16l1 5M3 9v11h18V9M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0",
+  metrics: "M4 20V10M10 20V4M16 20v-7M22 20H2",
+  project: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+};
+
+function NavIcon({ name }: { name: keyof typeof ICONS }) {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d={ICONS[name]} />
+    </svg>
+  );
+}
+
+type Theme = "dark" | "light" | "system";
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const t = localStorage.getItem("mar-theme");
+      return t === "dark" || t === "light" ? t : "system";
+    } catch {
+      return "system";
+    }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "system") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", theme);
+    try {
+      if (theme === "system") localStorage.removeItem("mar-theme");
+      else localStorage.setItem("mar-theme", theme);
+    } catch {
+      /* storage unavailable: the choice just lasts for this visit */
+    }
+  }, [theme]);
+  const cycle = () => setTheme((t) => (t === "system" ? "dark" : t === "dark" ? "light" : "system"));
+  return [theme, cycle];
+}
+
 function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
   const route = useRoute();
   const status = useLiveStatus();
   const [projects] = useLiveQuery(api.projects, [], (e) => e.type === "ProjectCreated");
   // The inbox: everything that waits for a person (approvals, questions, plans, reviews, stuck work).
   const inbox = useWaitingCount() ?? 0;
+  const [theme, cycleTheme] = useTheme();
 
   return (
     <div className="shell">
@@ -42,24 +86,24 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
         </a>
         <nav>
           <a className={route.page === "overview" ? "active" : ""} href={href.overview()}>
-            Overview
+            <NavIcon name="overview" /> Overview
           </a>
           <a className={route.page === "approvals" ? "active" : ""} href={href.approvals()}>
-            Inbox {inbox ? <span className="count">{inbox}</span> : null}
+            <NavIcon name="inbox" /> Inbox {inbox ? <span className="count">{inbox}</span> : null}
           </a>
           <a className={route.page === "agents" ? "active" : ""} href={href.agents()}>
-            Agents
+            <NavIcon name="agents" /> Agents
           </a>
           <a className={route.page === "marketplace" ? "active" : ""} href={href.marketplace()}>
-            Marketplace
+            <NavIcon name="marketplace" /> Marketplace
           </a>
           <a className={route.page === "metrics" ? "active" : ""} href={href.metrics()}>
-            Metrics
+            <NavIcon name="metrics" /> Metrics
           </a>
           <div className="nav-title">Projects</div>
           {(projects ?? []).map((p) => (
             <a key={p.id} className={route.page === "project" && route.id === p.id ? "active" : ""} href={href.project(p.id)}>
-              <span className="mono">{p.key}</span> {p.name}
+              <NavIcon name="project" /> <span className="mono">{p.key}</span> {p.name}
             </a>
           ))}
         </nav>
@@ -68,6 +112,9 @@ function Shell({ actor, onLogout }: { actor: ActorDto; onLogout: () => void }) {
           <span>
             {actor.name} <span className="muted">· {actor.role}{actor.org && actor.org !== "*" ? ` · ${actor.org}` : ""}</span>
           </span>
+          <button className="theme-toggle" onClick={cycleTheme} title={"Theme: " + theme + " (click to change)"} aria-label={"Theme: " + theme}>
+            {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+          </button>
           {actor.name !== "local" && (
             <button className="link" onClick={onLogout}>
               Sign out

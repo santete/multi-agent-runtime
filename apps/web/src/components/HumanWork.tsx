@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../lib/api.js";
 import { timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
-import { ErrorBox, Pill } from "./ui.js";
+import { ErrorBox, Pill, Prose } from "./ui.js";
 
 const canAct = (actor: ActorDto) => actor.role !== "viewer" && actor.role !== "runner";
 
@@ -39,7 +39,11 @@ export function DecisionCard({ decision, actor, showTask = false }: { decision: 
         </span>
       </div>
       <p className="decision-question">{decision.question}</p>
-      {decision.context && <p className="muted small prose">{decision.context}</p>}
+      {decision.context && (
+        <div className="muted">
+          <Prose text={decision.context} small collapsible />
+        </div>
+      )}
       {decision.status === "answered" ? (
         <p className="prose">
           <strong>Answer:</strong> {decision.answer} <span className="muted small">— {decision.answeredBy}</span>
@@ -94,7 +98,7 @@ export function HumanTaskCard({ task, actor, onDone, showTask = false }: { task:
         )}
         <strong>{task.title}</strong>
       </div>
-      {showTask && <p className="prose small">{task.objective}</p>}
+      {showTask && <Prose text={task.objective} small collapsible />}
       {canAct(actor) && (
         <>
           <textarea rows={3} placeholder="What you decided or did (the next tasks get this)" value={summary} onChange={(e) => setSummary(e.target.value)} />
@@ -199,12 +203,14 @@ export function PlanWaitingCard({ plan }: { plan: PlanDto }) {
     <div className="card decision">
       <div className="card-head">
         <Pill tone="attention">plan</Pill>
-        <a href={href.plan(plan.id)}>{plan.goal.length > 120 ? `${plan.goal.slice(0, 120)}…` : plan.goal}</a>
         <span className="muted small">
           {tasks} task{tasks === 1 ? "" : "s"} proposed by <span className="chip">{plan.plannerAgent}</span> {timeAgo(plan.createdAt)}
         </span>
       </div>
-      {plan.proposal?.summary && <p className="small prose">{plan.proposal.summary}</p>}
+      <a className="plan-title" href={href.plan(plan.id)}>
+        {plan.goal.split("\n")[0]!.trim()}
+      </a>
+      {plan.proposal?.summary && <Prose text={plan.proposal.summary} small collapsible />}
       <div className="actions left">
         <a className="button primary" href={href.plan(plan.id)}>
           Review the plan

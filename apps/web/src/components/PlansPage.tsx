@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { type Tone, timeAgo } from "../lib/model.js";
-import { planWaves, proseBlocks } from "../lib/prose.js";
+import { planWaves } from "../lib/prose.js";
 import { href } from "../lib/router.js";
-import { Empty, ErrorBox, Loading, Pill, Section } from "./ui.js";
+import { Empty, ErrorBox, Loading, Pill, Prose, Section } from "./ui.js";
 
 const AUTO = "auto";
 const roleRank = { viewer: 0, member: 1, senior: 2, owner: 3, runner: -1 } as const;
@@ -25,25 +25,6 @@ export function PlanStatusBadge({ status }: { status: PlanStatus }) {
 }
 
 const isPlanEvent = (e: { type: string }) => e.type.startsWith("Plan") || e.type === "TaskStateChanged";
-
-/** Long agent-written text as short paragraphs and bullets. */
-function Prose({ text, small }: { text: string; small?: boolean }) {
-  return (
-    <div className={`prose-block${small ? " small" : ""}`}>
-      {proseBlocks(text).map((b, i) =>
-        b.kind === "p" ? (
-          <p key={i}>{b.text}</p>
-        ) : (
-          <ul key={i}>
-            {b.items.map((it, j) => (
-              <li key={j}>{it}</li>
-            ))}
-          </ul>
-        ),
-      )}
-    </div>
-  );
-}
 
 /** Agent ids offered by registered runners. */
 function useAgents(): string[] {
