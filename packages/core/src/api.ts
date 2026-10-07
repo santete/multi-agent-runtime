@@ -812,6 +812,12 @@ export interface MetricRate {
  * Product success metrics (spec §64) over a time window, for a project or
  * everything the caller can see. Definitions: docs/adr/0030-success-metrics.md.
  */
+/** The metrics of consecutive slices of a window, oldest first (the sparklines on the Metrics page). */
+export interface MetricsSeries {
+  days: number;
+  buckets: Array<{ from: string; to: string; metrics: ProductMetrics }>;
+}
+
 export interface ProductMetrics {
   since: string;
   days: number;

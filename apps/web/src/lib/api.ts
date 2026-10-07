@@ -21,6 +21,7 @@ import type {
   PlanningPolicy,
   InstructionDto,
   PutSecretRequest,
+  MetricsSeries,
   ProductMetrics,
   SecretDto,
   StuckTaskDto,
@@ -182,6 +183,8 @@ export const api = {
   putSecret: (projectId: string, name: string, req: PutSecretRequest) => put<SecretDto>(`/projects/${projectId}/secrets/${name}`, req),
   deleteSecret: (projectId: string, name: string) => request<void>("DELETE", `/projects/${projectId}/secrets/${name}`),
   clearCooldown: (runnerId: string, agent: string) => request<void>("DELETE", `/runners/${runnerId}/cooldowns/${encodeURIComponent(agent)}`),
+  metricsSeries: (projectId: string | undefined, days: number) =>
+    get<MetricsSeries>(`/metrics/series?days=${days}${projectId ? `&projectId=${projectId}` : ""}`),
   costs: (projectId: string) => get<CostReport>(`/projects/${projectId}/costs`),
   setBudget: (projectId: string, budget: Budget | null) => put<ProjectDto>(`/projects/${projectId}/budget`, budget),
   setPlanning: (projectId: string, planning: PlanningPolicy) => put<ProjectDto>(`/projects/${projectId}/planning`, planning),

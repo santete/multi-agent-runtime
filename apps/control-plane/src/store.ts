@@ -51,6 +51,7 @@ import {
   type InstructionDto,
   enforceCriteria,
   toContract,
+  type MetricsSeries,
   type ProductMetrics,
   type ExecutionSecret,
   type PutSecretRequest,
@@ -114,7 +115,7 @@ import {
 } from "@mar/core";
 import { meter, withSpan } from "@mar/telemetry";
 import { type Actor, hasRole } from "./auth.js";
-import { computeMetrics } from "./metrics.js";
+import { computeMetrics, computeMetricsSeries } from "./metrics.js";
 import { SecretCipher } from "./secret-cipher.js";
 import type { Db, Queryable } from "./db.js";
 import type { GitProvider, MergeResult, PullRequestStatus } from "./git-provider.js";
@@ -3749,6 +3750,11 @@ export class Store {
   /** Spec §64: the product success metrics over the last `days` days. */
   metrics(scope: { projectId?: string | undefined; org?: string | undefined; days: number }): Promise<ProductMetrics> {
     return computeMetrics(this.db, { ...scope, runnerOnlineSeconds: this.runnerOnlineSeconds });
+  }
+
+  /** The same metrics per slice of the window, oldest first. */
+  metricsSeries(scope: { projectId?: string | undefined; org?: string | undefined; days: number }): Promise<MetricsSeries> {
+    return computeMetricsSeries(this.db, { ...scope, runnerOnlineSeconds: this.runnerOnlineSeconds });
   }
 
   async agentStats(projectId?: string, q: Queryable = this.db, org?: string): Promise<AgentStats[]> {

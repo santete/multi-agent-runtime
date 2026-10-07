@@ -1,4 +1,4 @@
-import type { AgentDescriptor, ClaimResponse, ProductMetrics, ProjectDto, TaskDto } from "@mar/core";
+import type { AgentDescriptor, ClaimResponse, MetricsSeries, ProductMetrics, ProjectDto, TaskDto } from "@mar/core";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp, createPgliteDb, type Db, type GitProvider, migrate, Store } from "../src/index.js";
@@ -155,6 +155,22 @@ describe("success metrics", () => {
     expect(m.engineering.taskSuccess).toMatchObject({ numerator: 1, denominator: 1 });
     expect(m.automation.autonomousCompletion).toMatchObject({ numerator: 1, denominator: 1 });
     expect(m.automation.humanIntervention).toMatchObject({ numerator: 0, denominator: 1 });
+  });
+
+  it("slices the window into buckets, each task counted in exactly one", async () => {
+    const project = (await call<ProjectDto>("POST", "/projects", { key: "PAY", name: "p", repoUrl: "https://github.com/o/r.git" })).body;
+    runnerId = (await call<{ runnerId: string }>("POST", "/runners/register", { name: "r", agents: [agent("dev")] })).body.runnerId;
+    const t = (await call<TaskDto>("POST", `/projects/${project.id}/tasks`, { title: "A", objective: "o", agent: "dev" })).body;
+    await run(await claim());
+    await call("POST", `/tasks/${t.id}/review`, { decision: "approve" });
+    await store.processMergeQueue();
+
+    const s = (await call<MetricsSeries>("GET", `/metrics/series?projectId=${project.id}&days=7`)).body;
+    expect(s.buckets).toHaveLength(7);
+    expect(s.buckets.map((b) => b.metrics.engineering.taskSuccess.denominator)).toEqual([0, 0, 0, 0, 0, 0, 1]);
+    expect(s.buckets.at(-1)!.metrics.engineering.taskSuccess.value).toBe(1);
+    expect(s.buckets[0]!.metrics.engineering.taskSuccess.value).toBeNull();
+    expect((await call<MetricsSeries>("GET", "/metrics/series?days=1")).body.buckets).toHaveLength(12);
   });
 
   it("reports null rates when nothing was measured", async () => {

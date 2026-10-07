@@ -1,8 +1,8 @@
-import type { MetricRate, ProductMetrics } from "@mar/core";
+import type { MetricRate, MetricsSeries, ProductMetrics } from "@mar/core";
 import { useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
-import { ErrorBox, Loading, Section } from "./ui.js";
+import { ErrorBox, Loading, Section, Sparkline } from "./ui.js";
 
 const pct = (r: MetricRate) => (r.value === null ? "—" : `${Math.round(r.value * 100)}%`);
 const duration = (ms: number | null) => {
@@ -12,8 +12,32 @@ const duration = (ms: number | null) => {
   return `${(ms / 3_600_000).toFixed(1)} h`;
 };
 
+type Trend = { values: (number | null)[]; labels: string[] };
+
+const bucketLabel = (b: { from: string; to: string }) => {
+  const day = (s: string) => new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const last = day(new Date(new Date(b.to).getTime() - 1).toISOString());
+  return day(b.from) === last ? last : `${day(b.from)} – ${last}`;
+};
+
+/** One number per slice of the window, read from the series. */
+const trendOf = (series: MetricsSeries | null | undefined, pick: (m: ProductMetrics) => number | null): Trend | undefined =>
+  series ? { values: series.buckets.map((b) => pick(b.metrics)), labels: series.buckets.map(bucketLabel) } : undefined;
+
 /** A rate where lower is better gets the attention colour when it is high. */
-function Rate({ label, rate, lowerIsBetter = false, hint }: { label: string; rate: MetricRate; lowerIsBetter?: boolean; hint: string }) {
+function Rate({
+  label,
+  rate,
+  lowerIsBetter = false,
+  hint,
+  trend,
+}: {
+  label: string;
+  rate: MetricRate;
+  lowerIsBetter?: boolean;
+  hint: string;
+  trend?: Trend | undefined;
+}) {
   const bad = rate.value !== null && (lowerIsBetter ? rate.value > 0.3 : rate.value < 0.5);
   return (
     <div className={`stat ${bad ? "stat-attention" : ""}`} title={hint}>
@@ -21,15 +45,29 @@ function Rate({ label, rate, lowerIsBetter = false, hint }: { label: string; rat
       <div className="stat-label">
         {label} <span className="muted">({rate.numerator}/{rate.denominator})</span>
       </div>
+      {trend && <Sparkline values={trend.values} labels={trend.labels} format={(v) => `${Math.round(v * 100)}%`} />}
     </div>
   );
 }
 
-function Value({ label, value, hint }: { label: string; value: string | number; hint: string }) {
+function Value({
+  label,
+  value,
+  hint,
+  trend,
+  format,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+  trend?: Trend | undefined;
+  format?: (n: number) => string;
+}) {
   return (
     <div className="stat" title={hint}>
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
+      {trend && <Sparkline values={trend.values} labels={trend.labels} {...(format && { format })} />}
     </div>
   );
 }
@@ -44,6 +82,14 @@ export function MetricsPage() {
     [projectId, days],
     (e) => e.type === "TaskStateChanged" && (!projectId || e.projectId === projectId),
   );
+
+  const [series] = useLiveQuery<MetricsSeries>(
+    () => api.metricsSeries(projectId || undefined, days),
+    [projectId, days],
+    (e) => e.type === "TaskStateChanged" && (!projectId || e.projectId === projectId),
+  );
+  const rateTrend = (pick: (m: ProductMetrics) => MetricRate) => trendOf(series, (m) => pick(m).value);
+  const msTrend = (pick: (m: ProductMetrics) => number | null) => trendOf(series, pick);
 
   return (
     <div className="page">
@@ -77,41 +123,41 @@ export function MetricsPage() {
         <>
           <Section title="Engineering">
             <div className="stats">
-              <Rate label="task success" rate={m.engineering.taskSuccess} hint="Finished work tasks that were merged (vs. blocked)" />
-              <Rate label="validation pass" rate={m.engineering.validationPass} hint="Validation runs that passed" />
-              <Rate label="rework" rate={m.engineering.rework} lowerIsBetter hint="Finished tasks that went through rework at least once" />
-              <Rate label="review rejection" rate={m.engineering.reviewRejection} lowerIsBetter hint="Reviews (people and agents) that asked for changes" />
-              <Value label="mean completion" value={duration(m.engineering.meanCompletionMs)} hint="From creation to merge, for merged tasks" />
+              <Rate label="task success" rate={m.engineering.taskSuccess} trend={rateTrend((x) => x.engineering.taskSuccess)} hint="Finished work tasks that were merged (vs. blocked)" />
+              <Rate label="validation pass" rate={m.engineering.validationPass} trend={rateTrend((x) => x.engineering.validationPass)} hint="Validation runs that passed" />
+              <Rate label="rework" rate={m.engineering.rework} trend={rateTrend((x) => x.engineering.rework)} lowerIsBetter hint="Finished tasks that went through rework at least once" />
+              <Rate label="review rejection" rate={m.engineering.reviewRejection} trend={rateTrend((x) => x.engineering.reviewRejection)} lowerIsBetter hint="Reviews (people and agents) that asked for changes" />
+              <Value label="mean completion" value={duration(m.engineering.meanCompletionMs)} trend={msTrend((x) => x.engineering.meanCompletionMs)} format={duration} hint="From creation to merge, for merged tasks" />
             </div>
           </Section>
           <Section title="Automation">
             <div className="stats">
               <Rate
                 label="human intervention"
-                rate={m.automation.humanIntervention}
+                rate={m.automation.humanIntervention} trend={rateTrend((x) => x.automation.humanIntervention)}
                 lowerIsBetter
                 hint="Finished tasks where a person had to do more than review: approvals, answers, retries, instructions, pauses, rejections"
               />
-              <Rate label="auto-resolution" rate={m.automation.autoResolution} hint="Tasks that hit rework or a retry and were merged without a person stepping in" />
-              <Rate label="autonomous completion" rate={m.automation.autonomousCompletion} hint="Merged tasks no person touched, review included" />
+              <Rate label="auto-resolution" rate={m.automation.autoResolution} trend={rateTrend((x) => x.automation.autoResolution)} hint="Tasks that hit rework or a retry and were merged without a person stepping in" />
+              <Rate label="autonomous completion" rate={m.automation.autonomousCompletion} trend={rateTrend((x) => x.automation.autonomousCompletion)} hint="Merged tasks no person touched, review included" />
             </div>
           </Section>
           <Section title="Collaboration">
             <div className="stats">
-              <Rate label="handoff success" rate={m.collaboration.handoffSuccess} hint="Agent runs that ended with a usable handoff" />
-              <Rate label="context reuse" rate={m.collaboration.contextReuse} hint="Work runs that started from shared knowledge or the handoffs of earlier tasks" />
+              <Rate label="handoff success" rate={m.collaboration.handoffSuccess} trend={rateTrend((x) => x.collaboration.handoffSuccess)} hint="Agent runs that ended with a usable handoff" />
+              <Rate label="context reuse" rate={m.collaboration.contextReuse} trend={rateTrend((x) => x.collaboration.contextReuse)} hint="Work runs that started from shared knowledge or the handoffs of earlier tasks" />
               <Rate
                 label="agent-to-agent handoff"
-                rate={m.collaboration.agentToAgentHandoff}
+                rate={m.collaboration.agentToAgentHandoff} trend={rateTrend((x) => x.collaboration.agentToAgentHandoff)}
                 hint="Tasks continuing another agent's work (a dependency done by a different agent) that were merged"
               />
             </div>
           </Section>
           <Section title="Reliability">
             <div className="stats">
-              <Rate label="failure recovery" rate={m.reliability.failureRecovery} hint="Tasks whose agent or runner failed at least once that were still merged" />
-              <Rate label="resume success" rate={m.reliability.resumeSuccess} hint="Runs that resumed an agent session and did not fail" />
-              <Rate label="workspace failures" rate={m.reliability.workspaceFailure} lowerIsBetter hint="Work runs that failed preparing the workspace" />
+              <Rate label="failure recovery" rate={m.reliability.failureRecovery} trend={rateTrend((x) => x.reliability.failureRecovery)} hint="Tasks whose agent or runner failed at least once that were still merged" />
+              <Rate label="resume success" rate={m.reliability.resumeSuccess} trend={rateTrend((x) => x.reliability.resumeSuccess)} hint="Runs that resumed an agent session and did not fail" />
+              <Rate label="workspace failures" rate={m.reliability.workspaceFailure} trend={rateTrend((x) => x.reliability.workspaceFailure)} lowerIsBetter hint="Work runs that failed preparing the workspace" />
             </div>
           </Section>
           <Section title="Platform">
@@ -124,8 +170,8 @@ export function MetricsPage() {
                 hint="Executions running now, and the most at once in the window"
               />
               <Value label="projects" value={m.platform.projectsManaged} hint="Projects managed" />
-              <Value label="queue wait" value={duration(m.platform.meanQueueWaitMs)} hint="Mean time from READY to assigned" />
-              <Value label="dispatch" value={duration(m.platform.meanDispatchMs)} hint="Mean time from assigned to the agent starting (workspace preparation included)" />
+              <Value label="queue wait" value={duration(m.platform.meanQueueWaitMs)} trend={msTrend((x) => x.platform.meanQueueWaitMs)} format={duration} hint="Mean time from READY to assigned" />
+              <Value label="dispatch" value={duration(m.platform.meanDispatchMs)} trend={msTrend((x) => x.platform.meanDispatchMs)} format={duration} hint="Mean time from assigned to the agent starting (workspace preparation included)" />
             </div>
           </Section>
         </>

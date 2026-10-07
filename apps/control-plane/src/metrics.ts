@@ -1,4 +1,4 @@
-import type { MetricRate, ProductMetrics } from "@mar/core";
+import type { MetricRate, MetricsSeries, ProductMetrics } from "@mar/core";
 import type { Queryable } from "./db.js";
 
 /**
@@ -20,17 +20,44 @@ const ms = (d: Date | string) => new Date(d).getTime();
 /** What a person did on a task beyond reviewing it: approvals, answers, retries, instructions, pauses, rejections. */
 const INTERVENTION_EVENTS = new Set(["ApprovalRequested", "DecisionRequested", "InstructionSent", "TaskPauseRequested"]);
 
-export async function computeMetrics(
+/** The metrics of consecutive slices of the last `days` days, oldest first: the trend behind each number. */
+export async function computeMetricsSeries(
   q: Queryable,
   scope: { projectId?: string | undefined; org?: string | undefined; days: number; runnerOnlineSeconds: number },
+): Promise<MetricsSeries> {
+  const buckets = scope.days === 1 ? 12 : Math.min(scope.days, 14);
+  const end = Date.now();
+  const span = (scope.days * 86_400_000) / buckets;
+  const out: MetricsSeries["buckets"] = [];
+  for (let i = 0; i < buckets; i++) {
+    const from = new Date(end - (buckets - i) * span);
+    const until = new Date(i === buckets - 1 ? end + 1 : end - (buckets - i - 1) * span);
+    out.push({ from: from.toISOString(), to: until.toISOString(), metrics: await computeMetrics(q, { ...scope, from, until }) });
+  }
+  return { days: scope.days, buckets: out };
+}
+
+export async function computeMetrics(
+  q: Queryable,
+  scope: {
+    projectId?: string | undefined;
+    org?: string | undefined;
+    days: number;
+    runnerOnlineSeconds: number;
+    /** Window bounds, for one bucket of a series; default: the last `days` days up to now. */
+    from?: Date;
+    until?: Date;
+  },
 ): Promise<ProductMetrics> {
-  const since = new Date(Date.now() - scope.days * 86_400_000);
+  const since = scope.from ?? new Date(Date.now() - scope.days * 86_400_000);
+  const until = (scope.until ?? new Date(8.64e15)).getTime();
+  const inWindow = (d: Date | string) => ms(d) >= since.getTime() && ms(d) < until;
   const inScope = `($1::uuid is null or t.project_id = $1) and ($2::text is null or t.project_id in (select id from projects where org_id = $2))`;
   const params = [scope.projectId ?? null, scope.org ?? null];
 
   // Work done by agents: tasks for people (agent "human", spec §61) are not part of what is measured.
   const tasks = await q.query(`select t.* from tasks t where t.kind = 'work' and t.agent <> 'human' and ${inScope}`, params);
-  const finished = tasks.filter((t) => ["COMPLETED", "BLOCKED"].includes(t.state) && ms(t.updated_at) >= since.getTime());
+  const finished = tasks.filter((t) => ["COMPLETED", "BLOCKED"].includes(t.state) && inWindow(t.updated_at));
   const ids = tasks.map((t) => t.id as string);
 
   const events = ids.length
@@ -54,8 +81,8 @@ export async function computeMetrics(
 
   const artifacts = await q.query(
     `select a.type, a.content, a.execution_id, a.task_id, a.created_at from artifacts a join tasks t on t.id = a.task_id
-     where a.type in ('handoff', 'validation_result', 'review_result') and a.created_at >= $3 and ${inScope}`,
-    [...params, since],
+     where a.type in ('handoff', 'validation_result', 'review_result') and a.created_at >= $3 and a.created_at < $4 and ${inScope}`,
+    [...params, since, new Date(Math.min(until, Date.now() + 86_400_000))],
   );
   // Agent reviews carry a `verdict` (and a `decision` too); human reviews only a `decision`.
   const humanReviewed = new Set(
@@ -83,12 +110,12 @@ export async function computeMetrics(
 
   // ---- collaboration
   const workExecs = executions.filter(
-    (x) => x.kind === "work" && x.finished_at && ms(x.finished_at) >= since.getTime() && !x.revalidation && !["interrupted", "cancelled"].includes(x.status),
+    (x) => x.kind === "work" && x.finished_at && inWindow(x.finished_at) && !x.revalidation && !["interrupted", "cancelled"].includes(x.status),
   );
   const withHandoff = new Set(
     artifacts.filter((a) => a.type === "handoff" && typeof a.content.summary === "string" && a.content.summary.trim()).map((a) => a.execution_id),
   );
-  const assigned = events.filter((e) => e.type === "ExecutionAssigned" && ms(e.created_at) >= since.getTime());
+  const assigned = events.filter((e) => e.type === "ExecutionAssigned" && inWindow(e.created_at));
   const contextual = assigned.filter((e) => e.payload.kind === "work" && "knowledge" in e.payload);
   const lastAgent = (taskId: string) =>
     (execsByTask.get(taskId) ?? []).filter((x) => x.agent).sort((a, b) => a.attempt - b.attempt).at(-1)?.agent as string | undefined;
@@ -108,7 +135,7 @@ export async function computeMetrics(
     .filter((e) => e.payload.resumable)
     .map((e) => executions.find((x) => x.id === e.execution_id))
     .filter((x): x is Row => Boolean(x && x.finished_at));
-  const recentWorkExecs = executions.filter((x) => x.kind === "work" && x.created_at && ms(x.created_at) >= since.getTime());
+  const recentWorkExecs = executions.filter((x) => x.kind === "work" && x.created_at && inWindow(x.created_at));
   const workspaceFailures = recentWorkExecs.filter((x) => /workspace preparation failed/i.test(String(x.result?.reason ?? "")));
 
   // ---- platform
@@ -142,7 +169,7 @@ export async function computeMetrics(
       if (e.type !== "TaskStateChanged") continue;
       if (e.payload.to === "READY") ready = ms(e.created_at);
       else if (e.payload.to === "ASSIGNED" && ready !== undefined) {
-        if (ms(e.created_at) >= since.getTime()) queueWaits.push(ms(e.created_at) - ready);
+        if (inWindow(e.created_at)) queueWaits.push(ms(e.created_at) - ready);
         ready = undefined;
       }
     }

@@ -706,6 +706,10 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     const { projectId, days } = z.object({ projectId: z.uuid().optional(), days: z.coerce.number().int().min(1).max(365).default(30) }).parse(req.query);
     return store.metrics({ projectId, days, org: scope(req) });
   });
+  app.get("/metrics/series", (req) => {
+    const { projectId, days } = z.object({ projectId: z.uuid().optional(), days: z.coerce.number().int().min(1).max(365).default(30) }).parse(req.query);
+    return store.metricsSeries({ projectId, days, org: scope(req) });
+  });
   app.get("/agents/stats", (req) =>
     store.agentStats(z.object({ projectId: z.uuid().optional() }).parse(req.query).projectId, undefined, scope(req)),
   );
