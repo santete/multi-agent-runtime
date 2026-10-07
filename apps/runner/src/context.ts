@@ -325,6 +325,7 @@ function planBrief(plan: NonNullable<ClaimResponse["plan"]>): string {
     "- Refs are short ids (T1, T2, …) used in `dependsOn`; a dependency on an unfinished task above uses its key.",
     "- List in `paths` the files or globs each task will change (`src/payments/**`, `README.md`). Tasks whose paths overlap run one after the other, so keep areas narrow; leave it empty only when you cannot tell.",
     "- Give each task a contract: `inputs` (what it starts from), `constraints` (what it must respect or not change), `expectedOutput` (the deliverable) and `acceptanceCriteria`: a few concrete, checkable statements (behaviour, tests, docs) that a reviewer can verify one by one. The task is only complete when all of them hold.",
+    "- Write the summary and every objective as short lines starting with \"- \", never as one long paragraph: a person reads them on a web page before approving.",
     "- Do not plan work that is already done, and do not create tasks for reviewing or merging: the platform does that.",
     "- If nothing is left to do, return no tasks and explain why in the summary.",
     "",

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api.js";
 import { useLiveQuery } from "../lib/live.js";
 import { type Tone, timeAgo } from "../lib/model.js";
+import { planWaves, proseBlocks } from "../lib/prose.js";
 import { href } from "../lib/router.js";
 import { Empty, ErrorBox, Loading, Pill, Section } from "./ui.js";
 
@@ -24,6 +25,25 @@ export function PlanStatusBadge({ status }: { status: PlanStatus }) {
 }
 
 const isPlanEvent = (e: { type: string }) => e.type.startsWith("Plan") || e.type === "TaskStateChanged";
+
+/** Long agent-written text as short paragraphs and bullets. */
+function Prose({ text, small }: { text: string; small?: boolean }) {
+  return (
+    <div className={`prose-block${small ? " small" : ""}`}>
+      {proseBlocks(text).map((b, i) =>
+        b.kind === "p" ? (
+          <p key={i}>{b.text}</p>
+        ) : (
+          <ul key={i}>
+            {b.items.map((it, j) => (
+              <li key={j}>{it}</li>
+            ))}
+          </ul>
+        ),
+      )}
+    </div>
+  );
+}
 
 /** Agent ids offered by registered runners. */
 function useAgents(): string[] {
@@ -195,6 +215,7 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  const [open, setOpen] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (plan?.proposal) setDraft(plan.proposal.tasks);
@@ -208,6 +229,19 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
   const tasks = (editable ? draft : plan.proposal?.tasks) ?? [];
   const edited = JSON.stringify(draft) !== JSON.stringify(plan.proposal?.tasks);
   const revision = newer?.find((p) => p.previousPlanId === plan.id);
+  const waves = planWaves(tasks);
+  const toggle = (ref: string, isOpen: boolean) =>
+    setOpen((o) => {
+      if (o.has(ref) === isOpen) return o;
+      const next = new Set(o);
+      if (isOpen) next.add(ref);
+      else next.delete(ref);
+      return next;
+    });
+  const show = (ref: string) => {
+    toggle(ref, true);
+    setTimeout(() => document.getElementById(`plan-task-${ref}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
   const createdKey = (ref: string) => plan.createdTasks.find((t) => t.ref === ref);
 
   const act = async (run: () => Promise<PlanDto>, navigate = false) => {
@@ -262,7 +296,7 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
       </header>
 
       <Section title="Goal">
-        <p className="prose">{plan.goal}</p>
+        <Prose text={plan.goal} />
         {plan.feedback && (
           <p className="small">
             Revises <a href={href.plan(plan.previousPlanId!)}>an earlier plan</a> with the feedback: “{plan.feedback}”
@@ -279,9 +313,10 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
       {plan.status === "reviewing" && <Empty>A critic agent is checking the plan before anyone approves it.</Empty>}
       {plan.critique && (
         <Section title={`Critique by ${plan.critique.critic} (round ${plan.round})`}>
-          <p className="prose">
-            <Pill tone={plan.critique.verdict === "approve" ? "success" : "attention"}>{plan.critique.verdict}</Pill> {plan.critique.summary}
+          <p>
+            <Pill tone={plan.critique.verdict === "approve" ? "success" : "attention"}>{plan.critique.verdict}</Pill>
           </p>
+          <Prose text={plan.critique.summary} />
           {plan.critique.issues.length > 0 && (
             <ul className="bullets">
               {plan.critique.issues.map((i, n) => (
@@ -316,21 +351,74 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
 
       {plan.proposal && (
         <Section title={`Proposed tasks (${tasks.length})`}>
-          {plan.proposal.summary && <p className="prose">{plan.proposal.summary}</p>}
+          {plan.proposal.summary && <Prose text={plan.proposal.summary} />}
           {tasks.length === 0 && <Empty>The planner found nothing left to do. Reject the plan, or ask for a revision if you disagree.</Empty>}
+          {tasks.length > 1 && (
+            <div className="table-wrap plan-overview">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Wave</th>
+                    <th>Task</th>
+                    <th>Agent</th>
+                    <th>After</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...tasks]
+                    .sort((a, b) => (waves.get(a.ref) ?? 0) - (waves.get(b.ref) ?? 0))
+                    .map((t) => (
+                      <tr key={t.ref}>
+                        <td className="wave">{waves.get(t.ref)}</td>
+                        <td>
+                          <a onClick={() => show(t.ref)}>
+                            <span className="mono">{t.ref}</span> {t.title}
+                          </a>
+                        </td>
+                        <td>
+                          <span className="chip">{t.agent ?? "auto"}</span>
+                        </td>
+                        <td className="muted small mono">{t.dependsOn.join(", ") || "—"}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p className="muted small">Tasks in the same wave can run in parallel; each wave starts when the earlier ones are merged.</p>
+            </div>
+          )}
+          {tasks.length > 1 && (
+            <div className="plan-toolbar">
+              <button type="button" onClick={() => setOpen(new Set(tasks.map((t) => t.ref)))}>
+                Expand all
+              </button>
+              <button type="button" onClick={() => setOpen(new Set())}>
+                Collapse all
+              </button>
+            </div>
+          )}
           <div className="plan-tasks">
             {tasks.map((t, i) => (
-              <div key={t.ref} className="card plan-task">
-                <div className="card-head">
+              <details
+                key={t.ref}
+                id={`plan-task-${t.ref}`}
+                className="card plan-task"
+                open={open.has(t.ref) || tasks.length === 1}
+                onToggle={(e) => toggle(t.ref, (e.currentTarget as HTMLDetailsElement).open)}
+              >
+                <summary>
                   <span className="mono">{t.ref}</span>
+                  <span className="task-title">{t.title}</span>
+                  <span className="chip">{t.agent ?? "auto"}</span>
                   {createdKey(t.ref) && <a href={href.task(createdKey(t.ref)!.taskId)}>{createdKey(t.ref)!.key}</a>}
                   {t.dependsOn.length > 0 && <span className="muted small">after {t.dependsOn.join(", ")}</span>}
-                  {editable && (
+                </summary>
+                {editable && (
+                  <div className="actions left">
                     <button type="button" className="link" onClick={() => remove(i)} disabled={tasks.length === 1}>
-                      remove
+                      remove this task
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
                 {editable ? (
                   <div className="plan-fields">
                     <label>
@@ -389,8 +477,7 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                   </div>
                 ) : (
                   <>
-                    <div className="task-title">{t.title}</div>
-                    <p className="prose small">{t.objective}</p>
+                    <Prose text={t.objective} small />
                     <div className="task-meta">
                       <span className="chip">{t.agent ?? "auto"}</span>
                       {t.requires.length > 0 && <span className="muted small">needs {t.requires.join(", ")}</span>}
@@ -410,7 +497,7 @@ export function PlanPage({ id, actor }: { id: string; actor: ActorDto }) {
                     {(t.constraints ?? []).length > 0 && <p className="muted small">Constraints: {t.constraints.join("; ")}</p>}
                   </>
                 )}
-              </div>
+              </details>
             ))}
           </div>
         </Section>
