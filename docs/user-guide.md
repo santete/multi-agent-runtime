@@ -108,7 +108,7 @@ pnpm --filter @mar/runner start runner.config.json
 | Vai trò | Được làm |
 |---|---|
 | `viewer` | Xem |
-| `member` | Tạo, huỷ, retry, review task; trả lời câu hỏi; gửi instruction |
+| `member` | Tạo, huỷ, retry, hand over, review task; trả lời câu hỏi; gửi instruction |
 | `senior` | Duyệt hành động rủi ro HIGH (mặc định) |
 | `owner` | Cấu hình project, policy, secret |
 
@@ -226,7 +226,7 @@ Tab **Graph** vẽ dependency giữa các task; tab **Activity** là dòng sự 
 
 - **Agent console** chiếu trực tiếp các message, tool call của agent và quyết định của policy (allowed/denied, mức rủi ro). Với agent chạy sandbox như Codex, tool call được kiểm tra sau khi chạy (audit).
 - **Instructions**: gửi lời nhắn cho agent. Nếu agent đang chạy, mặc định nó dừng lại rồi resume **đúng session** với lời nhắn đó.
-- **Pause / Resume / Cancel / Retry** nằm góc trên bên phải.
+- **Pause / Resume / Cancel / Retry** nằm góc trên bên phải. Với task `WAITING_FOR_HUMAN` hoặc `BLOCKED` còn có **Hand over**: chọn agent khác (hoặc *auto*, để scheduler chọn) rồi giao lại. Agent cũ bị loại khỏi task, và agent mới bắt đầu phiên mới. *Auto* chỉ hiện khi còn agent khác để chọn.
 
 ![Trang task đang chờ review: contract, review, handoff, diff](images/guide-task-contract.png)
 
@@ -272,13 +272,13 @@ Mọi việc cần người đều nằm trong **Inbox**:
 | **Câu hỏi của agent** (thiếu quyết định nghiệp vụ, hai tiêu chí mâu thuẫn) | Chọn một đáp án gợi ý hoặc tự trả lời. Agent resume đúng session với câu trả lời, và reviewer cũng thấy câu trả lời đó |
 | **Approval**: agent muốn làm việc rủi ro (gọi mạng, sửa CI, ghi vào vùng của task khác, vi phạm rule của project) | *Approve* hoặc *Reject*. Agent resume và được báo kết quả. Mức rủi ro quyết định ai được duyệt |
 | **Task cho người** | Làm việc đó rồi bấm *Done* kèm tóm tắt |
-| **Stopped: needs you to act**: task dừng vì một lời gọi bị từ chối hẳn (policy chặn, hoặc agent CLI tự chặn), bị `BLOCKED` vì fail quá nhiều lần, hoặc cần **merge by hand** | Đọc lý do, rồi *Retry* (chạy lại từ đầu) hoặc *Cancel task*; với merge by hand thì merge branch rồi bấm *I merged it* |
+| **Stopped: needs you to act**: task dừng vì một lời gọi bị từ chối hẳn (policy chặn, hoặc agent CLI tự chặn), bị `BLOCKED` vì fail quá nhiều lần, hoặc cần **merge by hand** | Đọc lý do, rồi *Retry* (chạy lại từ đầu), *Hand over* (giao cho agent khác) hoặc *Cancel task*; với merge by hand thì merge branch rồi bấm *I merged it* |
 
-Huỷ hoặc retry một task thì các approval và câu hỏi chưa ai trả lời của nó được rút khỏi Inbox (trạng thái `withdrawn`).
+Huỷ, retry hoặc hand over một task thì các approval và câu hỏi chưa ai trả lời của nó được rút khỏi Inbox (trạng thái `withdrawn`). Retry và hand over còn cho task một bộ lượt thử mới: số lần fail trước đó không tính vào `maxAttempts` nữa, nên không cần sửa `maxAttempts` bằng tay.
 
 Các thao tác khác:
 - **Agent đi sai hướng**: gửi *Instruction* trên trang task, hoặc *Pause* để xem diff trước.
-- **Task `BLOCKED`**: đọc timeline và console, sửa contract hoặc gửi instruction, rồi *Retry*.
+- **Task `BLOCKED`**: đọc timeline và console, sửa contract hoặc gửi instruction, rồi *Retry*; nếu agent này không làm nổi thì *Hand over* cho agent khác.
 - **Review của người**: đọc checklist tiêu chí, diff và handoff, rồi *Approve & merge* hoặc *Request changes* (comment được chuyển cho agent làm rework).
 
 ## 7. Mở code trong IDE

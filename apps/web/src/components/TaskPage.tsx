@@ -7,6 +7,7 @@ import { href } from "../lib/router.js";
 import { EventRow } from "./ActivityFeed.js";
 import { AgentConsole } from "./AgentConsole.js";
 import { ApprovalCard } from "./ApprovalsPage.js";
+import { ReassignControl } from "./HumanWork.js";
 import { DecisionCard, HumanTaskCard, StuckTaskCard } from "./HumanWork.js";
 import { TaskStatus } from "./TaskStatus.js";
 import { Empty, ErrorBox, Loading, Pill, Section, StateBadge } from "./ui.js";
@@ -123,7 +124,9 @@ export function TaskPage({ id, actor }: { id: string; actor: ActorDto }) {
 
           {approvals && approvals.length > 0 && (
             <Section title="Approvals">
-              {approvals.map((a: ApprovalDto) => (
+              {[...approvals]
+                .sort((x, y) => Number(y.status === "pending") - Number(x.status === "pending") || Date.parse(y.createdAt) - Date.parse(x.createdAt))
+                .map((a: ApprovalDto) => (
                 <ApprovalCard key={a.id} approval={a} actor={actor} />
               ))}
             </Section>
@@ -246,6 +249,9 @@ function TaskActions({ task, onDone, toMerge }: { task: TaskDto; onDone: () => v
         {/* Waiting for a person to merge it: a retry would redo the approved work. */}
         {(task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && !toMerge && (
           <button onClick={run(() => api.retry(task.id))}>Retry</button>
+        )}
+        {task.kind === "work" && (task.state === "WAITING_FOR_HUMAN" || task.state === "BLOCKED") && !toMerge && (
+          <ReassignControl task={task} onDone={onDone} />
         )}
         {task.kind === "work" && PAUSABLE.has(task.state) && <button onClick={run(() => api.pause(task.id))}>Pause</button>}
         {task.state === "PAUSED" && (
