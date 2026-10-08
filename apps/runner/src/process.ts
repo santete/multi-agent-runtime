@@ -24,6 +24,17 @@ export interface RunProcessOptions {
   onEvent: (event: AgentEvent) => void;
 }
 
+/**
+ * An unsuccessful run that carries no error text gets the agent's last message
+ * as its result, so "You've reached your credit usage limit" is seen as the
+ * agent being unavailable (cooldown, other agent) and not as a failed task.
+ */
+export function withFailureText(e: ProcessOutcome["terminal"], lastMessage: string): ProcessOutcome["terminal"] {
+  if (e.kind !== "completed" || e.success || !lastMessage) return e;
+  if (typeof e.result === "string" ? e.result.trim() : e.result) return e;
+  return { ...e, result: lastMessage.slice(0, 2000) };
+}
+
 const isTerminal = (e: AgentEvent): e is ProcessOutcome["terminal"] => e.kind === "completed" || e.kind === "failed";
 
 /**
@@ -37,10 +48,14 @@ export function runAgentProcess(
 ): Promise<ProcessOutcome> {
   return new Promise((resolve) => {
     let terminal: ProcessOutcome["terminal"] | undefined;
+    // Some CLIs (Qoder) say why a run failed in a message and end with a bare "completed, not successful".
+    let lastMessage = "";
     const emit = (events: AgentEvent[]) => {
       for (const e of events) {
-        if (isTerminal(e)) terminal ??= e;
-        opts.onEvent(e);
+        if (e.kind === "message" && typeof e.text === "string" && e.text.trim()) lastMessage = e.text.trim();
+        const event = isTerminal(e) ? withFailureText(e, lastMessage) : e;
+        if (isTerminal(event)) terminal ??= event;
+        opts.onEvent(event);
       }
     };
 

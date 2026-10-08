@@ -21,6 +21,8 @@ import {
 import { activeTraceparent, meter, SpanKind, SpanStatusCode, withSpan } from "@mar/telemetry";
 import { ControlPlaneClient, ControlPlaneError } from "./client.js";
 import { type RunnerConfig, type RunnerConfigInput, createAdapter, profileDirOf, runnerConfig } from "./config.js";
+import { probeAgent } from "./preflight.js";
+import { ensureDependencies, type InstallResult } from "./deps.js";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
 import { mergeRepair, repairPrompt, unreadableStructuredResult } from "./repair.js";
 import {
@@ -37,7 +39,7 @@ import {
   reviewFiles,
 } from "./context.js";
 import { runValidation } from "./validator.js";
-import { WorktreeManager, commitAndPush, mergeBase } from "./worktree.js";
+import { WorktreeManager, changedFiles, commitAndPush, mergeBase } from "./worktree.js";
 
 export interface RunnerLogger {
   info(msg: string, data?: object): void;
@@ -178,6 +180,36 @@ export class Runner {
     }));
   }
 
+  /** When each agent is due its next preflight, and what the last one found. */
+  private readonly preflightState = new Map<string, { status: string; dueAt: number }>();
+  private preflighting = false;
+
+  /** Tries the agents that are due and reports the findings; agents of plain commands are not tried. */
+  async preflight(force = false): Promise<void> {
+    const cfg = this.config.preflight;
+    if (!cfg.enabled || !this.runnerId || this.preflighting) return;
+    this.preflighting = true;
+    try {
+      const due = [...this.adapters].filter(
+        ([id, adapter]) => adapter.id !== "generic-cli" && (force || (this.preflightState.get(id)?.dueAt ?? 0) <= Date.now()),
+      );
+      await Promise.all(
+        due.map(async ([id, adapter]) => {
+          const verdict = await probeAgent(adapter, id, { home: this.config.home, timeoutSeconds: cfg.timeoutSeconds });
+          const minutes = verdict.status === "ready" ? cfg.intervalMinutes : cfg.retryMinutes;
+          const before = this.preflightState.get(id)?.status;
+          this.preflightState.set(id, { status: verdict.status, dueAt: Date.now() + minutes * 60_000 });
+          if (before !== verdict.status) this.log.info("agent preflight", { agent: id, status: verdict.status, reason: verdict.reason });
+          await this.client
+            .agentHealth(this.runnerId!, { agent: id, status: verdict.status, reason: verdict.reason })
+            .catch((err) => this.log.error("could not report the agent's preflight", { agent: id, error: String(err) }));
+        }),
+      );
+    } finally {
+      this.preflighting = false;
+    }
+  }
+
   async register(): Promise<string> {
     this.runnerId = await this.client.register(this.config.name, this.agents);
     this.log.info("registered", { runnerId: this.runnerId, agents: [...this.adapters.keys()] });
@@ -218,12 +250,15 @@ export class Runner {
 
   async start(): Promise<void> {
     if (!this.runnerId) await this.register();
+    // Before the first claim, so no task goes to an agent that cannot do it.
+    await this.preflight(true);
     let lastGc = 0;
     while (!this.stopping) {
       if (Date.now() - lastGc >= this.config.gcIntervalMs) {
         lastGc = Date.now();
         await this.collectGarbage().catch((err) => this.log.error("garbage collection failed", { error: String(err) }));
       }
+      if (this.config.preflight.enabled && !this.preflighting) void this.preflight().catch((err) => this.log.error("preflight failed", { error: String(err) }));
       if (this.active.size < this.config.maxConcurrent) {
         let claim: ClaimResponse | undefined;
         try {
@@ -263,6 +298,35 @@ export class Runner {
     return this.client.claim(this.runnerId);
   }
 
+  /**
+   * Installs the project's dependencies in the worktree. Projects that validate in a container get theirs
+   * installed in that container, right before validation (the agent's own run on the host gets none: the
+   * worktree is mounted into another OS there).
+   */
+  private async installDeps(claim: ClaimResponse, worktree: string, signal?: AbortSignal, phase: "agent" | "validation" = "agent"): Promise<InstallResult | null> {
+    const setting = this.config.installDependencies;
+    const sandbox = claim.project.validationSandbox;
+    if (setting === false || (sandbox && phase === "agent")) return null;
+    return ensureDependencies(worktree, {
+      home: this.config.home,
+      command: typeof setting === "string" ? setting : undefined,
+      signal,
+      ...(sandbox && { sandbox, containerRuntime: this.config.containerRuntime }),
+    });
+  }
+
+  /** A failed install is a validation failure of its own, marked as the machine's, not the code's. */
+  private async dependencyFailure(claim: ClaimResponse, worktree: string, signal?: AbortSignal): Promise<ValidationReport | undefined> {
+    let install: InstallResult | null;
+    try {
+      install = await this.installDeps(claim, worktree, signal, "validation");
+    } catch (err) {
+      install = { skipped: false, step: { name: "install", command: "(runner) install dependencies", passed: false, exitCode: null, durationMs: 0, outputTail: `[runner] failed to start: ${String(err)}` } };
+    }
+    if (!install || install.step.passed) return undefined;
+    return { passed: false, steps: [{ ...install.step, environment: true }], changedFiles: await changedFiles(worktree) };
+  }
+
   private async fail(executionId: string, reason: string): Promise<void> {
     await this.client.complete(executionId, { exitCode: null, terminal: { kind: "failed", reason } });
   }
@@ -272,6 +336,11 @@ export class Runner {
     this.working.add(claim.task.key);
     try {
       await this.executeClaim(claim);
+    } catch (err) {
+      // Without this the execution stays silent until its lease runs out and is recorded as "lost",
+      // with the cause only in this process's log (seen live with Qoder: three "lost" in a row).
+      this.log.error("execution crashed", { task: claim.task.key, execution: claim.execution.id, error: String(err) });
+      await this.fail(claim.execution.id, `runner error: ${String(err).slice(0, 1500)}`).catch(() => undefined);
     } finally {
       this.working.delete(claim.task.key);
     }
@@ -475,11 +544,12 @@ export class Runner {
       const report = await withSpan("validation", { "mar.validation.steps": project.validation.length }, async (span) => {
         const r = leaks.length
           ? secretScanFailure(leaks)
-          : await runValidation(workspace.path, project.validation, abort.signal, {
+          : (await this.dependencyFailure(claim, workspace.path, abort.signal)) ??
+            (await runValidation(workspace.path, project.validation, abort.signal, {
               sandbox: project.validationSandbox,
               containerRuntime: this.config.containerRuntime,
               env: secrets.validationEnv,
-            });
+            }));
         span.setAttribute("mar.validation.passed", r.passed);
         return r;
       });
@@ -540,6 +610,19 @@ export class Runner {
         };
         await shipper.close().catch(() => undefined);
         return { outcome, restore, revalidation };
+      }
+      if (claim.task.kind === "work") {
+        const deps = await this.installDeps(claim, worktree, signal).catch((err) => ({ error: String(err) }));
+        if (deps && "error" in deps) shipper.push({ kind: "diagnostic", text: `runner: installing dependencies crashed: ${deps.error}` });
+        else if (deps && !deps.skipped) {
+          shipper.push({
+            kind: "diagnostic",
+            text: deps.step.passed
+              ? `runner: installed dependencies (${deps.step.command}, ${Math.round(deps.step.durationMs / 1000)}s)`
+              : `runner: installing dependencies failed (${deps.step.command}); the agent continues without them:
+${deps.step.outputTail.slice(-1500)}`,
+          });
+        }
       }
       const context = claim.review
         ? reviewFiles(claim.review, reviewDiff)

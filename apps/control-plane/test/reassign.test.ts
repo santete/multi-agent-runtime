@@ -59,7 +59,7 @@ describe("handing a task to another agent", () => {
 
     const events = (await call<{ events: EventDto[] }>("GET", `/tasks/${task.id}/events`)).body.events;
     expect(events.find((e) => e.type === "TaskReassigned" && e.payload.reason === "handed to another agent by a person")).toMatchObject({
-      payload: { from: "dev", to: "other" },
+      payload: { from: "auto", to: "other" },
     });
     // The new agent picks it up.
     expect((await claim()).task.id).toBe(task.id);
@@ -94,6 +94,16 @@ describe("handing a task to another agent", () => {
     await workspaceFailure(await claim());
     await store.sweep();
     expect((await call<TaskDto>("GET", `/tasks/${task.id}`)).body.state).toBe("READY");
+  });
+
+  it("refuses an agent whose preflight ruled it out, since the scheduler would take the task back", async () => {
+    const { task } = await setup();
+    await call("POST", `/runners/${runnerId}/agent-health`, { agent: "other", status: "unavailable", reason: "no credit" });
+    const refused = await call<{ error: string }>("POST", `/tasks/${task.id}/reassign`, { agent: "other" });
+    expect(refused.status).toBe(409);
+    expect(JSON.stringify(refused.body)).toContain("failed its preflight: no credit");
+    await call("POST", `/runners/${runnerId}/agent-health`, { agent: "other", status: "ready" });
+    expect((await call("POST", `/tasks/${task.id}/reassign`, { agent: "other" })).status).toBe(200);
   });
 
   it("can hand a ready task over, and refuses unknown agents, the same agent and finished tasks", async () => {

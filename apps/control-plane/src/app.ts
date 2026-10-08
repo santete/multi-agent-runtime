@@ -183,9 +183,16 @@ const validationReportBody = z.object({
       exitCode: z.number().int().nullable(),
       durationMs: z.number().nonnegative(),
       outputTail: z.string().max(20_000),
+      environment: z.boolean().optional(),
     }),
   ),
   changedFiles: z.array(z.string()).max(5000),
+});
+
+const agentHealthBody = z.object({
+  agent: z.string().min(1),
+  status: z.enum(["ready", "no_shell", "unavailable"]),
+  reason: z.string().max(2000).optional(),
 });
 
 const deliveryBody = z.object({
@@ -723,6 +730,12 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
     // A runner works for the organization of its token (open mode: the default organization).
     return { runnerId: await store.registerRunner(name, agents, scope(req) ?? DEFAULT_ORG) };
   });
+
+  app.post("/runners/:id/agent-health", role("runner"), async (req, reply) => {
+    await store.recordAgentHealth(idParams.parse(req.params).id, agentHealthBody.parse(req.body));
+    return reply.status(204).send();
+  });
+  app.get("/agents/health", (req) => store.listAgentHealth(scope(req)));
 
   app.post("/runners/:id/claim", role("runner"), async (req, reply) => {
     const claim = await store.claim(idParams.parse(req.params).id);

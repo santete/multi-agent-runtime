@@ -14,8 +14,17 @@ import { Background, buildApp, createPgDb, type Db, migrate, Notifier, notifierO
 const IMAGE = "postgres:16-alpine";
 const docker = (args: string[], timeout = 60_000) => spawnSync("docker", args, { encoding: "utf8", windowsHide: true, timeout });
 
+/**
+ * Docker can actually start a container from the image. A daemon can be up and answer `image inspect` yet be
+ * unable to start anything (seen live: containers stuck in "Created" while Docker Desktop's VM was wedged); the
+ * suite then waited minutes and left containers behind.
+ */
 function dockerReady(): boolean {
-  return docker(["image", "inspect", IMAGE], 20_000).status === 0;
+  if (docker(["image", "inspect", IMAGE], 20_000).status !== 0) return false;
+  const name = `mar-leader-probe-${process.pid}`;
+  const ok = docker(["run", "--rm", "--name", name, IMAGE, "true"], 30_000).status === 0;
+  if (!ok) docker(["rm", "-f", name], 20_000);
+  return ok;
 }
 
 describe.skipIf(!dockerReady())("leader election on Postgres", () => {
@@ -36,8 +45,9 @@ describe.skipIf(!dockerReady())("leader election on Postgres", () => {
   };
 
   beforeAll(async () => {
-    const run = docker(["run", "-d", "--rm", "-e", "POSTGRES_PASSWORD=mar", "-e", "POSTGRES_DB=mar", "-p", "127.0.0.1::5432", IMAGE]);
-    container = run.stdout.trim();
+    container = `mar-leader-${process.pid}`;
+    const run = docker(["run", "-d", "--rm", "--name", container, "-e", "POSTGRES_PASSWORD=mar", "-e", "POSTGRES_DB=mar", "-p", "127.0.0.1::5432", IMAGE]);
+    if (run.status !== 0) throw new Error(`could not start postgres: ${run.stderr}`);
     const port = docker(["port", container, "5432"]).stdout.trim().split(":").pop();
     url = `postgres://postgres:mar@127.0.0.1:${port}/mar`;
     for (let i = 0; ; i++) {

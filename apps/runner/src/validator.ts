@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ValidationReport, ValidationSandbox, ValidationStep, ValidationStepResult } from "@mar/core";
+import { isEnvironmentFailure, type ValidationReport, type ValidationSandbox, type ValidationStep, type ValidationStepResult } from "@mar/core";
 import { SpanStatusCode, withSpan } from "@mar/telemetry";
 import { killTree } from "./process.js";
 import { changedFiles, conflictedFiles } from "./worktree.js";
@@ -66,7 +66,7 @@ export function containerArgs(step: ValidationStep, worktree: string, sandbox: V
 
 let containerSeq = 0;
 
-function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal, options: ValidationOptions = {}): Promise<ValidationStepResult> {
+export function runStep(step: ValidationStep, cwd: string, signal?: AbortSignal, options: ValidationOptions = {}): Promise<ValidationStepResult> {
   const started = Date.now();
   const timeoutMs = (step.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000;
   return new Promise((resolve) => {
@@ -170,7 +170,7 @@ export async function runValidation(
       return r;
       },
     );
-    results.push(result);
+    results.push(!result.passed && isEnvironmentFailure(result) ? { ...result, environment: true } : result);
     if (!result.passed) break;
   }
   const passed = !signal?.aborted && results.length === steps.length && results.every((r) => r.passed);

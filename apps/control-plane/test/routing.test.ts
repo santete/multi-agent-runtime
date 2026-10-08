@@ -116,11 +116,11 @@ describe("reassignment", () => {
     expect((await claim(runnerId))!.task.agent).toBe("codex");
   });
 
-  it("keeps a fixed task without fallbacks on its agent", async () => {
+  it("hands a fixed task without fallbacks to automatic routing, without the agent that failed", async () => {
     const { task, runnerId } = await setup({ agent: "claude" });
     await fail((await claim(runnerId))!, "quota exceeded");
     await store.sweep();
-    expect(await state(task.id)).toMatchObject({ agent: "claude", excludedAgents: [], state: "READY" });
+    expect(await state(task.id)).toMatchObject({ agent: "auto", routing: "auto", excludedAgents: ["claude"], state: "READY" });
   });
 });
 

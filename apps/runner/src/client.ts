@@ -1,4 +1,5 @@
 import type {
+  AgentHealthRequest,
   AgentDescriptor,
   AgentEvent,
   ClaimResponse,
@@ -46,6 +47,10 @@ export class ControlPlaneClient {
   async register(name: string, agents: AgentDescriptor[]): Promise<string> {
     const res = await this.post<RegisterRunnerResponse>("/runners/register", { name, agents }, this.retry);
     return res!.runnerId;
+  }
+
+  async agentHealth(runnerId: string, body: AgentHealthRequest): Promise<void> {
+    await this.post<void>(`/runners/${runnerId}/agent-health`, body, this.retry);
   }
 
   /** Not retried: the poll loop simply tries again on its next tick. */

@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import {
   type AgentDescriptor,
   type AgentCooldown,
+  type AgentHealth,
+  type AgentHealthRequest,
   type AgentProfileDto,
   type OrgDto,
   type PublishAgentProfileRequest,
@@ -100,6 +102,9 @@ import {
   executionCost,
   isAgentUnavailable,
   failureText,
+  failureFingerprint,
+  isEnvironmentFailure,
+  similarQuestion,
   isCiConfigPath,
   isSessionLost,
   isContextOverflow,
@@ -494,6 +499,14 @@ export interface SweepResult {
   lost: number;
   requeued: number;
   blocked: number;
+}
+
+/** Marks an execution that asked what a person had already answered. */
+const REPEATED_QUESTION = "repeated-question";
+
+interface HealthIndex {
+  runners: Array<{ id: string; agents: AgentDescriptor[] }>;
+  health: Map<string, { status: string; reason: string }>;
 }
 
 export class Store {
@@ -1046,8 +1059,14 @@ export class Store {
         ? `no online runner has an agent with ${task.requires.join(", ") || "any skill"}${task.excludedAgents.length ? ` (excluding ${task.excludedAgents.join(", ")})` : ""}`
         : `no online runner offers ${task.agent}`;
     }
+    const index = await this.healthIndex(this.db, project.orgId);
+    const healthy = fits.filter(({ runner, agent }) => !this.blockedOn(index, runner.id, agent.id, task.kind));
+    if (!healthy.length) {
+      const why = this.blockedOn(index, fits[0]!.runner.id, fits[0]!.agent.id, task.kind);
+      return `${fits[0]!.agent.id} failed its preflight: ${why}`;
+    }
     const resting = await this.listCooldowns(project.orgId);
-    const available = fits.filter(({ runner, agent }) => !resting.some((c) => c.runnerId === runner.id && c.agent === agent.id));
+    const available = healthy.filter(({ runner, agent }) => !resting.some((c) => c.runnerId === runner.id && c.agent === agent.id));
     if (!available.length) {
       const until = resting.map((c) => c.until).sort()[0];
       return `every suitable agent is resting after a quota hit${until ? ` (first back at ${until})` : ""}`;
@@ -1998,8 +2017,15 @@ export class Store {
         `select agent, count(*)::int as n from executions where runner_id = $1 and status = any($2::text[]) group by agent`,
         [runnerId, ACTIVE],
       );
+      // Agents whose preflight said they cannot run, or cannot run commands (the latter only take tasks that need none).
+      const healthRows = await q.query<{ agent: string; status: string }>(
+        "select agent, status from agent_health where runner_id = $1 and checked_at > now() - interval '1 day'",
+        [runnerId],
+      );
+      const unhealthy = new Set(healthRows.filter((h) => h.status === "unavailable").map((h) => h.agent));
+      const noShell = new Set(healthRows.filter((h) => h.status === "no_shell").map((h) => h.agent));
       const usable = runner.agents.filter(
-        (a) => !resting.has(a.id) && !(a.maxConcurrent && (busy.find((b) => b.agent === a.id)?.n ?? 0) >= a.maxConcurrent),
+        (a) => !resting.has(a.id) && !unhealthy.has(a.id) && !(a.maxConcurrent && (busy.find((b) => b.agent === a.id)?.n ?? 0) >= a.maxConcurrent),
       );
       const agentIds = usable.map((a) => a.id);
       if (!agentIds.length) return null;
@@ -2033,7 +2059,9 @@ export class Store {
         if (candidate.agent !== AUTO && !agentIds.includes(candidate.agent)) {
           onlineAgentIds ??= new Set((await this.onlineAgents(q, runner.org_id)).map((a) => a.id));
           if (onlineAgentIds.has(candidate.agent)) continue;
-          fallback = candidate.fallbackAgents.find((a) => agentIds.includes(a) && !candidate.excludedAgents.includes(a));
+          fallback = candidate.fallbackAgents.find(
+            (a) => agentIds.includes(a) && !candidate.excludedAgents.includes(a) && !(candidate.kind === "work" && noShell.has(a)),
+          );
           if (!fallback) continue;
         }
         // Spec §27: an area another unmerged task works on waits until that task is merged.
@@ -2058,6 +2086,8 @@ export class Store {
           break;
         }
         if (candidate.agent !== AUTO) {
+          // It cannot run the commands this task needs: the sweep moves the task to an agent that can.
+          if (candidate.kind === "work" && noShell.has(candidate.agent)) continue;
           picked = { task: candidate };
           break;
         }
@@ -2068,6 +2098,7 @@ export class Store {
           usable
             // A plain command (generic-cli) runs the objective as a shell command: only when asked for by name.
             .filter((a) => a.adapter !== "generic-cli")
+            .filter((a) => !(candidate.kind === "work" && noShell.has(a.id)))
             .filter((a) => !allowed.length || allowed.includes(a.id))
             .map((a) => ({ id: a.id, skills: a.skills ?? [], cost: a.cost ?? "medium" })),
           { requires: candidate.requires, excluded: candidate.excludedAgents },
@@ -2239,6 +2270,8 @@ export class Store {
     if (!row) return undefined;
     if (row.type === "validation_result" && !row.content.passed) {
       const report = row.content as ValidationReport;
+      // The machine could not run the checks: nothing the agent can change, so it is not told to "fix" them.
+      if (report.steps.some((s) => s.environment || isEnvironmentFailure(s))) return undefined;
       const failed = report.steps.filter((s) => !s.passed).map((s) => s.name);
       return { kind: "validation", attempt, reason: `validation failed: ${failed.join(", ")}`, validation: report };
     }
@@ -2468,10 +2501,19 @@ export class Store {
       const denied = (policy?.denials ?? 0) > 0 || (t.kind === "completed" && t.deniedActions.length > 0);
       // Spec §61: questions only a person can answer stop the task until they are answered.
       const openQuestions = task.kind === "work" && t.kind === "completed" ? toHandoff(t.result).openQuestions : [];
+      // Agents ask again after every rework ("give me node_modules?" three times): a question a person already
+      // answered is not put to them again; the attempt fails and the task moves on.
+      const answered = openQuestions.length
+        ? await q.query<{ question: string }>("select question from decisions where task_id = $1 and status = 'answered'", [task.id])
+        : [];
+      const repeatedQuestion =
+        !denied && openQuestions.length > 0 && openQuestions.every((x) => answered.some((a) => similarQuestion(a.question, x.question)));
       const status: ExecutionStatus = current.cancel_requested
         ? "cancelled"
         : current.stop_reason
           ? "interrupted"
+          : repeatedQuestion
+            ? "failed"
           : t.kind === "completed" && (denied || openQuestions.length > 0)
           ? "needs_approval"
           : t.kind === "completed" && t.success
@@ -2511,8 +2553,9 @@ export class Store {
         projectId: task.projectId,
         taskId: task.id,
         executionId: id,
-        payload: { status, exitCode: req.exitCode },
+        payload: { status, exitCode: req.exitCode, ...(repeatedQuestion && { reason: "asked a question that was already answered" }) },
       });
+      if (repeatedQuestion) await q.query("update executions set failure_fingerprint = $2 where id = $1", [id, REPEATED_QUESTION]);
       if (req.diff !== undefined && task.kind === "work") {
         await this.addArtifact(q, task, id, "diff", { text: req.diff, files: diffFiles(req.diff) });
       }
@@ -2767,6 +2810,17 @@ export class Store {
     return this.db.tx(async (q) => {
       const { task, row: current } = await this.lockExecution(q, id, ["validating"]);
       const report = redactDeep(raw, (await this.projectRedactor(q, task.projectId)).redact);
+      // Failures of the machine (no node_modules, blocked network) are marked by the runner; the output is checked again here.
+      const environment = !report.passed && report.steps.some((s) => s.environment || isEnvironmentFailure(s));
+      const fingerprint = report.passed ? null : failureFingerprint(report.steps);
+      const [previous] = report.passed
+        ? []
+        : await q.query<{ failure_fingerprint: string | null }>(
+            "select failure_fingerprint from executions where task_id = $1 and id <> $2 and not revalidation and failure_fingerprint is not null order by attempt desc limit 1",
+            [task.id, id],
+          );
+      // The same failure after a rework: another rework of the same agent will not help.
+      const repeated = !environment && fingerprint !== null && previous?.failure_fingerprint === fingerprint;
       await this.addArtifact(q, task, id, "validation_result", report as unknown as Record<string, unknown>);
       await appendEvent(q, {
         type: report.passed ? "ValidationPassed" : "ValidationFailed",
@@ -2776,6 +2830,8 @@ export class Store {
         payload: {
           steps: report.steps.map((s) => ({ name: s.name, passed: s.passed, exitCode: s.exitCode })),
           changedFiles: report.changedFiles.length,
+          ...(environment && { environment: true }),
+          ...(repeated && { repeated: true }),
         },
       });
 
@@ -2788,10 +2844,16 @@ export class Store {
       }
       if (!report.passed) {
         await q.query(
-          "update executions set status = 'failed', finished_at = now(), lease_expires_at = null where id = $1",
-          [id],
+          "update executions set status = 'failed', finished_at = now(), lease_expires_at = null, environment_failure = $2, failure_fingerprint = $3 where id = $1",
+          [id, environment, fingerprint],
         );
-        await changeTaskState(q, task, "validation_failed", { executionId: id });
+        // An environment failure or a repeated one is a failed attempt (it counts, and may move the task to
+        // another agent), not another rework with the same output.
+        await changeTaskState(q, task, environment || repeated ? "agent_failed" : "validation_failed", {
+          executionId: id,
+          ...(environment && { reason: "the checks could not run on this machine" }),
+          ...(repeated && { reason: "the same validation failure as the attempt before" }),
+        });
         return { deliver: false };
       }
       await q.query(
@@ -3307,6 +3369,10 @@ export class Store {
         if (!runners.some((r) => (r.agents ?? []).some((a) => a.id === agent))) {
           throw new ConflictError(`no registered runner offers the agent ${agent}`);
         }
+        // The scheduler would take the task straight back from an agent that cannot do it.
+        const [project] = await q.query<{ org_id: string }>("select org_id from projects where id = $1", [task.projectId]);
+        const why = this.agentBlocked(await this.healthIndex(q, project?.org_id ?? "default"), agent, task.kind);
+        if (why) throw new ConflictError(`${agent} failed its preflight: ${why.slice(0, 200)}`);
       }
       const excluded = [...new Set([...task.excludedAgents, ...(task.agent !== AUTO && task.agent !== agent ? [task.agent] : [])])].filter(
         (a) => a !== agent,
@@ -3650,6 +3716,22 @@ export class Store {
         }
       }
 
+      // Tasks waiting for an agent whose preflight ruled it out go to one that can do them.
+      const parked = await q.query(
+        `select t.*, p.org_id as project_org from tasks t join projects p on p.id = t.project_id
+         where t.state = 'READY' and t.agent <> '${AUTO}' and t.agent <> '${HUMAN_EXECUTOR}' for update of t skip locked`,
+      );
+      const indexes = new Map<string, HealthIndex>();
+      for (const row of parked) {
+        const org = row.project_org as string;
+        if (!indexes.has(org)) indexes.set(org, await this.healthIndex(q, org));
+        const index = indexes.get(org)!;
+        const task = toTask(row);
+        const why = this.agentBlocked(index, task.agent, task.kind);
+        if (!why) continue;
+        await this.moveFromAgent(q, task, index, `${task.agent} failed its preflight: ${why.slice(0, 200)}`);
+      }
+
       // Tell people once a day when a project's budget stops its work.
       const over = await q.query<{ id: string; spent: string; daily: string }>(
         `select p.id, ${TODAY_SPEND_SQL} as spent, (p.budget->>'dailyUsd') as daily from projects p
@@ -3670,27 +3752,56 @@ export class Store {
   }
 
   /**
+   * Takes a task away from its agent: to its next fallback agent that can do it, or else to automatic routing
+   * without that agent. Nothing changes when no other agent is online.
+   */
+  private async moveFromAgent(q: Queryable, task: TaskDto, index: HealthIndex, reason: string): Promise<TaskDto | undefined> {
+    const excluded = [...new Set([...task.excludedAgents, task.agent])];
+    const alternatives = this.healthyAgents(index, task.kind, excluded);
+    const fallback = task.routing === "auto" ? undefined : task.fallbackAgents.find((a) => alternatives.includes(a));
+    if (!fallback && !alternatives.length) return undefined;
+    const next = fallback ?? AUTO;
+    const [row] = await q.query("update tasks set agent = $2, excluded_agents = $3, routing = $4 where id = $1 returning *", [
+      task.id,
+      next,
+      JSON.stringify(excluded),
+      fallback ? task.routing : "auto",
+    ]);
+    await appendEvent(q, { type: "TaskReassigned", projectId: task.projectId, taskId: task.id, payload: { from: task.agent, to: next, reason } });
+    return toTask(row!);
+  }
+
+  /**
    * Spec §46: when the agent is unavailable (quota, rate limit, login) or
    * failed the task twice in a row, move the task to another agent: auto
    * routing excludes it and lets the scheduler choose again; fixed routing
    * switches to the next fallback agent.
    */
   private async maybeReassign(q: Queryable, task: TaskDto): Promise<TaskDto> {
-    const recent = await q.query<{ agent: string | null; status: string; result: any }>(
-      "select agent, status, result from executions where task_id = $1 order by attempt desc limit 2",
+    const recent = await q.query<{ agent: string | null; status: string; result: any; environment_failure: boolean; failure_fingerprint: string | null }>(
+      "select agent, status, result, environment_failure, failure_fingerprint from executions where task_id = $1 order by attempt desc limit 2",
       [task.id],
     );
     const last = recent[0];
     if (!last?.agent || last.agent !== task.agent) return task;
     const reason = failureText(last.result);
+    // The machine failed, not the agent: another agent would hit the same wall.
+    if (last.environment_failure) return task;
     const unavailable = isAgentUnavailable(reason);
-    const repeated = recent.length === 2 && recent.every((e) => e.agent === last.agent && ["failed", "lost"].includes(e.status));
+    const repeated = last.failure_fingerprint === REPEATED_QUESTION || recent.length === 2 && recent.every((e) => e.agent === last.agent && ["failed", "lost"].includes(e.status));
     if (!unavailable && !repeated) return task;
 
     const excluded = [...new Set([...task.excludedAgents, last.agent])];
-    const next =
-      task.routing === "auto" ? AUTO : task.fallbackAgents.find((a) => !excluded.includes(a) && a !== task.agent);
-    if (!next) return task;
+    const configured = task.routing === "auto" ? AUTO : task.fallbackAgents.find((a) => !excluded.includes(a) && a !== task.agent);
+    if (!configured) {
+      // No fallback agent was named: let the scheduler choose among the other agents that can do the task,
+      // so that nobody has to exclude the failing agent and reassign by hand.
+      const [project] = await q.query<{ org_id: string }>("select org_id from projects where id = $1", [task.projectId]);
+      const index = await this.healthIndex(q, project?.org_id ?? "default");
+      const reasonText = unavailable ? `agent unavailable: ${reason.slice(0, 200)}` : "failed twice in a row";
+      return (await this.moveFromAgent(q, task, index, reasonText)) ?? task;
+    }
+    const next = configured;
     const [row] = await q.query("update tasks set agent = $2, excluded_agents = $3 where id = $1 returning *", [
       task.id,
       next,
@@ -3700,7 +3811,15 @@ export class Store {
       type: "TaskReassigned",
       projectId: task.projectId,
       taskId: task.id,
-      payload: { from: last.agent, to: next, reason: unavailable ? `agent unavailable: ${reason.slice(0, 200)}` : "failed twice in a row" },
+      payload: {
+        from: last.agent,
+        to: next,
+        reason: unavailable
+          ? `agent unavailable: ${reason.slice(0, 200)}`
+          : last.failure_fingerprint === REPEATED_QUESTION
+            ? "asked a question that was already answered"
+            : "failed twice in a row",
+      },
     });
     return toTask(row!);
   }
@@ -3777,6 +3896,80 @@ export class Store {
         estimated: Boolean(r.estimated),
       })),
     };
+  }
+
+  /** A runner reports what its preflight found for one of its agents. */
+  async recordAgentHealth(runnerId: string, req: AgentHealthRequest): Promise<void> {
+    await this.db.tx(async (q) => {
+      const [runner] = await q.query("select 1 from runners where id = $1", [runnerId]);
+      if (!runner) throw new NotFoundError("runner", runnerId);
+      const [before] = await q.query<{ status: string }>("select status from agent_health where runner_id = $1 and agent = $2", [runnerId, req.agent]);
+      await q.query(
+        `insert into agent_health (runner_id, agent, status, reason) values ($1, $2, $3, $4)
+         on conflict (runner_id, agent) do update set status = excluded.status, reason = excluded.reason, checked_at = now()`,
+        [runnerId, req.agent, req.status, (req.reason ?? "").slice(0, 2000)],
+      );
+      if (before?.status !== req.status) {
+        await appendEvent(q, {
+          type: "AgentHealthChanged",
+          payload: { runnerId, agent: req.agent, from: before?.status ?? null, to: req.status, reason: (req.reason ?? "").slice(0, 300) },
+        });
+      }
+    });
+  }
+
+  async listAgentHealth(org?: string): Promise<AgentHealth[]> {
+    const rows = await this.db.query(
+      `select h.*, r.name as runner_name from agent_health h join runners r on r.id = h.runner_id
+       where h.checked_at > now() - interval '1 day' and ($1::text is null or r.org_id = $1) order by r.name, h.agent`,
+      [org ?? null],
+    );
+    return rows.map((r) => ({
+      runnerId: r.runner_id,
+      runnerName: r.runner_name,
+      agent: r.agent,
+      status: r.status,
+      reason: r.reason,
+      checkedAt: iso(r.checked_at),
+    }));
+  }
+
+  /** The online runners of an organization with what their preflight found (a result older than a day is ignored). */
+  private async healthIndex(q: Queryable, org: string): Promise<HealthIndex> {
+    const runners = await q.query<{ id: string; agents: AgentDescriptor[] }>(
+      "select id, agents from runners where last_seen_at > now() - make_interval(secs => $1) and org_id = $2",
+      [this.runnerOnlineSeconds, org],
+    );
+    const rows = await q.query<{ runner_id: string; agent: string; status: string; reason: string }>(
+      "select runner_id, agent, status, reason from agent_health where checked_at > now() - interval '1 day'",
+    );
+    return { runners, health: new Map(rows.map((r) => [`${r.runner_id}|${r.agent}`, { status: r.status, reason: r.reason }])) };
+  }
+
+  /** Why the agent cannot take a task of this kind on one runner, if its preflight ruled it out. */
+  private blockedOn(index: HealthIndex, runnerId: string, agent: string, kind: string): string | null {
+    const h = index.health.get(`${runnerId}|${agent}`);
+    if (h?.status === "unavailable" || (h?.status === "no_shell" && kind === "work")) return h.reason || h.status;
+    return null;
+  }
+
+  /** The preflight's reason when every online runner that offers the agent ruled it out for this kind of task. */
+  private agentBlocked(index: HealthIndex, agent: string, kind: string): string | null {
+    const offering = index.runners.filter((r) => r.agents.some((a) => a.id === agent));
+    if (!offering.length) return null;
+    const reasons = offering.map((r) => this.blockedOn(index, r.id, agent, kind));
+    return reasons.every((x) => x !== null) ? reasons[0]! : null;
+  }
+
+  /** Online agents (not generic-cli, not excluded) that some runner could run a task of this kind on. */
+  private healthyAgents(index: HealthIndex, kind: string, excluded: string[]): string[] {
+    const ok = new Set<string>();
+    for (const r of index.runners) {
+      for (const a of r.agents) {
+        if (a.adapter !== "generic-cli" && !excluded.includes(a.id) && !this.blockedOn(index, r.id, a.id, kind)) ok.add(a.id);
+      }
+    }
+    return [...ok];
   }
 
   async listCooldowns(org?: string): Promise<AgentCooldown[]> {

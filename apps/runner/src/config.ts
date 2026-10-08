@@ -76,6 +76,22 @@ export const runnerConfig = z.object({
   policyHook: z.boolean().default(true),
   /** Container CLI for projects that validate in a container (docker, podman). */
   containerRuntime: z.string().min(1).default("docker"),
+  /** Install the project's dependencies in each worktree before the agent and the validation run: true (the lockfile's default), false, or a command. */
+  installDependencies: z.union([z.boolean(), z.string().min(1)]).default(true),
+  /**
+   * Tries each agent on a small task (run `node -v`) when the runner starts and from time to time, and tells the
+   * control plane which ones cannot take work: no credit, no way to run commands. Costs a few tokens per check.
+   */
+  preflight: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Re-check agents that were ready. */
+      intervalMinutes: z.number().positive().default(360),
+      /** Re-check agents that were not. */
+      retryMinutes: z.number().positive().default(10),
+      timeoutSeconds: z.number().int().positive().default(120),
+    })
+    .default({ enabled: false, intervalMinutes: 360, retryMinutes: 10, timeoutSeconds: 120 }),
   /** Author of the commits the runner makes for delivered tasks. */
   gitAuthor: z
     .object({ name: z.string().min(1), email: z.string().min(3) })
