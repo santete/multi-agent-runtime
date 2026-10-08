@@ -167,7 +167,11 @@ writeFileSync(
     heartbeatIntervalMs: 2000,
     maxConcurrent: 1,
     timeoutSeconds: 120,
-    agents: { "claude-code": { adapter: "claude-code", executable, skills: ["typescript"], cost: "high" } },
+    agents: {
+      "claude-code": { adapter: "claude-code", executable, skills: ["typescript"], cost: "high" },
+      // A second agent to hand stuck tasks to.
+      "claude-code-b": { adapter: "claude-code", executable, skills: ["typescript"], cost: "high" },
+    },
   }),
 );
 
@@ -213,7 +217,8 @@ try {
     await page.getByLabel("Command").first().waitFor();
     if (!(await page.getByLabel("Command").first().inputValue()).includes("readdirSync")) throw new Error("validation step missing");
     const agents = page.locator("form", { hasText: "Routing policy" });
-    await agents.getByLabel("claude-code").check();
+    await agents.getByLabel("claude-code", { exact: true }).check();
+    await agents.getByLabel("claude-code-b", { exact: true }).check();
     await agents.getByRole("button", { name: "Save" }).click();
     await agents.getByText("Saved").waitFor();
   });
@@ -273,11 +278,24 @@ try {
     await page.getByLabel("Objective").fill("run: git push origin main");
     await page.getByLabel("Agent").selectOption("claude-code");
     await click("Create task");
-    // The dialog opens the new task's page.
+    // The dialog opens the new task's page; leaving before it did would be overridden by it.
     await sees("run: git push origin main");
+    await page.waitForURL(/#\/tasks\//);
     await go("#/approvals");
     await sees("Stopped: needs you to act", 90_000);
     await sees("git push origin main");
+    // The way out includes handing the task to another agent (the first one is kept out of it).
+    await sees("Hand to another agent");
+    await click("Hand over");
+    const pushTask = async () => (await api(`/projects/${project.id}/tasks`)).find((t) => t.title === "Push it");
+    await waitFor(async () => {
+      const t = await pushTask();
+      const runs = t ? await api(`/tasks/${t.id}/executions`) : [];
+      return t?.agent === "claude-code-b" && runs.some((e) => e.agent === "claude-code-b" && !["assigned", "running", "validating"].includes(e.status));
+    }, "the second agent to try the task", 90_000);
+    // It is refused there too: stopped again, with the same way out.
+    await go("#/approvals");
+    await sees("Stopped: needs you to act", 60_000);
     await click("Cancel task");
     await page.getByText("Stopped: needs you to act").waitFor({ state: "detached" });
   });

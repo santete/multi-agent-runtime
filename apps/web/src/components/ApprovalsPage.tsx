@@ -11,7 +11,10 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
   const isApproval = (e: { type: string }) => e.type.startsWith("Approval");
   const [pending, error] = useLiveQuery(() => api.approvals("pending"), [], isApproval);
   const [all] = useLiveQuery(() => api.approvals(), [], isApproval);
-  const decided = (all ?? []).filter((a) => a.status !== "pending").reverse().slice(0, 50);
+  // Newest first everywhere: with several waiting at once, the latest is at the top, not far down the page.
+  const newestFirst = <T extends { createdAt: string }>(xs: T[] | null | undefined) => newest(xs, (x) => x.createdAt);
+  const decided = newestFirst((all ?? []).filter((a) => a.status !== "pending")).slice(0, 50);
+  const waitingApprovals = newestFirst(pending);
   const isHumanWork = (e: { type: string; payload: Record<string, unknown> }) =>
     e.type.startsWith("Decision") || (e.type === "TaskStateChanged" && (e.payload.to === "READY" || e.payload.from === "READY"));
   const [questions] = useLiveQuery(() => api.decisions({ status: "pending" }), [], isHumanWork);
@@ -28,23 +31,37 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
       <h1>Inbox</h1>
       <p className="muted">Everything that waits for a person, across projects.</p>
       {nothing && pending && <Empty>Nothing waits for you. Agents are working, or there is no work yet.</Empty>}
+      <ErrorBox error={error} />
+      {(!pending || pending.length > 0) && (
+        <Section title={`Agent approvals: waiting for you (${pending?.length ?? 0})`}>
+          <p className="muted small">
+            Risky actions agents tried to take, newest first. By default HIGH risk needs a senior and CRITICAL actions (pushes, credentials,
+            infrastructure) are never approvable; a project's policy can change who approves what.
+          </p>
+          {!pending ? (
+            <Loading />
+          ) : (
+            waitingApprovals.map((a) => <ApprovalCard key={a.id} approval={a} actor={actor} showTask />)
+          )}
+        </Section>
+      )}
       {waiting && waiting.plans.length > 0 && (
         <Section title={`Plans to approve (${waiting.plans.length})`}>
-          {waiting.plans.map((p) => (
+          {newest(waiting.plans, (p) => p.createdAt).map((p) => (
             <PlanWaitingCard key={p.id} plan={p} />
           ))}
         </Section>
       )}
       {waiting && waiting.reviews.length > 0 && (
         <Section title={`Work to review (${waiting.reviews.length})`}>
-          {waiting.reviews.map((t) => (
+          {newest(waiting.reviews, (t) => t.updatedAt).map((t) => (
             <ReviewWaitingCard key={t.id} task={t} />
           ))}
         </Section>
       )}
       {questions && questions.length > 0 && (
         <Section title={`Questions from agents (${questions.length})`}>
-          {questions.map((d) => (
+          {newestFirst(questions).map((d) => (
             <DecisionCard key={d.id} decision={d} actor={actor} showTask />
           ))}
         </Section>
@@ -58,31 +75,20 @@ export function ApprovalsPage({ actor }: { actor: ActorDto }) {
       )}
       {stuck && stuck.length > 0 && (
         <Section title={`Stopped: needs you to act (${stuck.length})`}>
-          {stuck.map((s) => (
+          {newest(stuck, (s) => s.task.updatedAt).map((s) => (
             <StuckTaskCard key={s.task.id} stuck={s} actor={actor} onDone={reloadStuck} />
           ))}
         </Section>
       )}
-      <h2>Risky actions</h2>
-      <p className="muted">
-        Risky actions agents tried to take. By default HIGH risk needs a senior and CRITICAL actions (pushes, credentials, infrastructure)
-        are never approvable; a project's policy can change who approves what.
-      </p>
-      <ErrorBox error={error} />
-      <Section title={`Waiting for approval (${pending?.length ?? 0})`}>
-        {!pending ? (
-          <Loading />
-        ) : pending.length === 0 ? (
-          <Empty>Nothing is waiting for a decision.</Empty>
-        ) : (
-          pending.map((a) => <ApprovalCard key={a.id} approval={a} actor={actor} showTask />)
-        )}
-      </Section>
       <Section title="Decided">
         {decided.length === 0 ? <Empty>No decisions yet.</Empty> : decided.map((a) => <ApprovalCard key={a.id} approval={a} actor={actor} showTask />)}
       </Section>
     </div>
   );
+}
+
+function newest<T>(xs: T[] | null | undefined, at: (x: T) => string): T[] {
+  return [...(xs ?? [])].sort((a, b) => Date.parse(at(b)) - Date.parse(at(a)));
 }
 
 const canDecide = (actor: ActorDto, risk: string) =>

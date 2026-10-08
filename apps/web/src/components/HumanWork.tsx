@@ -1,11 +1,60 @@
 import type { ActorDto, DecisionDto, PlanDto, StuckTaskDto, TaskDto } from "@mar/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api.js";
 import { timeAgo } from "../lib/model.js";
 import { href } from "../lib/router.js";
 import { ErrorBox, Pill, Prose } from "./ui.js";
 
 const canAct = (actor: ActorDto) => actor.role !== "viewer" && actor.role !== "runner";
+
+/**
+ * Hands a task its agent could not finish to another one: pick an agent a runner offers (or any
+ * suitable one) and the task starts over with it.
+ */
+export function ReassignControl({ task, onDone, className = "" }: { task: TaskDto; onDone: () => void; className?: string }) {
+  const [agents, setAgents] = useState<string[]>([]);
+  const [choice, setChoice] = useState("");
+  const [error, setError] = useState<Error>();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.runners().then((runners) => setAgents([...new Set(runners.flatMap((r) => r.agents.map((a) => a.id)))].sort()));
+  }, []);
+  const others = agents.filter((a) => a !== task.agent && !task.excludedAgents.includes(a));
+  // "auto" without another agent to choose from would leave the task with nobody (the old agent is kept out of it).
+  const options = [...others, ...(task.routing === "fixed" && others.length > 0 ? ["auto"] : [])];
+  if (task.agent === "human" || options.length === 0) return null;
+  const target = options.includes(choice) ? choice : options[0]!;
+  const hand = async () => {
+    setBusy(true);
+    try {
+      await api.reassign(task.id, target);
+      setError(undefined);
+      onDone();
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={`reassign ${className}`}>
+      <label className="reassign-pick">
+        <span className="muted small">Hand to another agent</span>
+        <select value={target} onChange={(e) => setChoice(e.target.value)}>
+          {options.map((a) => (
+            <option key={a} value={a}>
+              {a === "auto" ? "any suitable agent (auto)" : a}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button disabled={busy} onClick={hand}>
+        Hand over
+      </button>
+      <ErrorBox error={error} />
+    </div>
+  );
+}
 
 /** A question an agent could not decide alone (spec §61), with its answer form. */
 export function DecisionCard({ decision, actor, showTask = false }: { decision: DecisionDto; actor: ActorDto; showTask?: boolean }) {
@@ -191,6 +240,7 @@ export function StuckTaskCard({ stuck, actor, onDone }: { stuck: StuckTaskDto; a
           </button>
         </div>
       )}
+      {!manualMerge && canAct(actor) && <ReassignControl task={task} onDone={onDone} />}
       {!manualMerge && <ErrorBox error={error} />}
     </div>
   );

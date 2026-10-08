@@ -1636,3 +1636,20 @@ details.plan-task[open] > summary {
   box-shadow: 0 0 0 3px var(--surface);
   pointer-events: none;
 }
+
+/* ---- hand a task to another agent ---- */
+.reassign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.reassign-pick {
+  display: grid;
+  gap: 3px;
+  min-width: 180px;
+}
+.reassign select {
+  width: auto;
+  min-width: 180px;
+}

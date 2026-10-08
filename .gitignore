@@ -7,6 +7,8 @@ coverage/
 !.env.example
 # embedded PGlite data, runner home (repos + per-task worktrees) and local runner config
 .data/
+# manual copies of the PGlite data
+.data.backup/
 .runner/
 runner.config.json
 # API users and their tokens

@@ -3287,6 +3287,49 @@ export class Store {
     });
   }
 
+  /**
+   * A person hands a task the agent could not finish to another agent (or to "auto", any suitable
+   * one). The old agent is kept out of the task's routing; the next attempt starts fresh with the
+   * new agent (a session is only resumed by the agent that owns it).
+   */
+  async reassignTask(id: string, agent: string, actor?: string): Promise<TaskDto> {
+    return this.db.tx(async (q) => {
+      const task = await one(q.query("select * from tasks where id = $1 for update", [id]), toTask, "task", id);
+      if (!["WAITING_FOR_HUMAN", "BLOCKED", "READY"].includes(task.state)) {
+        throw new ConflictError(`task ${task.key} is ${task.state}; only WAITING_FOR_HUMAN, BLOCKED or READY tasks can be handed to another agent`);
+      }
+      if (task.agent === "human") throw new ConflictError(`task ${task.key} is for a person`);
+      if (agent === task.agent && task.routing === (agent === AUTO ? "auto" : "fixed")) {
+        throw new ConflictError(`task ${task.key} is already assigned to ${agent}`);
+      }
+      if (agent !== AUTO) {
+        const runners = await q.query<{ agents: AgentDescriptor[] }>("select agents from runners");
+        if (!runners.some((r) => (r.agents ?? []).some((a) => a.id === agent))) {
+          throw new ConflictError(`no registered runner offers the agent ${agent}`);
+        }
+      }
+      const excluded = [...new Set([...task.excludedAgents, ...(task.agent !== AUTO && task.agent !== agent ? [task.agent] : [])])].filter(
+        (a) => a !== agent,
+      );
+      const fallbacks = task.fallbackAgents.filter((a) => a !== agent);
+      const [row] = await q.query(
+        "update tasks set agent = $2, routing = $3, excluded_agents = $4, fallback_agents = $5 where id = $1 returning *",
+        [id, agent, agent === AUTO ? "auto" : "fixed", JSON.stringify(excluded), JSON.stringify(fallbacks)],
+      );
+      await appendEvent(q, {
+        type: "TaskReassigned",
+        projectId: task.projectId,
+        taskId: id,
+        payload: { from: task.agent, to: agent, reason: "handed to another agent by a person", actor: actor ?? null },
+      });
+      const updated = toTask(row!);
+      const payload = { reason: "handed to another agent by a person", actor: actor ?? null };
+      if (task.state === "READY") return updated;
+      await withdrawPending(q, id);
+      return changeTaskState(q, updated, task.state === "BLOCKED" ? "unblocked" : "unassigned", payload);
+    });
+  }
+
   /** Human review of a delivered task (spec §30): approve queues the merge, reject sends it to rework. */
   async reviewTask(id: string, req: ReviewRequest, actor?: string): Promise<TaskDto> {
     return this.db.tx(async (q) => {
@@ -3577,7 +3620,13 @@ export class Store {
       // Failed attempts (RETRYING) and failed validation (REWORK) go back to the
       // queue until maxAttempts is used up.
       const retrying = await q.query(
-        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable and e.status <> 'interrupted')::int as attempts
+        `select t.*, (select count(*) from executions e where e.task_id = t.id and not e.revalidation and not e.agent_unavailable and e.status <> 'interrupted'
+           -- a person who retries or hands the task over gives it a fresh set of attempts
+           and e.created_at > coalesce((
+             select max(ev.created_at) from events ev where ev.task_id = t.id
+               and ((ev.type = 'TaskReassigned' and ev.payload ? 'actor')
+                 or (ev.type = 'TaskStateChanged' and ev.payload->>'reason' = 'retried by a human'))
+           ), 'epoch'::timestamptz))::int as attempts
          from tasks t where t.state in ('RETRYING', 'REWORK') for update skip locked`,
       );
       for (const row of retrying) {

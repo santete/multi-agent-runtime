@@ -156,6 +156,7 @@ export const api = {
     post<TaskDto>(`/tasks/${taskId}/review`, { decision, ...(comment && { comment }) }),
   retry: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/retry`),
   cancel: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/cancel`),
+  reassign: (taskId: string, agent: string) => post<TaskDto>(`/tasks/${taskId}/reassign`, { agent }),
   pause: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/pause`),
   resume: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/resume`),
   instructions: (taskId: string) => get<InstructionDto[]>(`/tasks/${taskId}/instructions`),

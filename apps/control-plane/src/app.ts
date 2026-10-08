@@ -582,6 +582,9 @@ export function buildApp(store: Store, opts: AppOptions = {}): FastifyInstance {
   app.get("/tasks/:id", (req) => store.getTask(idParams.parse(req.params).id));
   app.post("/tasks/:id/cancel", role("member"), (req) => store.cancelTask(idParams.parse(req.params).id, req.actor.name));
   app.post("/tasks/:id/retry", role("member"), (req) => store.retryTask(idParams.parse(req.params).id, req.actor.name));
+  app.post("/tasks/:id/reassign", role("member"), (req) =>
+    store.reassignTask(idParams.parse(req.params).id, z.object({ agent: z.string().trim().min(1) }).parse(req.body).agent, req.actor.name),
+  );
   // Agent console controls (spec §43).
   app.post("/tasks/:id/pause", role("member"), (req) => store.pauseTask(idParams.parse(req.params).id, req.actor.name));
   app.post("/tasks/:id/resume", role("member"), (req) => store.resumeTask(idParams.parse(req.params).id, req.actor.name));
