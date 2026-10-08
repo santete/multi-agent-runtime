@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureDependencies, installPlan } from "../src/deps.js";
+import { ensureDependencies, generateCommand, installPlan, prismaDirs } from "../src/deps.js";
 import { withFailureText } from "../src/process.js";
 import { unreadableStructuredResult } from "../src/repair.js";
 
@@ -29,6 +29,26 @@ describe("installPlan", () => {
   it("uses the runner's own command when one is configured", () => {
     writeFileSync(join(dir, "package.json"), "{}");
     expect(installPlan(dir, "make deps")).toMatchObject({ command: "make deps" });
+  });
+});
+
+describe("prisma client", () => {
+  it("finds the schemas in the root and in direct subdirectories, not in node_modules", () => {
+    expect(prismaDirs(dir)).toEqual([]);
+    mkdirSync(join(dir, "backend", "prisma"), { recursive: true });
+    writeFileSync(join(dir, "backend", "prisma", "schema.prisma"), "generator client { provider = \"prisma-client-js\" }");
+    mkdirSync(join(dir, "node_modules", "x", "prisma"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "x", "prisma", "schema.prisma"), "");
+    expect(prismaDirs(dir)).toEqual(["backend"]);
+    mkdirSync(join(dir, "prisma"));
+    writeFileSync(join(dir, "prisma", "schema.prisma"), "");
+    expect(prismaDirs(dir)).toEqual(["", "backend"]);
+  });
+
+  it("generates with the package manager of the lockfile, in the schema's directory", () => {
+    expect(generateCommand("backend", "pnpm-lock.yaml")).toBe("cd backend && pnpm exec prisma generate");
+    expect(generateCommand("", "package-lock.json")).toBe("npx prisma generate");
+    expect(generateCommand("api", "yarn.lock")).toBe("cd api && yarn prisma generate");
   });
 });
 

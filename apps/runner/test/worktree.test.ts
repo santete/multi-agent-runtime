@@ -29,6 +29,24 @@ describe("WorktreeManager", () => {
     expect(await git(ws.path, "branch", "--show-current")).toBe("task/PAY-1");
   });
 
+  it("checks files out as the repository stores them, even with a global core.autocrlf=true", async () => {
+    const config = join(home.path, "global.gitconfig");
+    await writeFile(config, "[core]\n\tautocrlf = true\n");
+    const before = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = config;
+    try {
+      const manager = new WorktreeManager(home.path);
+      const ws = await manager.prepare(project, "PAY-1");
+      expect(readFileSync(join(ws.path, "README.md"), "utf8")).not.toContain(String.fromCharCode(13));
+      // The files the agent writes next are not turned into CRLF on commit either, and nothing shows as changed.
+      expect(await git(ws.path, "status", "--porcelain")).toBe("");
+      expect(await git(ws.path, "config", "--get", "core.autocrlf")).toBe("false");
+    } finally {
+      if (before === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = before;
+    }
+  });
+
   it("reuses the worktree of the same task (retry/rework)", async () => {
     const manager = new WorktreeManager(home.path);
     await manager.prepare(project, "PAY-1");

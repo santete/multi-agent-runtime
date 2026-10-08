@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { type AgentAdapter, type AgentEvent, type AgentHealthStatus, isAgentUnavailable } from "@mar/core";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { type AgentAdapter, type AgentEvent, type AgentHealthStatus, type AgentRunRequest, isAgentUnavailable, type WorkspaceFile } from "@mar/core";
 import { type ProcessOutcome, runAgentProcess } from "./process.js";
 
 /**
@@ -11,6 +12,9 @@ import { type ProcessOutcome, runAgentProcess } from "./process.js";
  */
 export const PREFLIGHT_PROMPT =
   "Preflight check. Run the shell command `node -v` and reply with exactly the version it printed, and nothing else. Do not edit any file.";
+
+/** Allows `node -v` and nothing else; what lets hook-gated agents run the preflight command. */
+export const PREFLIGHT_HOOK_SCRIPT = fileURLToPath(new URL("../hook/mar-preflight-hook.mjs", import.meta.url));
 
 export interface PreflightVerdict {
   status: AgentHealthStatus;
@@ -53,8 +57,18 @@ export async function probeAgent(adapter: AgentAdapter, agentId: string, options
     // Some CLIs refuse to work outside a git repository.
     if (!existsSync(join(workspace, ".git"))) execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: "ignore" });
     const events: AgentEvent[] = [];
+    const request: AgentRunRequest = {
+      workspace,
+      prompt: PREFLIGHT_PROMPT,
+      objective: PREFLIGHT_PROMPT,
+      permissionProfile: "edit",
+      timeoutSeconds: options.timeoutSeconds,
+      // As in real runs: these agents only run commands when their hook allows them.
+      ...(adapter.capabilities.approval === "pre-tool-hook" && { policyHook: { command: process.execPath, args: [PREFLIGHT_HOOK_SCRIPT] } }),
+    };
+    for (const file of adapter.workspaceFiles?.(request) ?? []) writeWorkspaceFile(workspace, file);
     const outcome = await runAgentProcess(
-      adapter.buildCommand({ workspace, prompt: PREFLIGHT_PROMPT, objective: PREFLIGHT_PROMPT, permissionProfile: "edit", timeoutSeconds: options.timeoutSeconds }),
+      adapter.buildCommand(request),
       adapter.createParser(),
       { timeoutMs: options.timeoutSeconds * 1000, ...(options.signal && { signal: options.signal }), onEvent: (e) => events.push(e) },
     );
@@ -62,4 +76,12 @@ export async function probeAgent(adapter: AgentAdapter, agentId: string, options
   } catch (err) {
     return { status: "unavailable", reason: `preflight crashed: ${String(err).slice(0, 300)}` };
   }
+}
+
+function writeWorkspaceFile(workspace: string, file: WorkspaceFile): void {
+  const full = join(workspace, ...file.path.split("/"));
+  mkdirSync(dirname(full), { recursive: true });
+  if (typeof file.content === "string") return writeFileSync(full, file.content);
+  const existing = file.mergeJson && existsSync(full) ? (JSON.parse(readFileSync(full, "utf8")) as object) : {};
+  writeFileSync(full, JSON.stringify({ ...existing, ...file.content }, null, 2) + "\n");
 }

@@ -194,7 +194,13 @@ export class WorktreeManager {
         : (await revParse(repo, `refs/remotes/${remoteBranch}`))
           ? remoteBranch
           : `origin/${project.defaultBranch}`;
-      await git(repo, "worktree", "add", "-B", branch, path, start);
+      // Files as the repository stores them: a global core.autocrlf=true (Git for Windows' default) would check
+      // everything out with CRLF and fail every linter that wants LF, on files nobody touched. Set for this
+      // worktree only, so worktrees made earlier keep the line endings their changes were made with.
+      await git(repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "worktree", "add", "-B", branch, path, start);
+      await git(repo, "config", "extensions.worktreeConfig", "true");
+      await git(path, "config", "--worktree", "core.autocrlf", "false");
+      await git(path, "config", "--worktree", "core.eol", "lf");
       return { path, branch, created: true };
     });
   }

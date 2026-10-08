@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ValidationSandbox, ValidationStepResult } from "@mar/core";
@@ -34,12 +34,41 @@ export function installPlan(worktree: string, override?: string): InstallPlan | 
   return found ? { command: found.command, ...(found.fallback && { fallback: found.fallback }), lockfile: found.lockfile } : null;
 }
 
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".orchestrator", ".runner"]);
+
+/**
+ * Directories (relative to the worktree, "" for the root) that hold a Prisma schema: the root and its direct
+ * subdirectories. An installed `@prisma/client` without a generated client fails the TypeScript build on every
+ * import of it ("Prisma has no exported member ...", seen live on the Ticket Booking project), which is the
+ * machine's setup to finish, not the agent's code to fix.
+ */
+export function prismaDirs(worktree: string): string[] {
+  const dirs = [""];
+  try {
+    for (const entry of readdirSync(worktree, { withFileTypes: true })) {
+      if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) dirs.push(entry.name);
+    }
+  } catch {
+    // unreadable: no schema found
+  }
+  return dirs.filter((d) => existsSync(join(worktree, d, "prisma", "schema.prisma")));
+}
+
+/** `prisma generate` for a schema directory, run with the package manager the lockfile says. */
+export function generateCommand(dir: string, lockfile: string): string {
+  const exec = lockfile === "pnpm-lock.yaml" ? "pnpm exec prisma" : lockfile === "yarn.lock" ? "yarn prisma" : "npx prisma";
+  return dir ? `cd ${dir} && ${exec} generate` : `${exec} generate`;
+}
+
 const MARKER = join("node_modules", ".mar-install");
 
 /** `flavor`: node_modules installed on the host and in a container are not interchangeable (other OS, other binaries). */
-async function stamp(worktree: string, plan: InstallPlan, flavor: string): Promise<string> {
+async function stamp(worktree: string, plan: InstallPlan, flavor: string, schemas: string[]): Promise<string> {
   const lock = await readFile(join(worktree, plan.lockfile)).catch(() => Buffer.alloc(0));
-  return createHash("sha256").update(flavor).update(plan.command).update(lock).digest("hex");
+  const hash = createHash("sha256").update(flavor).update(plan.command).update(lock);
+  // A changed schema needs a new client.
+  for (const dir of schemas) hash.update(await readFile(join(worktree, dir, "prisma", "schema.prisma")).catch(() => Buffer.alloc(0)));
+  return hash.digest("hex");
 }
 
 export interface InstallOptions {
@@ -70,7 +99,8 @@ export async function ensureDependencies(worktree: string, options: InstallOptio
   const plan = installPlan(worktree, options.command);
   if (!plan) return null;
   const flavor = options.sandbox ? `container:${options.sandbox.image}` : "host";
-  const want = await stamp(worktree, plan, flavor);
+  const schemas = prismaDirs(worktree);
+  const want = await stamp(worktree, plan, flavor, schemas);
   const have = await readFile(join(worktree, MARKER), "utf8").catch(() => "");
   if (existsSync(join(worktree, "node_modules")) && have.trim() === want) {
     return { skipped: true, step: { name: "install", command: plan.command, passed: true, exitCode: 0, durationMs: 0, outputTail: "node_modules up to date" } };
@@ -83,25 +113,33 @@ export async function ensureDependencies(worktree: string, options: InstallOptio
     CI: "true",
   };
   await mkdir(env.COREPACK_HOME, { recursive: true });
-  const run = (command: string) => runStep({ name: "install", command, timeoutSeconds: 900 }, worktree, options.signal, { env });
-  if (options.sandbox) {
-    // corepack ships with Node images; the validation steps themselves still run without network.
-    const command = options.command ? plan.command : `corepack enable >/dev/null 2>&1; ${plan.command}`;
-    const step = await runStep({ name: "install", command, timeoutSeconds: 900 }, worktree, options.signal, {
-      sandbox: { ...options.sandbox, network: true },
-      containerRuntime: options.containerRuntime,
-    });
-    if (step.passed) {
-      await mkdir(join(worktree, "node_modules"), { recursive: true });
-      await writeFile(join(worktree, MARKER), want);
+  // Generating the Prisma client needs no database, only a URL that parses (and the engines, from the network).
+  const generateEnv = { DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://mar:mar@localhost:5432/mar", CHECKPOINT_DISABLE: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1" };
+  const finish = async (install: ValidationStepResult, generate: (command: string) => Promise<ValidationStepResult>): Promise<InstallResult> => {
+    if (!install.passed) return { skipped: false, step: install };
+    let last = install;
+    for (const dir of schemas) {
+      last = await generate(generateCommand(dir, plan.lockfile));
+      if (!last.passed) return { skipped: false, step: { ...last, name: "prisma generate" } };
     }
-    return { skipped: false, step };
-  }
-  let step = await run(plan.command);
-  if (!step.passed && plan.fallback && /not recognized|not found|ENOENT/i.test(step.outputTail)) step = await run(plan.fallback);
-  if (step.passed) {
     await mkdir(join(worktree, "node_modules"), { recursive: true });
     await writeFile(join(worktree, MARKER), want);
+    return { skipped: false, step: schemas.length ? { ...install, outputTail: `${install.outputTail}\n[runner] prisma client generated for ${schemas.map((d) => d || ".").join(", ")}`.slice(-8000) } : install };
+  };
+
+  if (options.sandbox) {
+    // corepack ships with Node images; the validation steps themselves still run without network.
+    const sandbox = { ...options.sandbox, network: true };
+    const container = (command: string, extra: Record<string, string> = {}) =>
+      runStep({ name: "install", command, timeoutSeconds: 900 }, worktree, options.signal, { sandbox, containerRuntime: options.containerRuntime, env: extra });
+    const command = options.command ? plan.command : `corepack enable >/dev/null 2>&1; ${plan.command}`;
+    const install = await container(command);
+    return finish(install, (c) => container(`corepack enable >/dev/null 2>&1; ${c}`, generateEnv));
   }
-  return { skipped: false, step };
+
+  const host = (command: string, extra: Record<string, string> = {}) =>
+    runStep({ name: "install", command, timeoutSeconds: 900 }, worktree, options.signal, { env: { ...env, ...extra } });
+  let step = await host(plan.command);
+  if (!step.passed && plan.fallback && /not recognized|not found|ENOENT/i.test(step.outputTail)) step = await host(plan.fallback);
+  return finish(step, (c) => host(c, generateEnv));
 }
