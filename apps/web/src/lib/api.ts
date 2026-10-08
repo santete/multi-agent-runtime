@@ -1,6 +1,7 @@
 import type {
   ActorDto,
   AgentCooldown,
+  AgentHealth,
   AgentProfileDto,
   PublishAgentProfileRequest,
   AgentSkillStats,
@@ -156,6 +157,7 @@ export const api = {
     post<TaskDto>(`/tasks/${taskId}/review`, { decision, ...(comment && { comment }) }),
   retry: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/retry`),
   cancel: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/cancel`),
+  agentHealth: () => get<AgentHealth[]>("/agents/health"),
   reassign: (taskId: string, agent: string) => post<TaskDto>(`/tasks/${taskId}/reassign`, { agent }),
   pause: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/pause`),
   resume: (taskId: string) => post<TaskDto>(`/tasks/${taskId}/resume`),

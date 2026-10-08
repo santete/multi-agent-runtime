@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensureDependencies } from "../src/deps.js";
 import { containerArgs, runValidation } from "../src/validator.js";
 import { tempDir } from "./helpers.js";
 
@@ -77,6 +78,30 @@ describe.skipIf(!dockerReady())("validation in a container (docker)", () => {
     });
     expect(report.passed).toBe(true);
   }, 120_000);
+});
+
+describe.skipIf(!dockerReady())("dependencies of a project that validates in a container", () => {
+  it("are installed in the container, once per lockfile, before the steps run", async () => {
+    const dir = await tempDir("sandbox-deps");
+    const home = await tempDir("sandbox-home");
+    try {
+      gitInit(dir.path);
+      await writeFile(join(dir.path, "package.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
+      await writeFile(
+        join(dir.path, "package-lock.json"),
+        JSON.stringify({ name: "p", version: "1.0.0", lockfileVersion: 3, requires: true, packages: { "": { name: "p", version: "1.0.0" } } }),
+      );
+      const options = { home: home.path, sandbox: { image: IMAGE }, containerRuntime: "docker" };
+      const first = await ensureDependencies(dir.path, options);
+      expect(first).toMatchObject({ skipped: false, step: { passed: true } });
+      expect(await ensureDependencies(dir.path, options)).toMatchObject({ skipped: true });
+      // Dependencies installed on the host are not the container's.
+      expect(await ensureDependencies(dir.path, { home: home.path, command: "node -e 0" })).toMatchObject({ skipped: false });
+    } finally {
+      await dir.cleanup();
+      await home.cleanup();
+    }
+  }, 180_000);
 });
 
 describe("validation without a container runtime", () => {

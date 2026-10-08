@@ -226,7 +226,7 @@ Tab **Graph** vẽ dependency giữa các task; tab **Activity** là dòng sự 
 
 - **Agent console** chiếu trực tiếp các message, tool call của agent và quyết định của policy (allowed/denied, mức rủi ro). Với agent chạy sandbox như Codex, tool call được kiểm tra sau khi chạy (audit).
 - **Instructions**: gửi lời nhắn cho agent. Nếu agent đang chạy, mặc định nó dừng lại rồi resume **đúng session** với lời nhắn đó.
-- **Pause / Resume / Cancel / Retry** nằm góc trên bên phải. Với task `WAITING_FOR_HUMAN` hoặc `BLOCKED` còn có **Hand over**: chọn agent khác (hoặc *auto*, để scheduler chọn) rồi giao lại. Agent cũ bị loại khỏi task, và agent mới bắt đầu phiên mới. *Auto* chỉ hiện khi còn agent khác để chọn.
+- **Pause / Resume / Cancel / Retry** nằm góc trên bên phải. Với task `WAITING_FOR_HUMAN` hoặc `BLOCKED` còn có **Hand over**: chọn agent khác (hoặc *auto*, để scheduler chọn) rồi giao lại. Agent cũ bị loại khỏi task, và agent mới bắt đầu phiên mới. Danh sách chỉ có agent đang online và chưa bị preflight loại; *auto* chỉ hiện khi còn agent khác để chọn.
 
 ![Trang task đang chờ review: contract, review, handoff, diff](images/guide-task-contract.png)
 

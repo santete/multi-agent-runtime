@@ -1,4 +1,4 @@
-import type { ActorDto, DecisionDto, PlanDto, StuckTaskDto, TaskDto } from "@mar/core";
+import type { ActorDto, AgentHealth, DecisionDto, PlanDto, StuckTaskDto, TaskDto } from "@mar/core";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.js";
 import { timeAgo } from "../lib/model.js";
@@ -13,15 +13,21 @@ const canAct = (actor: ActorDto) => actor.role !== "viewer" && actor.role !== "r
  */
 export function ReassignControl({ task, onDone, className = "" }: { task: TaskDto; onDone: () => void; className?: string }) {
   const [agents, setAgents] = useState<string[]>([]);
+  const [health, setHealth] = useState<AgentHealth[]>([]);
   const [choice, setChoice] = useState("");
   const [error, setError] = useState<Error>();
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api.runners().then((runners) => setAgents([...new Set(runners.flatMap((r) => r.agents.map((a) => a.id)))].sort()));
+    api.agentHealth().then(setHealth, () => undefined);
   }, []);
   const others = agents.filter((a) => a !== task.agent && !task.excludedAgents.includes(a));
+  // The scheduler would take the task back from an agent whose preflight ruled it out: not offered.
+  const ruledOut = (a: string) =>
+    health.some((h) => h.agent === a && (h.status === "unavailable" || (h.status === "no_shell" && task.kind === "work")));
+  const usable = others.filter((a) => !ruledOut(a));
   // "auto" without another agent to choose from would leave the task with nobody (the old agent is kept out of it).
-  const options = [...others, ...(task.routing === "fixed" && others.length > 0 ? ["auto"] : [])];
+  const options = [...usable, ...(task.routing === "fixed" && usable.length > 0 ? ["auto"] : [])];
   if (task.agent === "human" || options.length === 0) return null;
   const target = options.includes(choice) ? choice : options[0]!;
   const hand = async () => {

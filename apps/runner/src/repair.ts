@@ -14,7 +14,8 @@ export interface UnreadableResult {
  */
 export function unreadableStructuredResult(request: AgentRunRequest, outcome: ProcessOutcome, adapter: AgentAdapter): UnreadableResult | undefined {
   const t = outcome.terminal;
-  if (!request.outputSchema || t.kind !== "completed") return undefined;
+  // A run that did not succeed has an error to report, not an answer to reformat (a quota message is not broken JSON).
+  if (!request.outputSchema || t.kind !== "completed" || !t.success) return undefined;
   if (!adapter.capabilities.promptedSchema || !adapter.capabilities.resume || !t.sessionId) return undefined;
   const answer = typeof t.result === "string" ? parseJsonAnswer(t.result) : t.result;
   if (!answer || typeof answer !== "object") {

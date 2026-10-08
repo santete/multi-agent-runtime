@@ -272,6 +272,27 @@ export interface CritiqueContext {
 }
 
 /** An agent resting after it hit its quota on a runner (spec §39, §46). */
+/**
+ * What the preflight found: "ready"; "no_shell" (the agent cannot run commands, so it cannot take work that
+ * needs tests, but may still review or plan); "unavailable" (no credit, not logged in, will not start).
+ */
+export type AgentHealthStatus = "ready" | "no_shell" | "unavailable";
+
+export interface AgentHealthRequest {
+  agent: string;
+  status: AgentHealthStatus;
+  reason?: string | undefined;
+}
+
+export interface AgentHealth {
+  runnerId: string;
+  runnerName: string;
+  agent: string;
+  status: AgentHealthStatus;
+  reason: string;
+  checkedAt: string;
+}
+
 export interface AgentCooldown {
   runnerId: string;
   runnerName: string;
@@ -481,6 +502,8 @@ export interface ValidationStepResult {
   durationMs: number;
   /** Last lines of combined stdout/stderr. */
   outputTail: string;
+  /** The machine could not run the check (missing tool or dependencies, blocked network): not the agent's fault. */
+  environment?: boolean | undefined;
 }
 
 export interface ValidationReport {
